@@ -487,4 +487,79 @@ function getConfig() {
   };
 }
 
-module.exports = { start, stop, getStreams, getStatus, getHistory, getIncidents, getConfig };
+async function sendTestAlert(toEmail) {
+  if (!transporter) {
+    throw new Error('SMTP not configured');
+  }
+
+  const fromAddr = process.env.SMTP_FROM || process.env.SMTP_USER;
+  const dashboardUrl = process.env.DASHBOARD_URL || '';
+  const testStream = streams[0] || { name: 'KPFT Main', url: 'https://streams.pacifica.org:9000/live_128', m3u: '' };
+
+  // Build current status of all streams
+  const allStreamsRows = streams.map((s) => {
+    const st = streamStatus[s.id] || {};
+    const dot = st.status === 'up' ? '🟢' : st.status === 'down' ? '🔴' : '⚪';
+    const stText = st.status === 'up' ? 'Online' : st.status === 'down' ? 'Offline' : 'Unknown';
+    const rt = st.responseTime != null ? `${st.responseTime}ms` : '—';
+    return `
+          <tr>
+            <td style="padding: 6px 8px; border-bottom: 1px solid #2a2a3e;">${dot} ${s.name}</td>
+            <td style="padding: 6px 8px; border-bottom: 1px solid #2a2a3e; color: ${st.status === 'up' ? '#4ade80' : st.status === 'down' ? '#f87171' : '#888'}; font-weight: 600;">${stText}</td>
+            <td style="padding: 6px 8px; border-bottom: 1px solid #2a2a3e;">${rt}</td>
+          </tr>`;
+  }).join('');
+
+  const dashboardLink = dashboardUrl ? `
+        <div style="text-align: center; margin-top: 20px;">
+          <a href="${dashboardUrl}" style="display: inline-block; background: linear-gradient(135deg, #7c6aef, #a595ff); color: white; text-decoration: none; padding: 12px 28px; border-radius: 8px; font-weight: 600; font-size: 14px;">
+            📊 Open Stream Monitor Dashboard
+          </a>
+        </div>` : '';
+
+  const html = `
+    <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; max-width: 600px; margin: 0 auto;">
+      <div style="background: linear-gradient(135deg, #7c6aef, #5a49c9); color: white; padding: 24px 28px; border-radius: 12px 12px 0 0;">
+        <h1 style="margin: 0; font-size: 22px;">🧪 Test Alert — Email Working!</h1>
+        <p style="margin: 8px 0 0 0; font-size: 14px; opacity: 0.9;">This is a test alert from the KPFT Stream Monitor. If you receive this, email alerts are configured correctly.</p>
+      </div>
+      <div style="background: #1e1e2e; color: #e0e0e0; padding: 24px 28px;">
+        <h3 style="margin: 0 0 12px 0; font-size: 14px; color: #9090a8; text-transform: uppercase; letter-spacing: 0.05em;">Current Stream Status</h3>
+        <table style="width: 100%; border-collapse: collapse;">
+          <tr style="color: #666; font-size: 12px; text-transform: uppercase; letter-spacing: 0.05em;">
+            <td style="padding: 6px 8px; border-bottom: 1px solid #2a2a3e;">Stream</td>
+            <td style="padding: 6px 8px; border-bottom: 1px solid #2a2a3e;">Status</td>
+            <td style="padding: 6px 8px; border-bottom: 1px solid #2a2a3e;">Response</td>
+          </tr>
+          ${allStreamsRows}
+        </table>
+
+        <div style="background: rgba(124, 106, 239, 0.08); border: 1px solid rgba(124, 106, 239, 0.2); border-radius: 8px; padding: 16px; margin-top: 16px;">
+          <p style="font-weight: 600; color: #a595ff; margin: 0 0 8px 0; font-size: 14px;">ℹ️ What to expect</p>
+          <ul style="margin: 0; padding-left: 20px; color: #c0c0d0; font-size: 13px; line-height: 1.8;">
+            <li>🔴 <strong>Down alert</strong> when a stream fails ${FAILURE_THRESHOLD} consecutive checks</li>
+            <li>🟢 <strong>Recovery alert</strong> when a stream comes back online</li>
+            <li>Checks run every ${Math.round(CHECK_INTERVAL / 1000)} seconds</li>
+          </ul>
+        </div>
+
+        ${dashboardLink}
+      </div>
+      <div style="background: #12121e; padding: 16px 28px; border-radius: 0 0 12px 12px; text-align: center;">
+        <p style="color: #606078; font-size: 11px; margin: 0;">
+          KPFT Icecast Stream Monitor · Test Email · ${new Date().toLocaleString('en-US', { timeZone: 'America/Chicago', weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', hour12: true })} CT
+        </p>
+      </div>
+    </div>
+  `;
+
+  await transporter.sendMail({
+    from: fromAddr,
+    to: toEmail,
+    subject: '🧪 KPFT Stream Monitor — Test Alert',
+    html,
+  });
+  console.log(`[Monitor] Test alert sent to ${toEmail}`);
+}
+
+module.exports = { start, stop, getStreams, getStatus, getHistory, getIncidents, getConfig, sendTestAlert };

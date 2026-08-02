@@ -28,6 +28,20 @@ app.get('/api/config', (req, res) => {
   res.json(monitor.getConfig());
 });
 
+// ── Test Email Alert ────────────────────────────────────────────────────────
+app.get('/api/test-alert', async (req, res) => {
+  const to = req.query.to;
+  if (!to) {
+    return res.status(400).json({ error: 'Provide ?to=email@example.com' });
+  }
+  try {
+    await monitor.sendTestAlert(to);
+    res.json({ success: true, message: `Test alert sent to ${to}` });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ── Health Check (for Docker / Coolify) ─────────────────────────────────────
 app.get('/health', (req, res) => {
   res.json({ status: 'ok', uptime: process.uptime() });
