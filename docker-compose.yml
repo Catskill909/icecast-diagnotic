@@ -1,0 +1,38 @@
+services:
+  icecast-monitor:
+    build: .
+    container_name: kpft-stream-monitor
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    volumes:
+      - monitor-data:/app/data
+    environment:
+      # ── Server ──────────────────────────────────────
+      - PORT=3000
+
+      # ── Monitor Settings ────────────────────────────
+      - CHECK_INTERVAL_MS=60000
+      - FAILURE_THRESHOLD=2
+
+      # ── SMTP Configuration ─────────────────────────
+      # Uncomment and fill in with your SMTP details
+      # - SMTP_HOST=smtp.gmail.com
+      # - SMTP_PORT=587
+      # - SMTP_USER=your-email@gmail.com
+      # - SMTP_PASS=your-app-password
+      # - SMTP_FROM=KPFT Monitor <monitor@kpft.org>
+
+      # ── Alert Recipients (comma-separated) ──────────
+      # - ALERT_EMAILS=admin1@example.com,admin2@example.com
+
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:3000/health"]
+      interval: 30s
+      timeout: 10s
+      start_period: 15s
+      retries: 3
+
+volumes:
+  monitor-data:
+    driver: local

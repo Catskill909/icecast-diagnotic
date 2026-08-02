@@ -1,0 +1,350 @@
+/* ═══════════════════════════════════════════════════════════════════════════
+   KPFT Stream Monitor — Frontend Application
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+(function () {
+  'use strict';
+
+  const POLL_INTERVAL = 10000; // 10 seconds
+  const $ = (sel) => document.querySelector(sel);
+  const $$ = (sel) => document.querySelectorAll(sel);
+
+  let config = {};
+  let history = {};
+  let lastStatus = null;
+  let pollTimer = null;
+  let isFirstLoad = true;
+
+  // ── Boot ────────────────────────────────────────────────────────────────
+  async function boot() {
+    try {
+      // Fetch config and initial status in parallel
+      const [configRes, statusRes, historyRes] = await Promise.all([
+        fetch('/api/config').then((r) => r.json()),
+        fetch('/api/status').then((r) => r.json()),
+        fetch('/api/history').then((r) => r.json()),
+      ]);
+
+      config = configRes;
+      history = historyRes.history || {};
+
+      // Update config display
+      renderConfig(config);
+
+      // Show dashboard
+      $('#loading').style.display = 'none';
+      $('#dashboard').style.display = 'block';
+
+      // Render initial data
+      renderStatus(statusRes);
+      renderIncidents(historyRes.incidents || []);
+
+      // Mark connected
+      setConnected(true);
+      isFirstLoad = false;
+
+      // Start polling
+      pollTimer = setInterval(poll, POLL_INTERVAL);
+    } catch (err) {
+      console.error('Boot failed:', err);
+      $('#loading .loading-text').textContent = 'Failed to connect. Retrying…';
+      setTimeout(boot, 5000);
+    }
+  }
+
+  async function poll() {
+    try {
+      const [statusRes, historyRes] = await Promise.all([
+        fetch('/api/status').then((r) => r.json()),
+        fetch('/api/history').then((r) => r.json()),
+      ]);
+
+      history = historyRes.history || {};
+      renderStatus(statusRes);
+      renderIncidents(historyRes.incidents || []);
+      setConnected(true);
+    } catch (err) {
+      console.error('Poll failed:', err);
+      setConnected(false);
+    }
+  }
+
+  // ── Config Render ───────────────────────────────────────────────────────
+  function renderConfig(cfg) {
+    const intervalSec = Math.round(cfg.checkInterval / 1000);
+    $('#check-interval-text').textContent = `${intervalSec}s interval`;
+
+    if (cfg.emailConfigured) {
+      $('#email-status-text').textContent = `${cfg.alertRecipients} recipient${cfg.alertRecipients !== 1 ? 's' : ''}`;
+      $('#email-badge').style.borderColor = 'rgba(34, 197, 94, 0.15)';
+    } else {
+      $('#email-status-text').textContent = 'Not configured';
+      $('#email-badge').style.borderColor = 'rgba(239, 68, 68, 0.15)';
+      $('#email-badge').style.color = '#f87171';
+    }
+  }
+
+  // ── Connection Badge ────────────────────────────────────────────────────
+  function setConnected(connected) {
+    const badge = $('#connection-badge');
+    const text = $('#connection-text');
+    if (connected) {
+      badge.classList.add('connected');
+      text.textContent = 'Live';
+    } else {
+      badge.classList.remove('connected');
+      text.textContent = 'Disconnected';
+    }
+  }
+
+  // ── Status Render ───────────────────────────────────────────────────────
+  function renderStatus(data) {
+    const streams = data.streams || [];
+    lastStatus = streams;
+
+    // Summary
+    const upCount = streams.filter((s) => s.status === 'up').length;
+    const downCount = streams.filter((s) => s.status === 'down').length;
+    const responseTimes = streams.filter((s) => s.responseTime != null).map((s) => s.responseTime);
+    const avgResponse = responseTimes.length ? Math.round(responseTimes.reduce((a, b) => a + b, 0) / responseTimes.length) : 0;
+
+    $('#summary-up').textContent = upCount;
+    $('#summary-up-detail').textContent = `of ${streams.length} streams`;
+    $('#summary-down').textContent = downCount;
+    $('#summary-down-detail').textContent = downCount > 0 ? 'action required' : 'all clear';
+
+    // Color the down summary
+    const downEl = $('#summary-down');
+    if (downCount > 0) {
+      downEl.className = 'summary-value down';
+    } else {
+      downEl.className = 'summary-value neutral';
+      downEl.style.color = 'var(--status-up)';
+    }
+
+    $('#summary-response').textContent = `${avgResponse}`;
+
+    // Calculate 24h uptime
+    const uptimePercent = calculate24hUptime();
+    const uptimeEl = $('#summary-uptime');
+    uptimeEl.textContent = `${uptimePercent}%`;
+    if (uptimePercent >= 99) {
+      uptimeEl.className = 'summary-value up';
+    } else if (uptimePercent >= 95) {
+      uptimeEl.style.color = '#f59e0b';
+    } else {
+      uptimeEl.className = 'summary-value down';
+    }
+
+    // Stream cards
+    renderStreamCards(streams);
+  }
+
+  function calculate24hUptime() {
+    let totalChecks = 0;
+    let upChecks = 0;
+    for (const id of Object.keys(history)) {
+      const entries = history[id] || [];
+      totalChecks += entries.length;
+      upChecks += entries.filter((e) => e.status === 'up').length;
+    }
+    if (totalChecks === 0) return 100;
+    return Math.round((upChecks / totalChecks) * 10000) / 100;
+  }
+
+  // ── Stream Cards ────────────────────────────────────────────────────────
+  function renderStreamCards(streams) {
+    const grid = $('#streams-grid');
+
+    streams.forEach((stream, i) => {
+      let card = $(`#card-${stream.id}`);
+
+      if (!card) {
+        card = document.createElement('div');
+        card.id = `card-${stream.id}`;
+        card.className = `stream-card slide-in ${stream.status}`;
+        card.style.animationDelay = `${i * 80}ms`;
+        grid.appendChild(card);
+      } else {
+        card.className = `stream-card ${stream.status}`;
+      }
+
+      const responseClass = getResponseClass(stream.responseTime);
+      const uptimePercent = getStreamUptime(stream.id);
+      const uptimeClass = uptimePercent >= 99 ? 'good' : uptimePercent >= 95 ? 'warn' : 'bad';
+      const uptimeBar = renderUptimeBar(stream.id);
+
+      card.innerHTML = `
+        <div class="stream-header">
+          <div class="stream-info">
+            <div class="stream-name">${escapeHtml(stream.name)}</div>
+            <div class="stream-url">${escapeHtml(truncateUrl(stream.url))}</div>
+          </div>
+          <div class="status-indicator ${stream.status}">
+            <span class="status-dot ${stream.status}"></span>
+            ${stream.status === 'up' ? 'Online' : stream.status === 'down' ? 'Offline' : 'Unknown'}
+          </div>
+        </div>
+
+        <div class="stream-metrics">
+          <div class="metric">
+            <div class="metric-value ${responseClass}">${stream.responseTime != null ? stream.responseTime + 'ms' : '—'}</div>
+            <div class="metric-label">Response</div>
+          </div>
+          <div class="metric">
+            <div class="metric-value ${uptimeClass}">${uptimePercent}%</div>
+            <div class="metric-label">24h Uptime</div>
+          </div>
+          <div class="metric">
+            <div class="metric-value">${stream.consecutiveFailures || 0}</div>
+            <div class="metric-label">Failures</div>
+          </div>
+        </div>
+
+        <div class="uptime-bar-container">
+          <div class="uptime-bar-label">
+            <span>24 hours ago</span>
+            <span>Now</span>
+          </div>
+          <div class="uptime-bar">${uptimeBar}</div>
+        </div>
+
+        ${stream.error ? `<div class="stream-error">${escapeHtml(stream.error)}</div>` : ''}
+
+        <div class="stream-last-check">
+          ${stream.lastChecked ? 'Checked ' + relativeTime(stream.lastChecked) : 'Not yet checked'}
+        </div>
+      `;
+    });
+  }
+
+  function renderUptimeBar(streamId) {
+    const entries = history[streamId] || [];
+    if (entries.length === 0) {
+      return '<div class="uptime-segment unknown" style="flex:1"></div>';
+    }
+
+    // Bucket into ~60 segments across 24h
+    const BUCKETS = 60;
+    const now = Date.now();
+    const window = 24 * 60 * 60 * 1000;
+    const bucketSize = window / BUCKETS;
+    const buckets = new Array(BUCKETS).fill(null); // null = no data
+
+    entries.forEach((entry) => {
+      const age = now - new Date(entry.timestamp).getTime();
+      const bucketIdx = BUCKETS - 1 - Math.floor(age / bucketSize);
+      if (bucketIdx >= 0 && bucketIdx < BUCKETS) {
+        // If any check in this bucket is down, mark bucket as down
+        if (buckets[bucketIdx] === null) {
+          buckets[bucketIdx] = entry.status;
+        } else if (entry.status === 'down') {
+          buckets[bucketIdx] = 'down';
+        }
+      }
+    });
+
+    return buckets
+      .map((status) => {
+        const cls = status || 'unknown';
+        return `<div class="uptime-segment ${cls}" style="flex:1"></div>`;
+      })
+      .join('');
+  }
+
+  function getStreamUptime(streamId) {
+    const entries = history[streamId] || [];
+    if (entries.length === 0) return 100;
+    const up = entries.filter((e) => e.status === 'up').length;
+    return Math.round((up / entries.length) * 10000) / 100;
+  }
+
+  function getResponseClass(ms) {
+    if (ms == null) return '';
+    if (ms < 500) return 'good';
+    if (ms < 2000) return 'warn';
+    return 'bad';
+  }
+
+  // ── Incidents ───────────────────────────────────────────────────────────
+  function renderIncidents(incidents) {
+    const container = $('#incidents-container');
+
+    if (!incidents || incidents.length === 0) {
+      container.innerHTML = `
+        <div class="incidents-empty">
+          <span class="material-symbols-outlined">check_circle</span>
+          <p>No incidents recorded in the last 24 hours</p>
+        </div>
+      `;
+      return;
+    }
+
+    // Sort by timestamp, newest first
+    const sorted = [...incidents].sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
+
+    container.innerHTML = `
+      <div class="incidents-list">
+        ${sorted
+          .map(
+            (inc) => `
+          <div class="incident">
+            <div class="incident-icon ${inc.type}">
+              <span class="material-symbols-outlined">${inc.type === 'down' ? 'error' : 'check_circle'}</span>
+            </div>
+            <div class="incident-content">
+              <div class="incident-message">${escapeHtml(inc.message)}</div>
+              <div class="incident-time">${formatTimestamp(inc.timestamp)}</div>
+            </div>
+            <div class="incident-badge ${inc.type}">${inc.type === 'down' ? 'Outage' : 'Recovered'}</div>
+          </div>
+        `,
+          )
+          .join('')}
+      </div>
+    `;
+  }
+
+  // ── Utilities ───────────────────────────────────────────────────────────
+  function relativeTime(isoString) {
+    const diff = Date.now() - new Date(isoString).getTime();
+    const seconds = Math.floor(diff / 1000);
+    if (seconds < 5) return 'just now';
+    if (seconds < 60) return `${seconds}s ago`;
+    const minutes = Math.floor(seconds / 60);
+    if (minutes < 60) return `${minutes}m ago`;
+    const hours = Math.floor(minutes / 60);
+    return `${hours}h ago`;
+  }
+
+  function formatTimestamp(isoString) {
+    const d = new Date(isoString);
+    return d.toLocaleString('en-US', {
+      month: 'short',
+      day: 'numeric',
+      hour: 'numeric',
+      minute: '2-digit',
+      second: '2-digit',
+      hour12: true,
+    });
+  }
+
+  function truncateUrl(url) {
+    try {
+      const u = new URL(url);
+      return `${u.hostname}:${u.port}${u.pathname}`;
+    } catch {
+      return url;
+    }
+  }
+
+  function escapeHtml(str) {
+    if (!str) return '';
+    const div = document.createElement('div');
+    div.textContent = str;
+    return div.innerHTML;
+  }
+
+  // ── Start ───────────────────────────────────────────────────────────────
+  document.addEventListener('DOMContentLoaded', boot);
+})();

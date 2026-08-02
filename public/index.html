@@ -1,0 +1,105 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>KPFT Stream Monitor — Icecast Uptime Dashboard</title>
+  <meta name="description" content="Real-time monitoring dashboard for KPFT Icecast streams. Track uptime, response times, and receive alerts when streams go down.">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📡</text></svg>">
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20..48,100..700,0..1,-50..200&display=swap">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<div class="app" id="app">
+  <!-- Loading State -->
+  <div class="loading-screen" id="loading">
+    <div class="loading-spinner"></div>
+    <div class="loading-text">Connecting to monitor…</div>
+  </div>
+
+  <!-- Dashboard (hidden until loaded) -->
+  <div id="dashboard" style="display: none;">
+
+    <!-- Header -->
+    <header class="header fade-in">
+      <div class="header-left">
+        <div class="logo">📡</div>
+        <div>
+          <div class="header-title">KPFT Stream Monitor</div>
+          <div class="header-subtitle">Icecast Uptime Dashboard</div>
+        </div>
+      </div>
+      <div class="header-right">
+        <div class="connection-badge" id="connection-badge">
+          <span class="connection-dot"></span>
+          <span id="connection-text">Connecting…</span>
+        </div>
+        <div class="config-badge" id="config-badge" title="Monitor configuration">
+          <span class="material-symbols-outlined">schedule</span>
+          <span id="check-interval-text">—</span>
+        </div>
+        <div class="config-badge" id="email-badge" title="Email alerts">
+          <span class="material-symbols-outlined">mail</span>
+          <span id="email-status-text">—</span>
+        </div>
+      </div>
+    </header>
+
+    <!-- Summary Bar -->
+    <div class="summary-bar fade-in" id="summary-bar">
+      <div class="summary-card">
+        <div class="summary-label">Streams Up</div>
+        <div class="summary-value up" id="summary-up">—</div>
+        <div class="summary-detail" id="summary-up-detail"></div>
+      </div>
+      <div class="summary-card">
+        <div class="summary-label">Streams Down</div>
+        <div class="summary-value down" id="summary-down">—</div>
+        <div class="summary-detail" id="summary-down-detail"></div>
+      </div>
+      <div class="summary-card">
+        <div class="summary-label">Avg Response</div>
+        <div class="summary-value neutral" id="summary-response">—</div>
+        <div class="summary-detail">milliseconds</div>
+      </div>
+      <div class="summary-card">
+        <div class="summary-label">24h Uptime</div>
+        <div class="summary-value neutral" id="summary-uptime">—</div>
+        <div class="summary-detail">across all streams</div>
+      </div>
+    </div>
+
+    <!-- Stream Cards -->
+    <div class="section-title">
+      <span class="material-symbols-outlined">cell_tower</span>
+      Stream Status
+    </div>
+    <div class="streams-grid" id="streams-grid">
+      <!-- Populated by JS -->
+    </div>
+
+    <!-- Incidents -->
+    <div class="incidents-section">
+      <div class="section-title">
+        <span class="material-symbols-outlined">history</span>
+        Recent Incidents
+      </div>
+      <div id="incidents-container">
+        <div class="incidents-empty">
+          <span class="material-symbols-outlined">check_circle</span>
+          <p>No incidents recorded</p>
+        </div>
+      </div>
+    </div>
+
+    <!-- Footer -->
+    <footer class="footer">
+      KPFT Icecast Stream Monitor · Auto-refreshes every 10s · Powered by Pacifica Foundation
+    </footer>
+  </div>
+</div>
+
+<script src="app.js"></script>
+</body>
+</html>
