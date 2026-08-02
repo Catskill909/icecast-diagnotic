@@ -112,12 +112,78 @@ function setupMailer() {
   });
 }
 
+// ── Icecast Server Stats (/status-json.xsl) ─────────────────────────────────
+function fetchIcecastStats() {
+  return new Promise((resolve) => {
+    const statsUrl = 'https://streams.pacifica.org:9000/status-json.xsl';
+    const req = https.get(statsUrl, { timeout: 10000 }, (res) => {
+      let body = '';
+      res.on('data', (chunk) => { body += chunk; });
+      res.on('end', () => {
+        try {
+          const parsed = JSON.parse(body);
+          const sources = parsed?.icestats?.source || [];
+          const sourceArray = Array.isArray(sources) ? sources : [sources];
+          const statsMap = {};
+
+          sourceArray.forEach((src) => {
+            if (!src || !src.listenurl) return;
+            const listenUrl = src.listenurl;
+            statsMap[listenUrl] = {
+              listeners: src.listeners || 0,
+              listenerPeak: src.listener_peak || 0,
+              title: src.title || src.server_name || '',
+              bitrate: src.bitrate || src['ice-bitrate'] || 0,
+              genre: src.genre || '',
+              serverDescription: src.server_description || '',
+              streamStart: src.stream_start_iso8601 || src.stream_start || '',
+            };
+          });
+
+          resolve(statsMap);
+        } catch (e) {
+          resolve({});
+        }
+      });
+    });
+
+    req.on('error', () => resolve({}));
+    req.on('timeout', () => { req.destroy(); resolve({}); });
+  });
+}
+
+// ── Audio Chunk Silence Analyzer ────────────────────────────────────────────
+function analyzeAudioChunk(buffer) {
+  if (!buffer || buffer.length < 1024) {
+    return { isSilent: false, energy: 100 };
+  }
+  let sumDiff = 0;
+  let nonZeroCount = 0;
+
+  for (let i = 0; i < buffer.length - 1; i++) {
+    const diff = Math.abs(buffer[i + 1] - buffer[i]);
+    sumDiff += diff;
+    if (buffer[i] > 10) nonZeroCount++;
+  }
+
+  const avgDiff = sumDiff / buffer.length;
+  const nonZeroRatio = nonZeroCount / buffer.length;
+
+  // Digital silence in MP3/AAC streams manifests as flat/repeating frame headers with near 0 byte variation
+  const isSilent = avgDiff < 0.5 && nonZeroRatio < 0.02;
+  return { isSilent, energy: Math.round(avgDiff * 100) / 100 };
+}
+
 // ── Stream Health Check ─────────────────────────────────────────────────────
 function checkStream(stream) {
   return new Promise((resolve) => {
     const start = Date.now();
     const urlObj = new URL(stream.url);
     const client = urlObj.protocol === 'https:' ? https : http;
+
+    let receivedBytes = 0;
+    const chunks = [];
+    const maxSampleBytes = 8192; // Read ~8KB (0.5s audio) for volume check
 
     const req = client.request(
       {
@@ -136,18 +202,51 @@ function checkStream(stream) {
         const contentType = res.headers['content-type'] || '';
         const icyName = res.headers['icy-name'] || '';
 
-        // Destroy the response immediately — we don't need the audio data
-        res.destroy();
-
-        if (res.statusCode === 200 && (contentType.includes('audio') || contentType.includes('ogg') || icyName)) {
-          resolve({ status: 'up', responseTime, error: null });
-        } else {
-          resolve({
+        if (res.statusCode !== 200) {
+          res.destroy();
+          return resolve({
             status: 'down',
             responseTime,
             error: `HTTP ${res.statusCode}, Content-Type: ${contentType}`,
+            isSilent: false,
           });
         }
+
+        if (!contentType.includes('audio') && !contentType.includes('ogg') && !icyName) {
+          res.destroy();
+          return resolve({
+            status: 'down',
+            responseTime,
+            error: `Invalid Content-Type: ${contentType}`,
+            isSilent: false,
+          });
+        }
+
+        // Stream audio sample for silence analysis
+        res.on('data', (chunk) => {
+          chunks.push(chunk);
+          receivedBytes += chunk.length;
+          if (receivedBytes >= maxSampleBytes) {
+            res.destroy();
+          }
+        });
+
+        res.on('close', () => {
+          const fullBuffer = Buffer.concat(chunks);
+          const silenceAnalysis = analyzeAudioChunk(fullBuffer);
+          resolve({
+            status: 'up',
+            responseTime,
+            error: null,
+            isSilent: silenceAnalysis.isSilent,
+            audioEnergy: silenceAnalysis.energy,
+          });
+        });
+
+        res.on('error', () => {
+          res.destroy();
+          resolve({ status: 'up', responseTime, error: null, isSilent: false });
+        });
       },
     );
 
@@ -157,6 +256,7 @@ function checkStream(stream) {
         status: 'down',
         responseTime: Date.now() - start,
         error: 'Connection timed out',
+        isSilent: false,
       });
     });
 
@@ -165,6 +265,7 @@ function checkStream(stream) {
         status: 'down',
         responseTime: Date.now() - start,
         error: err.message,
+        isSilent: false,
       });
     });
 
@@ -177,22 +278,43 @@ async function runChecks() {
   const timestamp = new Date().toISOString();
   console.log(`[Monitor] Running checks at ${timestamp}`);
 
-  const results = await Promise.all(streams.map((s) => checkStream(s)));
+  const [checkResults, icecastStats] = await Promise.all([
+    Promise.all(streams.map((s) => checkStream(s))),
+    fetchIcecastStats(),
+  ]);
 
   for (let i = 0; i < streams.length; i++) {
     const stream = streams[i];
-    const result = results[i];
-    const prev = streamStatus[stream.id];
+    const result = checkResults[i];
+    const prev = streamStatus[stream.id] || {};
     const wasDown = prev.status === 'down';
     const isDown = result.status === 'down';
+    const isSilent = result.isSilent;
 
-    // Update status
+    // Match mount point in Icecast JSON stats
+    let matchedStats = null;
+    for (const [listenUrl, stats] of Object.entries(icecastStats)) {
+      if (listenUrl.includes(stream.url.split(':9000')[1] || '____')) {
+        matchedStats = stats;
+        break;
+      }
+    }
+
+    // Update status object
     streamStatus[stream.id] = {
       status: result.status,
       responseTime: result.responseTime,
       lastChecked: timestamp,
-      consecutiveFailures: isDown ? prev.consecutiveFailures + 1 : 0,
+      consecutiveFailures: isDown ? (prev.consecutiveFailures || 0) + 1 : 0,
+      isSilent: isSilent,
+      audioEnergy: result.audioEnergy || 0,
       error: result.error,
+      // Stats from /status-json.xsl
+      listeners: matchedStats?.listeners ?? prev.listeners ?? 0,
+      listenerPeak: matchedStats?.listenerPeak ?? prev.listenerPeak ?? 0,
+      title: matchedStats?.title || prev.title || '',
+      bitrate: matchedStats?.bitrate || prev.bitrate || 128,
+      streamStart: matchedStats?.streamStart || prev.streamStart || '',
     };
 
     // Record history
@@ -200,13 +322,15 @@ async function runChecks() {
       timestamp,
       status: result.status,
       responseTime: result.responseTime,
+      listeners: streamStatus[stream.id].listeners,
+      isSilent,
       error: result.error,
     });
 
     // State transition detection
     const failures = streamStatus[stream.id].consecutiveFailures;
 
-    // DOWN alert: crossed the threshold exactly
+    // DOWN alert
     if (isDown && failures === FAILURE_THRESHOLD) {
       const incident = {
         timestamp,

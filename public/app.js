@@ -108,10 +108,24 @@
     const responseTimes = streams.filter((s) => s.responseTime != null).map((s) => s.responseTime);
     const avgResponse = responseTimes.length ? Math.round(responseTimes.reduce((a, b) => a + b, 0) / responseTimes.length) : 0;
 
+    // Summary metrics
+    const upCount = streams.filter((s) => s.status === 'up').length;
+    const downCount = streams.filter((s) => s.status === 'down').length;
+    const totalListeners = streams.reduce((acc, s) => acc + (s.listeners || 0), 0);
+    const responseTimes = streams.filter((s) => s.responseTime != null).map((s) => s.responseTime);
+    const avgResponse = responseTimes.length ? Math.round(responseTimes.reduce((a, b) => a + b, 0) / responseTimes.length) : 0;
+
     $('#summary-up').textContent = upCount;
     $('#summary-up-detail').textContent = `of ${streams.length} streams`;
     $('#summary-down').textContent = downCount;
     $('#summary-down-detail').textContent = downCount > 0 ? 'action required' : 'all clear';
+
+    // Total Listeners
+    const listenersEl = $('#summary-listeners');
+    if (listenersEl) {
+      listenersEl.textContent = totalListeners;
+      $('#summary-listeners-detail').textContent = `${totalListeners} active stream listeners`;
+    }
 
     // Color the down summary
     const downEl = $('#summary-down');
@@ -152,6 +166,9 @@
     return Math.round((upChecks / totalChecks) * 10000) / 100;
   }
 
+  // Active audio elements for preview player
+  const activePlayers = {};
+
   // ── Stream Cards ────────────────────────────────────────────────────────
   function renderStreamCards(streams) {
     const grid = $('#streams-grid');
@@ -173,6 +190,7 @@
       const uptimePercent = getStreamUptime(stream.id);
       const uptimeClass = uptimePercent >= 99 ? 'good' : uptimePercent >= 95 ? 'warn' : 'bad';
       const uptimeBar = renderUptimeBar(stream.id);
+      const isAudioPlaying = activePlayers[stream.id] && !activePlayers[stream.id].paused;
 
       card.innerHTML = `
         <div class="stream-header">
@@ -186,7 +204,32 @@
           </div>
         </div>
 
+        <!-- Live Audio Preview Player -->
+        <div class="audio-player-box">
+          <button class="play-btn" data-stream-id="${stream.id}" data-stream-url="${escapeHtml(stream.url)}" title="Toggle Preview Audio">
+            <span class="material-symbols-outlined">${isAudioPlaying ? 'pause' : 'play_arrow'}</span>
+          </button>
+          <div class="player-info">
+            <div class="player-title">${escapeHtml(stream.title || stream.name + ' Stream')}</div>
+            <div class="player-subtitle">
+              <span>${stream.bitrate || 128} kbps</span>
+              <span>•</span>
+              <span>Audio Preview</span>
+              <div class="visualizer-waves ${isAudioPlaying ? 'playing' : ''}">
+                <div class="visualizer-bar"></div>
+                <div class="visualizer-bar"></div>
+                <div class="visualizer-bar"></div>
+                <div class="visualizer-bar"></div>
+              </div>
+            </div>
+          </div>
+        </div>
+
         <div class="stream-metrics">
+          <div class="metric">
+            <div class="metric-value" style="color: var(--primary-light);">${stream.listeners != null ? stream.listeners : '—'}</div>
+            <div class="metric-label">Listeners</div>
+          </div>
           <div class="metric">
             <div class="metric-value ${responseClass}">${stream.responseTime != null ? stream.responseTime + 'ms' : '—'}</div>
             <div class="metric-label">Response</div>
@@ -201,13 +244,48 @@
           </div>
         </div>
 
+        ${stream.isSilent ? `<div class="silence-badge">⚠️ Silence / Dead Air Detected</div>` : ''}
+
         <div class="uptime-bar-container">
           <div class="uptime-bar-label">
             <span>24 hours ago</span>
             <span>Now</span>
           </div>
           <div class="uptime-bar">${uptimeBar}</div>
-        </div>
+        </div>`;
+    });
+
+    // Attach audio player click listeners
+    $$('.play-btn').forEach((btn) => {
+      btn.onclick = () => toggleAudioPlayer(btn.dataset.streamId, btn.dataset.streamUrl);
+    });
+  }
+
+  function toggleAudioPlayer(streamId, streamUrl) {
+    // Stop all other playing audio
+    Object.keys(activePlayers).forEach((id) => {
+      if (id !== streamId && activePlayers[id]) {
+        activePlayers[id].pause();
+        activePlayers[id] = null;
+      }
+    });
+
+    let audio = activePlayers[streamId];
+
+    if (audio && !audio.paused) {
+      audio.pause();
+      activePlayers[streamId] = null;
+    } else {
+      audio = new Audio(streamUrl);
+      audio.play().catch((err) => console.error('Audio playback error:', err));
+      activePlayers[streamId] = audio;
+
+      audio.onended = () => { activePlayers[streamId] = null; if (lastStatus) renderStreamCards(lastStatus); };
+      audio.onpause = () => { if (lastStatus) renderStreamCards(lastStatus); };
+    }
+
+    if (lastStatus) renderStreamCards(lastStatus);
+  }
 
         ${stream.error ? `<div class="stream-error">${escapeHtml(stream.error)}</div>` : ''}
 
