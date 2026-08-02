@@ -160,7 +160,8 @@
     return Math.round((upChecks / totalChecks) * 10000) / 100;
   }
 
-  // Active audio elements for preview player
+  // Player state tracking: { [streamId]: 'stopped' | 'buffering' | 'playing' }
+  const playerStates = {};
   const activePlayers = {};
 
   // ── Stream Cards ────────────────────────────────────────────────────────
@@ -184,7 +185,14 @@
       const uptimePercent = getStreamUptime(stream.id);
       const uptimeClass = uptimePercent >= 99 ? 'good' : uptimePercent >= 95 ? 'warn' : 'bad';
       const uptimeBar = renderUptimeBar(stream.id);
-      const isAudioPlaying = activePlayers[stream.id] && !activePlayers[stream.id].paused;
+      const state = playerStates[stream.id] || 'stopped';
+
+      let playBtnContent = '<span class="material-symbols-outlined">play_arrow</span>';
+      if (state === 'buffering') {
+        playBtnContent = '<div class="btn-spinner"></div>';
+      } else if (state === 'playing') {
+        playBtnContent = '<span class="material-symbols-outlined">pause</span>';
+      }
 
       card.innerHTML = `
         <div class="stream-header">
@@ -201,15 +209,15 @@
         <!-- Live Audio Preview Player -->
         <div class="audio-player-box">
           <button class="play-btn" data-stream-id="${stream.id}" data-stream-url="${escapeHtml(stream.url)}" title="Toggle Preview Audio">
-            <span class="material-symbols-outlined">${isAudioPlaying ? 'pause' : 'play_arrow'}</span>
+            ${playBtnContent}
           </button>
           <div class="player-info">
-            <div class="player-title">${escapeHtml(stream.title || stream.name + ' Stream')}</div>
+            <div class="player-title" title="${escapeHtml(stream.title || stream.name + ' Stream')}">${escapeHtml(stream.title || stream.name + ' Stream')}</div>
             <div class="player-subtitle">
               <span>${stream.bitrate || 128} kbps</span>
-              <span>•</span>
+              <span class="bullet-dot">●</span>
               <span>Audio Preview</span>
-              <div class="visualizer-waves ${isAudioPlaying ? 'playing' : ''}">
+              <div class="visualizer-waves ${state === 'playing' ? 'playing' : ''}">
                 <div class="visualizer-bar"></div>
                 <div class="visualizer-bar"></div>
                 <div class="visualizer-bar"></div>
@@ -268,24 +276,59 @@
       if (id !== streamId && activePlayers[id]) {
         activePlayers[id].pause();
         activePlayers[id] = null;
+        playerStates[id] = 'stopped';
       }
     });
 
     let audio = activePlayers[streamId];
 
-    if (audio && !audio.paused) {
+    if (audio && (playerStates[streamId] === 'playing' || playerStates[streamId] === 'buffering')) {
       audio.pause();
       activePlayers[streamId] = null;
+      playerStates[streamId] = 'stopped';
+      if (lastStatus) renderStreamCards(lastStatus);
     } else {
+      playerStates[streamId] = 'buffering';
+      if (lastStatus) renderStreamCards(lastStatus);
+
       audio = new Audio(streamUrl);
-      audio.play().catch((err) => console.error('Audio playback error:', err));
       activePlayers[streamId] = audio;
 
-      audio.onended = () => { activePlayers[streamId] = null; if (lastStatus) renderStreamCards(lastStatus); };
-      audio.onpause = () => { if (lastStatus) renderStreamCards(lastStatus); };
-    }
+      audio.addEventListener('playing', () => {
+        playerStates[streamId] = 'playing';
+        if (lastStatus) renderStreamCards(lastStatus);
+      });
 
-    if (lastStatus) renderStreamCards(lastStatus);
+      audio.addEventListener('waiting', () => {
+        playerStates[streamId] = 'buffering';
+        if (lastStatus) renderStreamCards(lastStatus);
+      });
+
+      audio.addEventListener('pause', () => {
+        playerStates[streamId] = 'stopped';
+        activePlayers[streamId] = null;
+        if (lastStatus) renderStreamCards(lastStatus);
+      });
+
+      audio.addEventListener('ended', () => {
+        playerStates[streamId] = 'stopped';
+        activePlayers[streamId] = null;
+        if (lastStatus) renderStreamCards(lastStatus);
+      });
+
+      audio.addEventListener('error', () => {
+        playerStates[streamId] = 'stopped';
+        activePlayers[streamId] = null;
+        if (lastStatus) renderStreamCards(lastStatus);
+      });
+
+      audio.play().catch((err) => {
+        console.error('Audio playback error:', err);
+        playerStates[streamId] = 'stopped';
+        activePlayers[streamId] = null;
+        if (lastStatus) renderStreamCards(lastStatus);
+      });
+    }
   }
 
   function renderUptimeBar(streamId) {

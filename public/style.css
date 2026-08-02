@@ -457,6 +457,15 @@ body::before {
   font-size: 24px;
 }
 
+.btn-spinner {
+  width: 18px;
+  height: 18px;
+  border: 2px solid rgba(255, 255, 255, 0.3);
+  border-top-color: #ffffff;
+  border-radius: 50%;
+  animation: spin 0.7s linear infinite;
+}
+
 .player-info {
   flex: 1;
   min-width: 0;
@@ -478,6 +487,12 @@ body::before {
   align-items: center;
   gap: 6px;
   margin-top: 2px;
+}
+
+.bullet-dot {
+  font-size: 8px;
+  color: var(--text-tertiary);
+  opacity: 0.6;
 }
 
 .visualizer-waves {
