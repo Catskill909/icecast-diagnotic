@@ -102,12 +102,6 @@
     const streams = data.streams || [];
     lastStatus = streams;
 
-    // Summary
-    const upCount = streams.filter((s) => s.status === 'up').length;
-    const downCount = streams.filter((s) => s.status === 'down').length;
-    const responseTimes = streams.filter((s) => s.responseTime != null).map((s) => s.responseTime);
-    const avgResponse = responseTimes.length ? Math.round(responseTimes.reduce((a, b) => a + b, 0) / responseTimes.length) : 0;
-
     // Summary metrics
     const upCount = streams.filter((s) => s.status === 'up').length;
     const downCount = streams.filter((s) => s.status === 'down').length;
@@ -252,7 +246,14 @@
             <span>Now</span>
           </div>
           <div class="uptime-bar">${uptimeBar}</div>
-        </div>`;
+        </div>
+
+        ${stream.error ? `<div class="stream-error">${escapeHtml(stream.error)}</div>` : ''}
+
+        <div class="stream-last-check">
+          ${stream.lastChecked ? 'Checked ' + relativeTime(stream.lastChecked) : 'Not yet checked'}
+        </div>
+      `;
     });
 
     // Attach audio player click listeners
@@ -285,15 +286,6 @@
     }
 
     if (lastStatus) renderStreamCards(lastStatus);
-  }
-
-        ${stream.error ? `<div class="stream-error">${escapeHtml(stream.error)}</div>` : ''}
-
-        <div class="stream-last-check">
-          ${stream.lastChecked ? 'Checked ' + relativeTime(stream.lastChecked) : 'Not yet checked'}
-        </div>
-      `;
-    });
   }
 
   function renderUptimeBar(streamId) {
