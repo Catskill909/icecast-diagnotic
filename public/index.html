@@ -43,6 +43,10 @@
           <span class="material-symbols-outlined">mail</span>
           <span id="email-status-text">—</span>
         </div>
+        <button class="help-btn" id="help-btn" title="App Documentation & Help">
+          <span class="material-symbols-outlined">help</span>
+          <span>Help</span>
+        </button>
       </div>
     </header>
 
@@ -94,6 +98,66 @@
         <div class="incidents-empty">
           <span class="material-symbols-outlined">check_circle</span>
           <p>No incidents recorded</p>
+        </div>
+      </div>
+    </div>
+
+    <!-- Help / Documentation Modal -->
+    <div class="modal-overlay" id="help-modal" style="display: none;">
+      <div class="modal-card fade-in">
+        <div class="modal-header">
+          <div class="modal-title">
+            <span class="material-symbols-outlined">info</span>
+            KPFT Stream Monitor — User Guide
+          </div>
+          <button class="modal-close" id="modal-close-btn">&times;</button>
+        </div>
+        <div class="modal-body">
+          <div class="guide-grid">
+            <div class="guide-item">
+              <div class="guide-icon"><span class="material-symbols-outlined">cell_tower</span></div>
+              <div>
+                <h4>Real-Time Stream Monitoring</h4>
+                <p>Monitors KPFT Main (128k), HD2, and HD3 streams every 60 seconds. Checks HTTP status, latency (ms), and content-type headers.</p>
+              </div>
+            </div>
+
+            <div class="guide-item">
+              <div class="guide-icon"><span class="material-symbols-outlined">volume_off</span></div>
+              <div>
+                <h4>Dead Air & Silence Detection</h4>
+                <p>Samples audio stream buffers to detect dead air or silent broadcasts, even if the Icecast server is returning an HTTP 200 OK status.</p>
+              </div>
+            </div>
+
+            <div class="guide-item">
+              <div class="guide-icon"><span class="material-symbols-outlined">group</span></div>
+              <div>
+                <h4>Icecast Server Statistics</h4>
+                <p>Connects directly to Icecast <code>/status-json.xsl</code> to track active listener counts, peak listeners, and broadcast bitrates in real time.</p>
+              </div>
+            </div>
+
+            <div class="guide-item">
+              <div class="guide-icon"><span class="material-symbols-outlined">mail</span></div>
+              <div>
+                <h4>Smart Email Alerts</h4>
+                <p>Sends immediate email alerts to staff (gm@kpft.org, omaclay@gmail.com, paul@hype.net) when a stream goes down or recovers, requiring 2 consecutive failures to prevent false alarms.</p>
+              </div>
+            </div>
+
+            <div class="guide-item">
+              <div class="guide-icon"><span class="material-symbols-outlined">play_circle</span></div>
+              <div>
+                <h4>In-Dashboard Preview Player</h4>
+                <p>Click the play button on any stream card to listen to live audio directly in your browser. Features a buffering indicator and animated equalizer waves.</p>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <span>Powered by Pacifica Foundation · KPFT Houston</span>
+          <button class="btn-primary" id="modal-ok-btn">Got It</button>
         </div>
       </div>
     </div>

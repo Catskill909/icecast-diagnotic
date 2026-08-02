@@ -43,6 +43,9 @@
       setConnected(true);
       isFirstLoad = false;
 
+      // Setup Help Modal
+      setupHelpModal();
+
       // Start polling
       pollTimer = setInterval(poll, POLL_INTERVAL);
     } catch (err) {
@@ -50,6 +53,27 @@
       $('#loading .loading-text').textContent = 'Failed to connect. Retrying…';
       setTimeout(boot, 5000);
     }
+  }
+
+  // ── Help Modal ───────────────────────────────────────────────────────────
+  function setupHelpModal() {
+    const modal = $('#help-modal');
+    const openBtn = $('#help-btn');
+    const closeBtn = $('#modal-close-btn');
+    const okBtn = $('#modal-ok-btn');
+
+    if (!modal || !openBtn) return;
+
+    const open = () => { modal.style.display = 'flex'; };
+    const close = () => { modal.style.display = 'none'; };
+
+    openBtn.onclick = open;
+    if (closeBtn) closeBtn.onclick = close;
+    if (okBtn) okBtn.onclick = close;
+
+    modal.onclick = (e) => {
+      if (e.target === modal) close();
+    };
   }
 
   async function poll() {
