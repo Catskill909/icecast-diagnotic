@@ -13,8 +13,9 @@ LABEL org.opencontainers.image.description="Real-time Icecast stream uptime moni
 
 WORKDIR /app
 
-# Create non-root user
-RUN addgroup -S monitor && adduser -S monitor -G monitor
+# Create non-root user and install curl for Coolify healthchecks
+RUN addgroup -S monitor && adduser -S monitor -G monitor && \
+    apk add --no-cache curl
 
 # Copy dependencies
 COPY --from=deps /app/node_modules ./node_modules
@@ -34,7 +35,7 @@ USER monitor
 EXPOSE 3000
 
 # Health check
-HEALTHCHECK --interval=30s --timeout=10s --start-period=15s --retries=3 \
-  CMD wget -qO- http://localhost:3000/health || exit 1
+HEALTHCHECK --interval=10s --timeout=5s --start-period=10s --retries=5 \
+  CMD curl -f http://localhost:3000/health || exit 1
 
 CMD ["node", "server.js"]
