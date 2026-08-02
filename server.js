@@ -30,9 +30,10 @@ app.get('/api/config', (req, res) => {
 
 // ── Test Email Alert ────────────────────────────────────────────────────────
 app.get('/api/test-alert', async (req, res) => {
-  const to = req.query.to;
-  if (!to) {
-    return res.status(400).json({ error: 'Provide ?to=email@example.com' });
+  const to = (req.query.to || '').trim();
+  const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+  if (!to || !emailRegex.test(to)) {
+    return res.status(400).json({ error: 'Provide a valid email address via ?to=user@example.com' });
   }
   try {
     await monitor.sendTestAlert(to);
