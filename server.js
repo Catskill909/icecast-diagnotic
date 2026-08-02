@@ -6,8 +6,24 @@ const monitor = require('./monitor');
 const app = express();
 const PORT = parseInt(process.env.PORT, 10) || 3000;
 
-// ── Serve Static Frontend ───────────────────────────────────────────────────
-app.use(express.static(path.join(__dirname, 'public')));
+// ── Security & Search Engine Deterrence Middleware ─────────────────────────
+app.use((req, res, next) => {
+  // Discourage search engine indexing (unlisted site)
+  res.setHeader('X-Robots-Tag', 'noindex, nofollow, noarchive, nosnippet');
+  next();
+});
+
+// ── Serve Static Frontend (Cache Busting for Dev) ───────────────────────────
+app.use(express.static(path.join(__dirname, 'public'), {
+  etag: true,
+  lastModified: true,
+  setHeaders: (res, filePath) => {
+    // Prevent stale client-side caching during dev & deployment
+    res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+    res.setHeader('Pragma', 'no-cache');
+    res.setHeader('Expires', '0');
+  }
+}));
 
 // ── API Endpoints ───────────────────────────────────────────────────────────
 app.get('/api/status', (req, res) => {
