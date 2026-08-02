@@ -492,6 +492,97 @@ async function runChecks() {
   pruneHistory();
 }
 
+// ── Bulletproof Cross-Client Dark Mode Email Builder ─────────────────────────
+function buildEmailHtml({ title, subtitle, headerBg, contentHtml }) {
+  const dashboardUrl = process.env.DASHBOARD_URL || '';
+  const dashboardLink = dashboardUrl ? `
+    <div style="text-align: center; margin-top: 24px; margin-bottom: 8px;">
+      <!--[if mso]>
+      <v:roundrect xmlns:v="urn:schemas-microsoft-com:vml" xmlns:w="urn:schemas-microsoft-com:office:word" href="${dashboardUrl}" style="height:44px;v-text-anchor:middle;width:240px;" arcsize="18%" stroke="f" fillcolor="#6c5ce7">
+        <w:anchorlock/>
+        <center style="color:#ffffff;font-family:sans-serif;font-size:14px;font-weight:bold;">📊 Open Stream Monitor Dashboard</center>
+      </v:roundrect>
+      <![endif]-->
+      <a href="${dashboardUrl}" class="btn-bg" style="mso-hide:all; display: inline-block; background-color: #6c5ce7; background-image: linear-gradient(135deg, #6c5ce7, #8a7bfa); color: #ffffff !important; text-decoration: none; padding: 14px 28px; border-radius: 8px; font-weight: 700; font-size: 14px; letter-spacing: 0.02em; box-shadow: 0 4px 12px rgba(108, 92, 231, 0.35);">
+        <span class="btn-text" style="color: #ffffff !important; font-weight: 700;">📊 Open Stream Monitor Dashboard</span>
+      </a>
+    </div>` : '';
+
+  return `<!DOCTYPE html>
+<html lang="en" xmlns="http://www.w3.org/1999/xhtml" xmlns:v="urn:schemas-microsoft-com:vml" xmlns:o="urn:schemas-microsoft-com:office:office">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="color-scheme" content="light dark">
+  <meta name="supported-color-schemes" content="light dark">
+  <title>${title}</title>
+  <style>
+    :root {
+      color-scheme: light dark;
+      supported-color-schemes: light dark;
+    }
+    body, table, td, a { -webkit-text-size-adjust: 100%; -ms-text-size-adjust: 100%; }
+    table, td { mso-table-lspace: 0pt; mso-table-rspace: 0pt; }
+    
+    /* Force iOS WebKit Dark Mode Compliance */
+    @media (prefers-color-scheme: dark) {
+      .body-bg { background-color: #0b0b14 !important; }
+      .card-wrap { background-color: #181826 !important; border-color: #2e2e44 !important; }
+      .card-header { background: ${headerBg} !important; }
+      .card-body { background-color: #181826 !important; color: #ffffff !important; }
+      .title-text { color: #ffffff !important; }
+      .sub-text { color: #f1f5f9 !important; }
+      .section-hdr { color: #cbd5e1 !important; }
+      .label-col { color: #94a3b8 !important; }
+      .val-col { color: #f8fafc !important; }
+      .row-border { border-bottom-color: #28283d !important; }
+      .callout-box { background-color: #211e3b !important; border-color: #3d3575 !important; }
+      .callout-title { color: #c4b5fd !important; }
+      .callout-text { color: #e2e8f0 !important; }
+      .btn-bg { background-color: #6c5ce7 !important; background-image: none !important; color: #ffffff !important; }
+      .btn-text { color: #ffffff !important; }
+      .footer-bg { background-color: #0f0f1a !important; border-top-color: #222235 !important; }
+      .footer-text { color: #94a3b8 !important; }
+    }
+  </style>
+</head>
+<body class="body-bg" style="margin: 0; padding: 20px 0; background-color: #0f0f1a; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;">
+  <table role="presentation" width="100%" border="0" cellspacing="0" cellpadding="0" class="body-bg" style="background-color: #0f0f1a; width: 100%;">
+    <tr>
+      <td align="center" style="padding: 10px 8px;">
+        <table role="presentation" width="100%" border="0" cellspacing="0" cellpadding="0" class="card-wrap" style="max-width: 600px; width: 100%; background-color: #181826; border-radius: 12px; overflow: hidden; border: 1px solid #2e2e44; box-shadow: 0 8px 24px rgba(0,0,0,0.4);">
+          <!-- Header Banner -->
+          <tr>
+            <td class="card-header" style="background: ${headerBg}; padding: 24px 28px;">
+              <h1 class="title-text" style="margin: 0; font-size: 22px; font-weight: 700; color: #ffffff !important; line-height: 1.3; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;">
+                <span class="title-text" style="color: #ffffff !important;">${title}</span>
+              </h1>
+              ${subtitle ? `<p class="sub-text" style="margin: 8px 0 0 0; font-size: 14px; color: #f1f5f9 !important; opacity: 0.95; line-height: 1.5;"><span class="sub-text" style="color: #f1f5f9 !important;">${subtitle}</span></p>` : ''}
+            </td>
+          </tr>
+          <!-- Body Content -->
+          <tr>
+            <td class="card-body" style="background-color: #181826; padding: 24px 28px; color: #e2e8f0;">
+              ${contentHtml}
+              ${dashboardLink}
+            </td>
+          </tr>
+          <!-- Footer -->
+          <tr>
+            <td class="footer-bg" style="background-color: #0f0f1a; padding: 18px 28px; border-top: 1px solid #222235; text-align: center;">
+              <p class="footer-text" style="color: #94a3b8 !important; font-size: 12px; margin: 0; line-height: 1.5;">
+                <span class="footer-text" style="color: #94a3b8 !important;">KPFT Icecast Stream Monitor · Pacifica Foundation — Houston, TX</span>
+              </p>
+            </td>
+          </tr>
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>`;
+}
+
 // ── Email Alerts ────────────────────────────────────────────────────────────
 async function sendAlert(stream, result, type) {
   if (!transporter) return;
@@ -504,7 +595,6 @@ async function sendAlert(stream, result, type) {
 
   const ccRecipients = (process.env.ALERT_CC || '').split(',').map((e) => e.trim()).filter(Boolean);
   const fromAddr = process.env.SMTP_FROM || process.env.SMTP_USER;
-  const dashboardUrl = process.env.DASHBOARD_URL || '';
   const isDeadAir = type === 'dead_air';
   const isDown = type === 'down' || isDeadAir;
   const emoji = isDeadAir ? '🔇' : isDown ? '🔴' : '🟢';
@@ -514,121 +604,116 @@ async function sendAlert(stream, result, type) {
 
   const subject = `${emoji} KPFT Alert: ${stream.name} — ${statusText}`;
 
-  // Build all-streams status summary for the email
+  // Header Background Gradient
+  const headerBg = isDeadAir
+    ? 'linear-gradient(135deg, #d97706, #b45309)'
+    : isDown
+    ? 'linear-gradient(135deg, #dc2626, #991b1b)'
+    : 'linear-gradient(135deg, #16a34a, #15803d)';
+
+  const subtitle = isDeadAir
+    ? `${stream.name} output audio is silent (Dead Air confirmed across multiple 5s probes).`
+    : isDown
+    ? `${stream.name} has gone offline after ${failures} consecutive failed checks.`
+    : `${stream.name} is back online and streaming normally.`;
+
+  // Build all-streams status summary table
   const allStreamsRows = streams.map((s) => {
     const st = streamStatus[s.id] || {};
     const isStDeadAir = st.silenceState === 'dead_air';
     const dot = isStDeadAir ? '🔇' : st.status === 'up' ? '🟢' : st.status === 'down' ? '🔴' : '⚪';
     const stText = isStDeadAir ? 'Dead Air' : st.status === 'up' ? 'Online' : st.status === 'down' ? 'Offline' : 'Unknown';
+    const stColor = isStDeadAir ? '#f59e0b' : st.status === 'up' ? '#4ade80' : '#f87171';
     const rt = st.responseTime != null ? `${st.responseTime}ms` : '—';
     return `
-          <tr>
-            <td style="padding: 6px 8px; border-bottom: 1px solid #2a2a3e;">${dot} ${s.name}</td>
-            <td style="padding: 6px 8px; border-bottom: 1px solid #2a2a3e; color: ${isStDeadAir ? '#f59e0b' : st.status === 'up' ? '#4ade80' : '#f87171'}; font-weight: 600;">${stText}</td>
-            <td style="padding: 6px 8px; border-bottom: 1px solid #2a2a3e;">${rt}</td>
+          <tr class="row-border" style="border-bottom: 1px solid #28283d;">
+            <td class="val-col" style="padding: 8px; color: #f8fafc !important; font-size: 13px;"><span class="val-col" style="color: #f8fafc !important;">${dot} ${s.name}</span></td>
+            <td style="padding: 8px; color: ${stColor} !important; font-weight: 600; font-size: 13px;"><span style="color: ${stColor} !important;">${stText}</span></td>
+            <td class="label-col" style="padding: 8px; color: #94a3b8 !important; font-size: 13px;"><span class="label-col" style="color: #94a3b8 !important;">${rt}</span></td>
           </tr>`;
   }).join('');
 
-  // Build troubleshooting guidance
+  // Troubleshooting steps callout
   const troubleshooting = isDeadAir ? `
-        <div style="background: #241600; border: 1px solid rgba(245, 158, 11, 0.3); border-radius: 8px; padding: 16px; margin-top: 16px;">
-          <p style="font-weight: 600; color: #fbbf24; margin: 0 0 8px 0; font-size: 14px;">⚠️ Dead Air Troubleshooting Steps</p>
-          <ol style="margin: 0; padding-left: 20px; color: #e5e7eb; font-size: 13px; line-height: 1.8;">
-            <li>HTTP stream connection is connected (HTTP 200 OK), but output audio is silent</li>
-            <li>Check studio audio routing, mixing console output, or automation software</li>
-            <li>Verify studio audio interface / soundcard connections to stream encoder</li>
-            <li>Check if broadcast source player or automation software is paused or stopped</li>
-          </ol>
-        </div>` : isDown ? `
-        <div style="background: #1a1020; border: 1px solid rgba(239, 68, 68, 0.2); border-radius: 8px; padding: 16px; margin-top: 16px;">
-          <p style="font-weight: 600; color: #f87171; margin: 0 0 8px 0; font-size: 14px;">⚠️ Server Down Troubleshooting Steps</p>
-          <ol style="margin: 0; padding-left: 20px; color: #c0c0d0; font-size: 13px; line-height: 1.8;">
-            <li>Check if the Icecast server at <code style="background: #2a2a3e; padding: 1px 4px; border-radius: 3px;">streams.pacifica.org:9000</code> is reachable</li>
-            <li>Verify the source client is connected and sending audio</li>
-            <li>Check Icecast admin panel for mount point status</li>
-            <li>Review Icecast server logs for errors</li>
-            <li>Restart the source encoder if needed</li>
-          </ol>
-        </div>` : '';
+    <div class="callout-box" style="background-color: #261d10; border: 1px solid #52370e; border-radius: 8px; padding: 16px; margin-top: 16px;">
+      <p class="callout-title" style="font-weight: 600; color: #fbbf24 !important; margin: 0 0 8px 0; font-size: 14px;"><span class="callout-title" style="color: #fbbf24 !important;">⚠️ Dead Air Troubleshooting Steps</span></p>
+      <ol class="callout-text" style="margin: 0; padding-left: 20px; color: #e2e8f0 !important; font-size: 13px; line-height: 1.8;">
+        <li style="color: #e2e8f0 !important;"><span style="color: #e2e8f0 !important;">HTTP stream connection is active (HTTP 200 OK), but output audio is silent</span></li>
+        <li style="color: #e2e8f0 !important;"><span style="color: #e2e8f0 !important;">Check studio audio routing, mixing console master output, or automation software</span></li>
+        <li style="color: #e2e8f0 !important;"><span style="color: #e2e8f0 !important;">Verify studio audio interface / soundcard connections to stream encoder</span></li>
+        <li style="color: #e2e8f0 !important;"><span style="color: #e2e8f0 !important;">Check if broadcast source player or automation software is paused or stopped</span></li>
+      </ol>
+    </div>` : isDown ? `
+    <div class="callout-box" style="background-color: #291418; border: 1px solid #5c2028; border-radius: 8px; padding: 16px; margin-top: 16px;">
+      <p class="callout-title" style="font-weight: 600; color: #f87171 !important; margin: 0 0 8px 0; font-size: 14px;"><span class="callout-title" style="color: #f87171 !important;">⚠️ Server Down Troubleshooting Steps</span></p>
+      <ol class="callout-text" style="margin: 0; padding-left: 20px; color: #e2e8f0 !important; font-size: 13px; line-height: 1.8;">
+        <li style="color: #e2e8f0 !important;"><span style="color: #e2e8f0 !important;">Check if the Icecast server at <code style="background: #28283d; color: #a78bfa !important; padding: 2px 5px; border-radius: 3px;">streams.pacifica.org:9000</code> is reachable</span></li>
+        <li style="color: #e2e8f0 !important;"><span style="color: #e2e8f0 !important;">Verify the source client is connected and sending audio</span></li>
+        <li style="color: #e2e8f0 !important;"><span style="color: #e2e8f0 !important;">Check Icecast admin panel for mount point status</span></li>
+        <li style="color: #e2e8f0 !important;"><span style="color: #e2e8f0 !important;">Review Icecast server logs for errors</span></li>
+        <li style="color: #e2e8f0 !important;"><span style="color: #e2e8f0 !important;">Restart the source encoder if needed</span></li>
+      </ol>
+    </div>` : '';
 
-  const dashboardLink = dashboardUrl ? `
-        <div style="text-align: center; margin-top: 20px;">
-          <a href="${dashboardUrl}" style="display: inline-block; background: linear-gradient(135deg, #7c6aef, #a595ff); color: white; text-decoration: none; padding: 12px 28px; border-radius: 8px; font-weight: 600; font-size: 14px;">
-            📊 Open Stream Monitor Dashboard
-          </a>
-        </div>` : '';
+  const contentHtml = `
+    <h3 class="section-hdr" style="margin: 0 0 12px 0; font-size: 13px; color: #cbd5e1 !important; text-transform: uppercase; letter-spacing: 0.05em;"><span class="section-hdr" style="color: #cbd5e1 !important;">Affected Stream</span></h3>
+    <table role="presentation" width="100%" border="0" cellspacing="0" cellpadding="0" style="margin-bottom: 16px;">
+      <tr class="row-border" style="border-bottom: 1px solid #28283d;">
+        <td class="label-col" style="padding: 8px 0; color: #94a3b8 !important; width: 140px; font-size: 13px;"><span class="label-col" style="color: #94a3b8 !important;">Stream Name</span></td>
+        <td class="val-col" style="padding: 8px 0; font-weight: 600; color: #f8fafc !important; font-size: 13px;"><span class="val-col" style="color: #f8fafc !important;">${stream.name}</span></td>
+      </tr>
+      <tr class="row-border" style="border-bottom: 1px solid #28283d;">
+        <td class="label-col" style="padding: 8px 0; color: #94a3b8 !important; font-size: 13px;"><span class="label-col" style="color: #94a3b8 !important;">Stream URL</span></td>
+        <td style="padding: 8px 0;"><code style="background: #28283d; color: #a78bfa !important; padding: 3px 6px; border-radius: 4px; font-size: 12px;">${stream.url}</code></td>
+      </tr>
+      <tr class="row-border" style="border-bottom: 1px solid #28283d;">
+        <td class="label-col" style="padding: 8px 0; color: #94a3b8 !important; font-size: 13px;"><span class="label-col" style="color: #94a3b8 !important;">M3U Playlist</span></td>
+        <td style="padding: 8px 0;"><a href="${stream.m3u}" style="color: #a78bfa !important; text-decoration: none; font-size: 12px;">${stream.m3u}</a></td>
+      </tr>
+      <tr class="row-border" style="border-bottom: 1px solid #28283d;">
+        <td class="label-col" style="padding: 8px 0; color: #94a3b8 !important; font-size: 13px;"><span class="label-col" style="color: #94a3b8 !important;">Status</span></td>
+        <td style="padding: 8px 0; font-weight: 700; color: ${isDown ? '#f87171' : '#4ade80'} !important; font-size: 15px;"><span style="color: ${isDown ? '#f87171' : '#4ade80'} !important;">${statusText}</span></td>
+      </tr>
+      <tr class="row-border" style="border-bottom: 1px solid #28283d;">
+        <td class="label-col" style="padding: 8px 0; color: #94a3b8 !important; font-size: 13px;"><span class="label-col" style="color: #94a3b8 !important;">Response Time</span></td>
+        <td class="val-col" style="padding: 8px 0; color: #f8fafc !important; font-size: 13px;"><span class="val-col" style="color: #f8fafc !important;">${result.responseTime}ms</span></td>
+      </tr>
+      ${result.error ? `
+      <tr class="row-border" style="border-bottom: 1px solid #28283d;">
+        <td class="label-col" style="padding: 8px 0; color: #94a3b8 !important; font-size: 13px;"><span class="label-col" style="color: #94a3b8 !important;">Error Details</span></td>
+        <td style="padding: 8px 0;"><code style="background: rgba(239,68,68,0.15); color: #f87171 !important; padding: 3px 6px; border-radius: 4px; font-size: 12px;">${result.error}</code></td>
+      </tr>` : ''}
+      ${isDown ? `
+      <tr class="row-border" style="border-bottom: 1px solid #28283d;">
+        <td class="label-col" style="padding: 8px 0; color: #94a3b8 !important; font-size: 13px;"><span class="label-col" style="color: #94a3b8 !important;">Failed Checks</span></td>
+        <td style="padding: 8px 0; color: #f59e0b !important; font-weight: 600; font-size: 13px;"><span style="color: #f59e0b !important;">${isDeadAir ? `${silenceStreak} consecutive (probes every 5s)` : `${failures} consecutive`}</span></td>
+      </tr>` : ''}
+      <tr>
+        <td class="label-col" style="padding: 8px 0; color: #94a3b8 !important; font-size: 13px;"><span class="label-col" style="color: #94a3b8 !important;">Detected At</span></td>
+        <td class="val-col" style="padding: 8px 0; color: #f8fafc !important; font-size: 13px;"><span class="val-col" style="color: #f8fafc !important;">${new Date().toLocaleString('en-US', { timeZone: 'America/Chicago', weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', second: '2-digit', hour12: true })} CT</span></td>
+      </tr>
+    </table>
 
-  const html = `
-    <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; max-width: 600px; margin: 0 auto;">
-      <div style="background: ${isDown ? 'linear-gradient(135deg, #dc2626, #991b1b)' : 'linear-gradient(135deg, #16a34a, #15803d)'}; color: white; padding: 24px 28px; border-radius: 12px 12px 0 0;">
-        <h1 style="margin: 0; font-size: 22px;">${emoji} Stream ${statusText}</h1>
-        <p style="margin: 8px 0 0 0; font-size: 14px; opacity: 0.9;">${isDown ? `${stream.name} has gone offline after ${failures} consecutive failed checks.` : `${stream.name} is back online and streaming normally.`}</p>
-      </div>
-      <div style="background: #1e1e2e; color: #e0e0e0; padding: 24px 28px;">
-        <h3 style="margin: 0 0 12px 0; font-size: 14px; color: #9090a8; text-transform: uppercase; letter-spacing: 0.05em;">Affected Stream</h3>
-        <table style="width: 100%; border-collapse: collapse; margin-bottom: 8px;">
-          <tr>
-            <td style="padding: 8px 0; color: #888; width: 140px;">Stream Name</td>
-            <td style="padding: 8px 0; font-weight: 600;">${stream.name}</td>
-          </tr>
-          <tr>
-            <td style="padding: 8px 0; color: #888;">Stream URL</td>
-            <td style="padding: 8px 0;"><code style="background: #2a2a3e; padding: 2px 6px; border-radius: 4px; font-size: 12px;">${stream.url}</code></td>
-          </tr>
-          <tr>
-            <td style="padding: 8px 0; color: #888;">M3U Playlist</td>
-            <td style="padding: 8px 0;"><a href="${stream.m3u}" style="color: #a595ff; text-decoration: none; font-size: 12px;">${stream.m3u}</a></td>
-          </tr>
-          <tr>
-            <td style="padding: 8px 0; color: #888;">Status</td>
-            <td style="padding: 8px 0; font-weight: 700; color: ${isDown ? '#f87171' : '#4ade80'}; font-size: 16px;">${statusText}</td>
-          </tr>
-          <tr>
-            <td style="padding: 8px 0; color: #888;">Response Time</td>
-            <td style="padding: 8px 0;">${result.responseTime}ms</td>
-          </tr>
-          ${result.error ? `
-          <tr>
-            <td style="padding: 8px 0; color: #888;">Error Details</td>
-            <td style="padding: 8px 0; color: #f87171;"><code style="background: rgba(239,68,68,0.1); padding: 2px 6px; border-radius: 4px; font-size: 12px;">${result.error}</code></td>
-          </tr>` : ''}
-          ${isDown ? `
-          <tr>
-            <td style="padding: 8px 0; color: #888;">Failed Checks</td>
-            <td style="padding: 8px 0; color: #f59e0b; font-weight: 600;">${failures} consecutive</td>
-          </tr>` : ''}
-          <tr>
-            <td style="padding: 8px 0; color: #888;">Detected At</td>
-            <td style="padding: 8px 0;">${new Date().toLocaleString('en-US', { timeZone: 'America/Chicago', weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', second: '2-digit', hour12: true })} CT</td>
-          </tr>
-        </table>
+    ${troubleshooting}
 
-        ${troubleshooting}
+    <hr style="border: none; border-top: 1px solid #28283d; margin: 20px 0;">
 
-        <hr style="border: none; border-top: 1px solid #2a2a3e; margin: 20px 0;">
+    <h3 class="section-hdr" style="margin: 0 0 12px 0; font-size: 13px; color: #cbd5e1 !important; text-transform: uppercase; letter-spacing: 0.05em;"><span class="section-hdr" style="color: #cbd5e1 !important;">All Streams Overview</span></h3>
+    <table role="presentation" width="100%" border="0" cellspacing="0" cellpadding="0">
+      <tr style="color: #64748b; font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em;">
+        <td class="label-col" style="padding: 6px 8px; border-bottom: 1px solid #28283d;"><span class="label-col" style="color: #94a3b8 !important;">Stream</span></td>
+        <td class="label-col" style="padding: 6px 8px; border-bottom: 1px solid #28283d;"><span class="label-col" style="color: #94a3b8 !important;">Status</span></td>
+        <td class="label-col" style="padding: 6px 8px; border-bottom: 1px solid #28283d;"><span class="label-col" style="color: #94a3b8 !important;">Response</span></td>
+      </tr>
+      ${allStreamsRows}
+    </table>`;
 
-        <h3 style="margin: 0 0 12px 0; font-size: 14px; color: #9090a8; text-transform: uppercase; letter-spacing: 0.05em;">All Streams Overview</h3>
-        <table style="width: 100%; border-collapse: collapse;">
-          <tr style="color: #666; font-size: 12px; text-transform: uppercase; letter-spacing: 0.05em;">
-            <td style="padding: 6px 8px; border-bottom: 1px solid #2a2a3e;">Stream</td>
-            <td style="padding: 6px 8px; border-bottom: 1px solid #2a2a3e;">Status</td>
-            <td style="padding: 6px 8px; border-bottom: 1px solid #2a2a3e;">Response</td>
-          </tr>
-          ${allStreamsRows}
-        </table>
-
-        ${dashboardLink}
-      </div>
-      <div style="background: #12121e; padding: 16px 28px; border-radius: 0 0 12px 12px; text-align: center;">
-        <p style="color: #606078; font-size: 11px; margin: 0;">
-          KPFT Icecast Stream Monitor · Checking every ${Math.round(CHECK_INTERVAL / 1000)}s · Alert after ${FAILURE_THRESHOLD} failures
-        </p>
-        <p style="color: #606078; font-size: 11px; margin: 4px 0 0 0;">
-          Pacifica Foundation — Houston, TX
-        </p>
-      </div>
-    </div>
-  `;
+  const html = buildEmailHtml({
+    title: `${emoji} Stream ${statusText}`,
+    subtitle,
+    headerBg,
+    contentHtml,
+  });
 
   try {
     const mailOptions = {
@@ -760,65 +845,50 @@ async function sendTestAlert(toEmail) {
   }
 
   const fromAddr = process.env.SMTP_FROM || process.env.SMTP_USER;
-  const dashboardUrl = process.env.DASHBOARD_URL || '';
-  const testStream = streams[0] || { name: 'KPFT Main', url: 'https://streams.pacifica.org:9000/live_128', m3u: '' };
 
   // Build current status of all streams
   const allStreamsRows = streams.map((s) => {
     const st = streamStatus[s.id] || {};
-    const dot = st.status === 'up' ? '🟢' : st.status === 'down' ? '🔴' : '⚪';
-    const stText = st.status === 'up' ? 'Online' : st.status === 'down' ? 'Offline' : 'Unknown';
+    const isStDeadAir = st.silenceState === 'dead_air';
+    const dot = isStDeadAir ? '🔇' : st.status === 'up' ? '🟢' : st.status === 'down' ? '🔴' : '⚪';
+    const stText = isStDeadAir ? 'Dead Air' : st.status === 'up' ? 'Online' : st.status === 'down' ? 'Offline' : 'Unknown';
+    const stColor = isStDeadAir ? '#f59e0b' : st.status === 'up' ? '#4ade80' : '#f87171';
     const rt = st.responseTime != null ? `${st.responseTime}ms` : '—';
     return `
-          <tr>
-            <td style="padding: 6px 8px; border-bottom: 1px solid #2a2a3e;">${dot} ${s.name}</td>
-            <td style="padding: 6px 8px; border-bottom: 1px solid #2a2a3e; color: ${st.status === 'up' ? '#4ade80' : st.status === 'down' ? '#f87171' : '#888'}; font-weight: 600;">${stText}</td>
-            <td style="padding: 6px 8px; border-bottom: 1px solid #2a2a3e;">${rt}</td>
+          <tr class="row-border" style="border-bottom: 1px solid #28283d;">
+            <td class="val-col" style="padding: 8px; color: #f8fafc !important; font-size: 13px;"><span class="val-col" style="color: #f8fafc !important;">${dot} ${s.name}</span></td>
+            <td style="padding: 8px; color: ${stColor} !important; font-weight: 600; font-size: 13px;"><span style="color: ${stColor} !important;">${stText}</span></td>
+            <td class="label-col" style="padding: 8px; color: #94a3b8 !important; font-size: 13px;"><span class="label-col" style="color: #94a3b8 !important;">${rt}</span></td>
           </tr>`;
   }).join('');
 
-  const dashboardLink = dashboardUrl ? `
-        <div style="text-align: center; margin-top: 20px;">
-          <a href="${dashboardUrl}" style="display: inline-block; background: linear-gradient(135deg, #7c6aef, #a595ff); color: white; text-decoration: none; padding: 12px 28px; border-radius: 8px; font-weight: 600; font-size: 14px;">
-            📊 Open Stream Monitor Dashboard
-          </a>
-        </div>` : '';
+  const contentHtml = `
+    <h3 class="section-hdr" style="margin: 0 0 12px 0; font-size: 13px; color: #cbd5e1 !important; text-transform: uppercase; letter-spacing: 0.05em;"><span class="section-hdr" style="color: #cbd5e1 !important;">Current Stream Status</span></h3>
+    <table role="presentation" width="100%" border="0" cellspacing="0" cellpadding="0">
+      <tr style="color: #64748b; font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em;">
+        <td class="label-col" style="padding: 6px 8px; border-bottom: 1px solid #28283d;"><span class="label-col" style="color: #94a3b8 !important;">Stream</span></td>
+        <td class="label-col" style="padding: 6px 8px; border-bottom: 1px solid #28283d;"><span class="label-col" style="color: #94a3b8 !important;">Status</span></td>
+        <td class="label-col" style="padding: 6px 8px; border-bottom: 1px solid #28283d;"><span class="label-col" style="color: #94a3b8 !important;">Response</span></td>
+      </tr>
+      ${allStreamsRows}
+    </table>
 
-  const html = `
-    <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; max-width: 600px; margin: 0 auto;">
-      <div style="background: linear-gradient(135deg, #7c6aef, #5a49c9); color: white; padding: 24px 28px; border-radius: 12px 12px 0 0;">
-        <h1 style="margin: 0; font-size: 22px;">🧪 Test Alert — Email Working!</h1>
-        <p style="margin: 8px 0 0 0; font-size: 14px; opacity: 0.9;">This is a test alert from the KPFT Stream Monitor. If you receive this, email alerts are configured correctly.</p>
-      </div>
-      <div style="background: #1e1e2e; color: #e0e0e0; padding: 24px 28px;">
-        <h3 style="margin: 0 0 12px 0; font-size: 14px; color: #9090a8; text-transform: uppercase; letter-spacing: 0.05em;">Current Stream Status</h3>
-        <table style="width: 100%; border-collapse: collapse;">
-          <tr style="color: #666; font-size: 12px; text-transform: uppercase; letter-spacing: 0.05em;">
-            <td style="padding: 6px 8px; border-bottom: 1px solid #2a2a3e;">Stream</td>
-            <td style="padding: 6px 8px; border-bottom: 1px solid #2a2a3e;">Status</td>
-            <td style="padding: 6px 8px; border-bottom: 1px solid #2a2a3e;">Response</td>
-          </tr>
-          ${allStreamsRows}
-        </table>
+    <div class="callout-box" style="background-color: #1e1b38; border: 1px solid #3d3575; border-radius: 8px; padding: 16px; margin-top: 20px;">
+      <p class="callout-title" style="font-weight: 600; color: #c4b5fd !important; margin: 0 0 8px 0; font-size: 14px;"><span class="callout-title" style="color: #c4b5fd !important;">ℹ️ What to expect</span></p>
+      <ul class="callout-text" style="margin: 0; padding-left: 20px; color: #e2e8f0 !important; font-size: 13px; line-height: 1.8;">
+        <li style="color: #e2e8f0 !important;"><span style="color: #e2e8f0 !important;">🔴 <strong>Down alert</strong> when a stream fails ${FAILURE_THRESHOLD} consecutive checks</span></li>
+        <li style="color: #e2e8f0 !important;"><span style="color: #e2e8f0 !important;">🔇 <strong>Dead Air alert</strong> when silence persists across ${SILENCE_FAILURE_THRESHOLD} 5-second probes</span></li>
+        <li style="color: #e2e8f0 !important;"><span style="color: #e2e8f0 !important;">🟢 <strong>Recovery alert</strong> when a stream comes back online</span></li>
+        <li style="color: #e2e8f0 !important;"><span style="color: #e2e8f0 !important;">Checks run every ${Math.round(CHECK_INTERVAL / 1000)} seconds</span></li>
+      </ul>
+    </div>`;
 
-        <div style="background: rgba(124, 106, 239, 0.08); border: 1px solid rgba(124, 106, 239, 0.2); border-radius: 8px; padding: 16px; margin-top: 16px;">
-          <p style="font-weight: 600; color: #a595ff; margin: 0 0 8px 0; font-size: 14px;">ℹ️ What to expect</p>
-          <ul style="margin: 0; padding-left: 20px; color: #c0c0d0; font-size: 13px; line-height: 1.8;">
-            <li>🔴 <strong>Down alert</strong> when a stream fails ${FAILURE_THRESHOLD} consecutive checks</li>
-            <li>🟢 <strong>Recovery alert</strong> when a stream comes back online</li>
-            <li>Checks run every ${Math.round(CHECK_INTERVAL / 1000)} seconds</li>
-          </ul>
-        </div>
-
-        ${dashboardLink}
-      </div>
-      <div style="background: #12121e; padding: 16px 28px; border-radius: 0 0 12px 12px; text-align: center;">
-        <p style="color: #606078; font-size: 11px; margin: 0;">
-          KPFT Icecast Stream Monitor · Test Email · ${new Date().toLocaleString('en-US', { timeZone: 'America/Chicago', weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', hour12: true })} CT
-        </p>
-      </div>
-    </div>
-  `;
+  const html = buildEmailHtml({
+    title: '🧪 Test Alert — Email Working!',
+    subtitle: 'This is a test alert from the KPFT Stream Monitor. Email alerts are configured correctly.',
+    headerBg: 'linear-gradient(135deg, #6c5ce7, #5a49c9)',
+    contentHtml,
+  });
 
   await transporter.sendMail({
     from: fromAddr,
