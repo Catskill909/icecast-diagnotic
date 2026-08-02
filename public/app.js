@@ -195,14 +195,16 @@
     streams.forEach((stream, i) => {
       let card = $(`#card-${stream.id}`);
 
+      const cardStatus = stream.silenceState === 'dead_air' ? 'dead-air' : stream.silenceState === 'evaluating' ? 'evaluating' : stream.status;
+
       if (!card) {
         card = document.createElement('div');
         card.id = `card-${stream.id}`;
-        card.className = `stream-card slide-in ${stream.status}`;
+        card.className = `stream-card slide-in ${cardStatus}`;
         card.style.animationDelay = `${i * 80}ms`;
         grid.appendChild(card);
       } else {
-        card.className = `stream-card ${stream.status}`;
+        card.className = `stream-card ${cardStatus}`;
       }
 
       const responseClass = getResponseClass(stream.responseTime);
@@ -211,11 +213,31 @@
       const uptimeBar = renderUptimeBar(stream.id);
       const state = playerStates[stream.id] || 'stopped';
 
+      let statusLabel = stream.status === 'up' ? 'Online' : stream.status === 'down' ? 'Offline' : 'Unknown';
+      let dotClass = stream.status;
+
+      if (stream.silenceState === 'evaluating') {
+        statusLabel = `Evaluating Silence (${stream.silenceStreak || 1}/3)`;
+        dotClass = 'evaluating';
+      } else if (stream.silenceState === 'dead_air') {
+        statusLabel = 'Dead Air Alert';
+        dotClass = 'dead-air';
+      }
+
       let playBtnContent = '<span class="material-symbols-outlined">play_arrow</span>';
       if (state === 'buffering') {
         playBtnContent = '<div class="btn-spinner"></div>';
       } else if (state === 'playing') {
         playBtnContent = '<span class="material-symbols-outlined">pause</span>';
+      }
+
+      let silenceBadgeHtml = '';
+      if (stream.silenceState === 'evaluating') {
+        silenceBadgeHtml = `<div class="silence-badge evaluating">🟡 Evaluating Silence Pause (Aggressive 5s Probe)</div>`;
+      } else if (stream.silenceState === 'dead_air') {
+        silenceBadgeHtml = `<div class="silence-badge dead-air">🔴 Sustained Dead Air Alert (Silence Confirmed)</div>`;
+      } else if (stream.isSilent) {
+        silenceBadgeHtml = `<div class="silence-badge">⚠️ Silence Detected</div>`;
       }
 
       card.innerHTML = `
@@ -224,9 +246,9 @@
             <div class="stream-name">${escapeHtml(stream.name)}</div>
             <div class="stream-url">${escapeHtml(truncateUrl(stream.url))}</div>
           </div>
-          <div class="status-indicator ${stream.status}">
-            <span class="status-dot ${stream.status}"></span>
-            ${stream.status === 'up' ? 'Online' : stream.status === 'down' ? 'Offline' : 'Unknown'}
+          <div class="status-indicator ${dotClass}">
+            <span class="status-dot ${dotClass}"></span>
+            ${statusLabel}
           </div>
         </div>
 
@@ -270,7 +292,7 @@
           </div>
         </div>
 
-        ${stream.isSilent ? `<div class="silence-badge">⚠️ Silence / Dead Air Detected</div>` : ''}
+        ${silenceBadgeHtml}
 
         <div class="uptime-bar-container">
           <div class="uptime-bar-label">

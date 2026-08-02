@@ -29,6 +29,8 @@ const DEFAULT_STREAMS = [
 // ── Configuration ───────────────────────────────────────────────────────────
 const CHECK_INTERVAL = parseInt(process.env.CHECK_INTERVAL_MS, 10) || 60000;
 const FAILURE_THRESHOLD = parseInt(process.env.FAILURE_THRESHOLD, 10) || 2;
+const SILENCE_PROBE_INTERVAL_MS = parseInt(process.env.SILENCE_PROBE_INTERVAL_MS, 10) || 5000;
+const SILENCE_FAILURE_THRESHOLD = parseInt(process.env.SILENCE_FAILURE_THRESHOLD, 10) || 3;
 const DATA_DIR = path.join(__dirname, 'data');
 const HISTORY_FILE = path.join(DATA_DIR, 'history.json');
 const MAX_HISTORY_AGE_MS = 24 * 60 * 60 * 1000; // 24 hours
@@ -40,6 +42,7 @@ let streams = [];
 let streamStatus = {};   // { [id]: { status, responseTime, lastChecked, consecutiveFailures, error } }
 let history = {};         // { [id]: [ { timestamp, status, responseTime, error } ] }
 let incidents = [];       // [ { timestamp, streamId, streamName, type: 'down'|'up', message } ]
+let silenceState = {};    // { [id]: { streak: 0, state: 'normal'|'evaluating'|'dead_air', timer: null } }
 let intervalHandle = null;
 let flushHandle = null;
 let transporter = null;
@@ -72,6 +75,11 @@ function init() {
       lastChecked: null,
       consecutiveFailures: 0,
       error: null,
+    };
+    silenceState[s.id] = {
+      streak: 0,
+      state: 'normal',
+      timer: null,
     };
     history[s.id] = [];
   });
@@ -175,7 +183,7 @@ function analyzeAudioChunk(buffer) {
 }
 
 // ── Stream Health Check ─────────────────────────────────────────────────────
-function checkStream(stream) {
+function checkStream(stream, sampleBytes = 8192) {
   return new Promise((resolve) => {
     const start = Date.now();
     const urlObj = new URL(stream.url);
@@ -183,7 +191,7 @@ function checkStream(stream) {
 
     let receivedBytes = 0;
     const chunks = [];
-    const maxSampleBytes = 8192; // Read ~8KB (0.5s audio) for volume check
+    const maxSampleBytes = sampleBytes; // Customizable sample size for deep audio checks
 
     const req = client.request(
       {
@@ -273,6 +281,87 @@ function checkStream(stream) {
   });
 }
 
+// ── Aggressive Silence Verification Engine ───────────────────────────────
+function scheduleAggressiveProbe(stream) {
+  const st = silenceState[stream.id] || { streak: 0, state: 'normal', timer: null };
+  if (st.timer) clearTimeout(st.timer);
+
+  st.timer = setTimeout(async () => {
+    st.timer = null;
+    const probeNum = st.streak + 1;
+    console.log(`[Silence Engine] Running aggressive verification probe for ${stream.name} (Probe ${probeNum}/${SILENCE_FAILURE_THRESHOLD})`);
+
+    // Sample ~32KB (~2s audio) for deep audio phrase evaluation
+    const result = await checkStream(stream, 32768);
+    const timestamp = new Date().toISOString();
+
+    if (result.status === 'down') {
+      return; // Connection failure handled by standard cycle
+    }
+
+    if (!result.isSilent) {
+      // 🟢 INSTANT RESET! Voice / Audio energy detected!
+      const wasDeadAir = st.state === 'dead_air';
+      console.log(`[Silence Engine] 🟢 Audio detected on ${stream.name} (Energy: ${result.audioEnergy})! Instant reset of silence streak.`);
+
+      st.streak = 0;
+      st.state = 'normal';
+
+      if (streamStatus[stream.id]) {
+        streamStatus[stream.id].isSilent = false;
+        streamStatus[stream.id].audioEnergy = result.audioEnergy;
+        streamStatus[stream.id].silenceState = 'normal';
+        streamStatus[stream.id].silenceStreak = 0;
+      }
+
+      if (wasDeadAir) {
+        const incident = {
+          timestamp,
+          streamId: stream.id,
+          streamName: stream.name,
+          type: 'up',
+          message: `${stream.name} Audio Output Restored — Dead Air cleared`,
+        };
+        incidents.push(incident);
+        sendAlert(stream, result, 'up');
+      }
+      return;
+    }
+
+    // Still silent! Increment streak
+    st.streak += 1;
+
+    if (st.streak < SILENCE_FAILURE_THRESHOLD) {
+      st.state = 'evaluating';
+      if (streamStatus[stream.id]) {
+        streamStatus[stream.id].silenceState = 'evaluating';
+        streamStatus[stream.id].silenceStreak = st.streak;
+      }
+      console.warn(`[Silence Engine] 🟡 Silence probe ${st.streak}/${SILENCE_FAILURE_THRESHOLD} confirmed for ${stream.name}. Scheduling next probe in ${SILENCE_PROBE_INTERVAL_MS}ms.`);
+      scheduleAggressiveProbe(stream);
+    } else {
+      // 🔴 Sustained Dead Air Confirmed!
+      st.state = 'dead_air';
+      if (streamStatus[stream.id]) {
+        streamStatus[stream.id].silenceState = 'dead_air';
+        streamStatus[stream.id].silenceStreak = st.streak;
+      }
+      const durationSec = Math.round((st.streak * SILENCE_PROBE_INTERVAL_MS) / 1000);
+      console.error(`[Silence Engine] 🔴 Sustained DEAD AIR confirmed on ${stream.name} after ${st.streak} probes (~${durationSec}s continuous silence).`);
+
+      const incident = {
+        timestamp,
+        streamId: stream.id,
+        streamName: stream.name,
+        type: 'down',
+        message: `${stream.name} has DEAD AIR — Continuous silence confirmed for ${durationSec}s+`,
+      };
+      incidents.push(incident);
+      sendAlert(stream, result, 'dead_air');
+    }
+  }, SILENCE_PROBE_INTERVAL_MS);
+}
+
 // ── Run Check Cycle ─────────────────────────────────────────────────────────
 async function runChecks() {
   const timestamp = new Date().toISOString();
@@ -300,6 +389,43 @@ async function runChecks() {
       }
     }
 
+    // Silence evaluation state tracking
+    const st = silenceState[stream.id] || { streak: 0, state: 'normal', timer: null };
+
+    if (!isDown) {
+      if (!isSilent) {
+        // 🟢 INSTANT RESET: Sound / voice detected on routine check
+        if (st.state !== 'normal') {
+          const wasDeadAir = st.state === 'dead_air';
+          console.log(`[Silence Engine] 🟢 Routine check detected sound on ${stream.name} (Energy: ${result.audioEnergy}). Resetting silence evaluation.`);
+          if (st.timer) clearTimeout(st.timer);
+          st.streak = 0;
+          st.state = 'normal';
+          st.timer = null;
+
+          if (wasDeadAir) {
+            const incident = {
+              timestamp,
+              streamId: stream.id,
+              streamName: stream.name,
+              type: 'up',
+              message: `${stream.name} Audio Output Restored — Dead Air cleared`,
+            };
+            incidents.push(incident);
+            sendAlert(stream, result, 'up');
+          }
+        }
+      } else {
+        // 🟡 Initial silence detected on routine check
+        if (st.state === 'normal') {
+          st.streak = 1;
+          st.state = 'evaluating';
+          console.warn(`[Silence Engine] 🟡 Routine check detected initial silence pause on ${stream.name}. Starting aggressive verification probe schedule.`);
+          scheduleAggressiveProbe(stream);
+        }
+      }
+    }
+
     // Update status object
     streamStatus[stream.id] = {
       status: result.status,
@@ -308,6 +434,8 @@ async function runChecks() {
       consecutiveFailures: isDown ? (prev.consecutiveFailures || 0) + 1 : 0,
       isSilent: isSilent,
       audioEnergy: result.audioEnergy || 0,
+      silenceState: st.state,
+      silenceStreak: st.streak,
       error: result.error,
       // Stats from /status-json.xsl
       listeners: matchedStats?.listeners ?? prev.listeners ?? 0,
@@ -324,13 +452,14 @@ async function runChecks() {
       responseTime: result.responseTime,
       listeners: streamStatus[stream.id].listeners,
       isSilent,
+      silenceState: st.state,
       error: result.error,
     });
 
     // State transition detection
     const failures = streamStatus[stream.id].consecutiveFailures;
 
-    // DOWN alert
+    // DOWN alert (Network / Connection level)
     if (isDown && failures === FAILURE_THRESHOLD) {
       const incident = {
         timestamp,
@@ -344,7 +473,7 @@ async function runChecks() {
       sendAlert(stream, result, 'down');
     }
 
-    // RECOVERY alert
+    // RECOVERY alert (Network / Connection level)
     if (wasDown && !isDown && prev.consecutiveFailures >= FAILURE_THRESHOLD) {
       const incident = {
         timestamp,
@@ -376,31 +505,43 @@ async function sendAlert(stream, result, type) {
   const ccRecipients = (process.env.ALERT_CC || '').split(',').map((e) => e.trim()).filter(Boolean);
   const fromAddr = process.env.SMTP_FROM || process.env.SMTP_USER;
   const dashboardUrl = process.env.DASHBOARD_URL || '';
-  const isDown = type === 'down';
-  const emoji = isDown ? '🔴' : '🟢';
-  const statusText = isDown ? 'DOWN' : 'RECOVERED';
+  const isDeadAir = type === 'dead_air';
+  const isDown = type === 'down' || isDeadAir;
+  const emoji = isDeadAir ? '🔇' : isDown ? '🔴' : '🟢';
+  const statusText = isDeadAir ? 'DEAD AIR (SILENCE)' : isDown ? 'DOWN' : 'RECOVERED';
   const failures = streamStatus[stream.id]?.consecutiveFailures || 0;
+  const silenceStreak = streamStatus[stream.id]?.silenceStreak || SILENCE_FAILURE_THRESHOLD;
 
-  const subject = `${emoji} KPFT Alert: ${stream.name} is ${statusText}`;
+  const subject = `${emoji} KPFT Alert: ${stream.name} — ${statusText}`;
 
   // Build all-streams status summary for the email
   const allStreamsRows = streams.map((s) => {
     const st = streamStatus[s.id] || {};
-    const dot = st.status === 'up' ? '🟢' : st.status === 'down' ? '🔴' : '⚪';
-    const stText = st.status === 'up' ? 'Online' : st.status === 'down' ? 'Offline' : 'Unknown';
+    const isStDeadAir = st.silenceState === 'dead_air';
+    const dot = isStDeadAir ? '🔇' : st.status === 'up' ? '🟢' : st.status === 'down' ? '🔴' : '⚪';
+    const stText = isStDeadAir ? 'Dead Air' : st.status === 'up' ? 'Online' : st.status === 'down' ? 'Offline' : 'Unknown';
     const rt = st.responseTime != null ? `${st.responseTime}ms` : '—';
     return `
           <tr>
             <td style="padding: 6px 8px; border-bottom: 1px solid #2a2a3e;">${dot} ${s.name}</td>
-            <td style="padding: 6px 8px; border-bottom: 1px solid #2a2a3e; color: ${st.status === 'up' ? '#4ade80' : st.status === 'down' ? '#f87171' : '#888'}; font-weight: 600;">${stText}</td>
+            <td style="padding: 6px 8px; border-bottom: 1px solid #2a2a3e; color: ${isStDeadAir ? '#f59e0b' : st.status === 'up' ? '#4ade80' : '#f87171'}; font-weight: 600;">${stText}</td>
             <td style="padding: 6px 8px; border-bottom: 1px solid #2a2a3e;">${rt}</td>
           </tr>`;
   }).join('');
 
   // Build troubleshooting guidance
-  const troubleshooting = isDown ? `
+  const troubleshooting = isDeadAir ? `
+        <div style="background: #241600; border: 1px solid rgba(245, 158, 11, 0.3); border-radius: 8px; padding: 16px; margin-top: 16px;">
+          <p style="font-weight: 600; color: #fbbf24; margin: 0 0 8px 0; font-size: 14px;">⚠️ Dead Air Troubleshooting Steps</p>
+          <ol style="margin: 0; padding-left: 20px; color: #e5e7eb; font-size: 13px; line-height: 1.8;">
+            <li>HTTP stream connection is connected (HTTP 200 OK), but output audio is silent</li>
+            <li>Check studio audio routing, mixing console output, or automation software</li>
+            <li>Verify studio audio interface / soundcard connections to stream encoder</li>
+            <li>Check if broadcast source player or automation software is paused or stopped</li>
+          </ol>
+        </div>` : isDown ? `
         <div style="background: #1a1020; border: 1px solid rgba(239, 68, 68, 0.2); border-radius: 8px; padding: 16px; margin-top: 16px;">
-          <p style="font-weight: 600; color: #f87171; margin: 0 0 8px 0; font-size: 14px;">⚠️ Troubleshooting Steps</p>
+          <p style="font-weight: 600; color: #f87171; margin: 0 0 8px 0; font-size: 14px;">⚠️ Server Down Troubleshooting Steps</p>
           <ol style="margin: 0; padding-left: 20px; color: #c0c0d0; font-size: 13px; line-height: 1.8;">
             <li>Check if the Icecast server at <code style="background: #2a2a3e; padding: 1px 4px; border-radius: 3px;">streams.pacifica.org:9000</code> is reachable</li>
             <li>Verify the source client is connected and sending audio</li>
@@ -606,6 +747,8 @@ function getConfig() {
   return {
     checkInterval: CHECK_INTERVAL,
     failureThreshold: FAILURE_THRESHOLD,
+    silenceProbeInterval: SILENCE_PROBE_INTERVAL_MS,
+    silenceFailureThreshold: SILENCE_FAILURE_THRESHOLD,
     emailConfigured: !!transporter,
     alertRecipients: (process.env.ALERT_EMAILS || '').split(',').map((e) => e.trim()).filter(Boolean).length,
   };

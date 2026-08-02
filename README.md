@@ -1,6 +1,6 @@
 # 📡 KPFT Icecast Stream Monitor & Diagnostic Tool
 
-A modern, high-performance, dark Material Design web application for monitoring KPFT (Pacifica Foundation) Icecast live streams. Provides real-time health checks, dead air (silence) detection, listener statistics, response time metrics, and immediate email alert notifications.
+A modern, high-performance, dark Material Design web application for monitoring KPFT (Pacifica Foundation) Icecast live streams. Features adaptive talk-show friendly silence verification (rapid 5s re-verification probes with instant audio reset to eliminate false alarms during speech pauses), listener statistics, response time metrics, and email alerts.
 
 ![Dashboard Preview](docs/dashboard_preview.png)
 
@@ -89,9 +89,11 @@ ALERT_CC=paul@hype.net
 # ── Dashboard Link in Emails ─────────────────────────
 DASHBOARD_URL=https://kpft-icecast.supersoul.top
 
-# ── Monitor Thresholds ───────────────────────────────
-CHECK_INTERVAL_MS=60000     # Time between checks (default: 60000ms / 1 min)
-FAILURE_THRESHOLD=2         # Consecutive failures before sending DOWN alert
+# ── Monitor & Silence Thresholds ─────────────────────
+CHECK_INTERVAL_MS=60000         # Routine check interval (default: 60000ms / 1 min)
+FAILURE_THRESHOLD=2             # Consecutive failures before sending server DOWN alert
+SILENCE_PROBE_INTERVAL_MS=5000   # Rapid probe interval during silence evaluation (default: 5s)
+SILENCE_FAILURE_THRESHOLD=3      # Consecutive silent probes before confirming Dead Air (default: 3)
 ```
 
 ---
