@@ -483,7 +483,7 @@
               : '';
             return `
           <div class="incident${isOpen ? ' open' : ''}" data-id="${escapeHtml(inc.id)}">
-            <div class="incident-head">
+            <div class="incident-head row-tip" data-tip="Click for full diagnosis" data-tip-open="Click to collapse">
               <div class="incident-icon ${meta.cls}">
                 <span class="material-symbols-outlined">${meta.icon}</span>
               </div>

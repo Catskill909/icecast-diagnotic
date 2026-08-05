@@ -291,8 +291,8 @@ a.help-btn { text-decoration: none; }
   border-radius: var(--radius-md);
   margin: 0 6px 8px;
   background: var(--surface-2);
-  overflow: hidden;
   transition: border-color var(--transition);
+  /* Not overflow:hidden — it would clip the hover tooltip above the row. */
 }
 .evt:hover { border-color: var(--border-hover); }
 .evt.open { border-color: var(--primary); }
@@ -305,6 +305,11 @@ a.help-btn { text-decoration: none; }
   padding: 12px 14px;
   cursor: pointer;
   user-select: none;
+  border-radius: calc(var(--radius-md) - 1px);
+}
+
+.evt.open .evt-head {
+  border-radius: calc(var(--radius-md) - 1px) calc(var(--radius-md) - 1px) 0 0;
 }
 .evt-icon {
   width: 34px;
@@ -383,8 +388,10 @@ a.help-btn { text-decoration: none; }
 .mail-chip.none { background: var(--surface-3); color: var(--text-tertiary); }
 
 .evt-chevron {
-  color: var(--text-tertiary);
-  transition: transform var(--transition);
+  /* Matches the dashboard: bright enough at rest to read as interactive. */
+  color: var(--primary-light);
+  opacity: 0.85;
+  transition: transform var(--transition), color var(--transition);
   display: flex;
 }
 .evt.open .evt-chevron { transform: rotate(180deg); }

@@ -919,7 +919,8 @@ body::before {
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
   transition: border-color var(--transition);
-  overflow: hidden;
+  /* Not overflow:hidden — that would clip the hover tooltip, which sits above
+     the row. Child corners are rounded individually instead. */
 }
 
 .incident:hover {
@@ -938,6 +939,11 @@ body::before {
   cursor: pointer;
   user-select: none;
   transition: background var(--transition);
+  border-radius: calc(var(--radius-md) - 1px);
+}
+
+.incident.open .incident-head {
+  border-radius: calc(var(--radius-md) - 1px) calc(var(--radius-md) - 1px) 0 0;
 }
 
 .incident-head:hover {
@@ -945,10 +951,13 @@ body::before {
 }
 
 .incident-chevron {
-  color: var(--text-tertiary);
+  /* Bright enough to read as an interactive control at rest — a dim chevron
+     reads as decoration and the expand affordance goes unnoticed. */
+  color: var(--primary-light);
   display: flex;
-  transition: transform var(--transition);
+  transition: transform var(--transition), color var(--transition);
   flex-shrink: 0;
+  opacity: 0.85;
 }
 
 .incident-chevron .material-symbols-outlined {
@@ -966,6 +975,7 @@ body::before {
   border-top: 1px solid var(--border);
   padding: 18px 20px;
   background: var(--surface-0);
+  border-radius: 0 0 calc(var(--radius-md) - 1px) calc(var(--radius-md) - 1px);
 }
 
 .incident.open .incident-body {
@@ -1123,6 +1133,76 @@ body::before {
   margin-left: auto;
   text-transform: none;
   letter-spacing: 0;
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   Expand Affordance Tooltip (shared by dashboard + history)
+   The chevron alone is easy to miss, so hovering a row advertises that there
+   is more behind it. Deliberately faster than the native title tooltip, which
+   waits about a second — long enough that most people never see it.
+   ═══════════════════════════════════════════════════════════════════════════ */
+.row-tip {
+  position: relative;
+}
+
+/* Absolutely positioned, so this never becomes a grid/flex item of the row.
+   Sits ABOVE the row rather than inline: anchored beside the chevron it would
+   cover the status and email badges, hiding the very information the row
+   exists to convey. */
+.row-tip::after {
+  content: attr(data-tip);
+  position: absolute;
+  right: 8px;
+  bottom: calc(100% - 10px);
+  transform: translateY(4px);
+  background: var(--surface-4);
+  color: var(--text-primary);
+  border: 1px solid var(--border-hover);
+  border-radius: 6px;
+  padding: 5px 10px;
+  font-size: 11px;
+  font-weight: 500;
+  white-space: nowrap;
+  letter-spacing: 0.01em;
+  box-shadow: var(--shadow-md);
+  opacity: 0;
+  pointer-events: none;
+  z-index: 8;
+  transition: opacity 110ms ease 30ms, transform 110ms ease 30ms;
+}
+
+/* Hover-capable pointers only — on touch there is no hover state to reveal it,
+   and it would flash on tap right as the row expands. */
+@media (hover: hover) and (pointer: fine) {
+  .row-tip:hover::after {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* Once open, the same hint should describe the reverse action. */
+.evt.open .row-tip::after,
+.incident.open .row-tip::after {
+  content: attr(data-tip-open);
+}
+
+/* Nudge and brighten the chevron on hover so the affordance reads even
+   without the label. */
+.evt-head:hover .evt-chevron,
+.incident-head:hover .incident-chevron {
+  color: var(--primary-light);
+  opacity: 1;
+  transform: translateY(2px);
+}
+
+.evt.open .evt-head:hover .evt-chevron,
+.incident.open .incident-head:hover .incident-chevron {
+  transform: rotate(180deg) translateY(2px);
+}
+
+@media (max-width: 780px) {
+  /* No room beside the badges on narrow screens. */
+  .row-tip::after { display: none; }
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════

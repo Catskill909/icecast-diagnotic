@@ -375,7 +375,7 @@
 
     return `
       <div class="evt${isOpen ? ' open' : ''}" data-id="${esc(e.id)}">
-        <div class="evt-head">
+        <div class="evt-head row-tip" data-tip="Click for full diagnosis" data-tip-open="Click to collapse">
           <div class="evt-icon ${e.severity}"><span class="material-symbols-outlined">${meta.icon}</span></div>
           <div class="evt-time">${fmtTime(e.timestamp)}</div>
           <div class="evt-main">
