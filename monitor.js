@@ -341,7 +341,17 @@ async function runChecks() {
       httpStatus: result.httpStatus ?? null,
       errorCode: result.errorCode || null,
       timings: result.timings || {},
-      listeners: mount?.listeners ?? prev.listeners ?? 0,
+      // When Icecast is reachable but the mount is gone, the audience is gone
+      // with it — the mount cannot serve anyone because it no longer exists.
+      // Carrying the last known count forward here made outages read as though
+      // listeners had stayed connected, hiding the real audience loss. Only
+      // carry forward when Icecast itself is unreachable and the count is
+      // genuinely unknown.
+      listeners: mount
+        ? mount.listeners
+        : snap.reachable
+        ? 0
+        : prev.listeners ?? 0,
       listenerPeak: mount?.listenerPeak ?? prev.listenerPeak ?? 0,
       title: mount?.title || prev.title || '',
       bitrate: mount?.bitrate || prev.bitrate || 128,
