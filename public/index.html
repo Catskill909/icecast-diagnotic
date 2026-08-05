@@ -129,61 +129,73 @@
         </div>
         <div class="modal-body">
           <div class="guide-grid">
+
+            <div class="guide-item featured">
+              <div class="guide-icon"><span class="material-symbols-outlined">troubleshoot</span></div>
+              <div>
+                <h4>It tells you which end broke — the studio or the server</h4>
+                <p>This is the point of the tool. A dropout is not just reported, it is diagnosed. Every check compares the stream against Icecast's live mount inventory and against the other streams, so an alert names the cause instead of leaving you to guess who to call.</p>
+                <div class="guide-split">
+                  <div class="guide-case studio">
+                    <strong>🎙️ Studio side — the Barix encoder</strong>
+                    <span>The mount returns <code>404</code> and has vanished from Icecast's inventory, while the server keeps serving every other station normally. The encoder has dropped its connection. <strong>Everyone listening is cut off</strong> and the audience takes a long time to rebuild.</span>
+                  </div>
+                  <div class="guide-case server">
+                    <strong>🖥️ Server side — Icecast / Pacifica</strong>
+                    <span>The connection is reset or refused, often on several streams at the same second. People already listening are usually unaffected, but <strong>new listeners cannot start playback</strong> during the window.</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+
             <div class="guide-item">
               <div class="guide-icon"><span class="material-symbols-outlined">cell_tower</span></div>
               <div>
-                <h4>Real-Time Stream Monitoring</h4>
-                <p>Monitors KPFT Main (128k), HD2, and HD3 streams every 60 seconds. Checks HTTP status, latency (ms), and content-type headers.</p>
+                <h4>Real-Time Monitoring</h4>
+                <p>Checks KPFT Main, HD2 and HD3 every 60 seconds — HTTP status, content type, and a full <strong>DNS → TCP → TLS → first byte</strong> timing breakdown, which reveals where in the chain a failure happened. Press play on any stream card to confirm by ear what the monitor is reporting.</p>
+              </div>
+            </div>
+
+            <div class="guide-item">
+              <div class="guide-icon"><span class="material-symbols-outlined">bolt</span></div>
+              <div>
+                <h4>Outages vs. Blips</h4>
+                <p>A single failed check is a <strong>blip</strong>; two in a row is a confirmed <strong>outage</strong>. Both are recorded permanently, but only confirmed outages email — blips are usually over before anyone could act. Blips used to leave a red mark on the uptime bar with no record at all.</p>
               </div>
             </div>
 
             <div class="guide-item">
               <div class="guide-icon"><span class="material-symbols-outlined">volume_off</span></div>
               <div>
-                <h4>Smart Silence & Dead Air Engine</h4>
-                <p>Adaptive multi-stage engine prevents false alarms during talk show speech pauses. Silence triggers rapid 5s re-verification probes (~32KB sample); any detected voice or audio energy instantly resets the streak.</p>
-              </div>
-            </div>
-
-            <div class="guide-item">
-              <div class="guide-icon"><span class="material-symbols-outlined">group</span></div>
-              <div>
-                <h4>Icecast Server Statistics</h4>
-                <p>Connects directly to Icecast <code>/status-json.xsl</code> to track active listener counts, peak listeners, and broadcast bitrates in real time.</p>
-              </div>
-            </div>
-
-            <div class="guide-item">
-              <div class="guide-icon"><span class="material-symbols-outlined">troubleshoot</span></div>
-              <div>
-                <h4>Root Cause Diagnosis</h4>
-                <p>Every failure is diagnosed, not just reported. Correlates the DNS/TCP/TLS timing breakdown against Icecast's live mount inventory to tell a <strong>source encoder dropout</strong> (mount 404s but the server is healthy — a studio problem) apart from a genuine <strong>server outage</strong>. Also checks whether other Pacifica stations are still streaming to confirm whether the fault is ours.</p>
+                <h4>Silence &amp; Dead Air Detection</h4>
+                <p>Catches the case where the stream is connected but silent. To avoid false alarms during speech pauses, suspected silence triggers rapid 5-second re-probes; any detected audio instantly resets the count. Dead air is only declared after sustained silence.</p>
               </div>
             </div>
 
             <div class="guide-item">
               <div class="guide-icon"><span class="material-symbols-outlined">mail</span></div>
               <div>
-                <h4>Smart Email Alerts</h4>
-                <p>Alerts staff when a stream fails 2 consecutive checks, or <em>immediately</em> if a single failure hits every stream at once (server-level). Emails lead with the root cause and include specific remediation steps. Every event records whether its alert actually sent — a failed SMTP delivery is now visible rather than silent.</p>
+                <h4>Actionable Email Alerts</h4>
+                <p>Alerts lead with the root cause and list specific things to check. A failure hitting every stream at once is server-level by definition and alerts immediately. Each event also records <strong>whether its alert actually sent</strong> — a failed delivery is visible rather than silent.</p>
               </div>
             </div>
 
             <div class="guide-item">
               <div class="guide-icon"><span class="material-symbols-outlined">history</span></div>
               <div>
-                <h4>Permanent Incident History</h4>
-                <p>Every failed check is recorded forever — including brief <strong>blips</strong> that self-clear before triggering an alert, which previously left a red mark on the uptime bar with no record anywhere. Open <a href="history.html" style="color: var(--primary-light);">History</a> for the full filterable timeline, outage heatmap, and per-event drill-down.</p>
+                <h4>Permanent History</h4>
+                <p>Incidents are kept forever, not wiped after 24 hours. Open <a href="history.html" style="color: var(--primary-light);">History</a> for the full timeline with filters, an outage heatmap, a root-cause breakdown, and a drill-down on every event showing its evidence and timings.</p>
               </div>
             </div>
 
             <div class="guide-item">
-              <div class="guide-icon"><span class="material-symbols-outlined">play_circle</span></div>
+              <div class="guide-icon"><span class="material-symbols-outlined">group</span></div>
               <div>
-                <h4>In-Dashboard Preview Player</h4>
-                <p>Click the play button on any stream card to listen to live audio directly in your browser. Features a buffering indicator and animated equalizer waves.</p>
+                <h4>Listener Impact</h4>
+                <p>Live listener counts come straight from Icecast. When a mount disappears the count correctly drops to zero rather than holding its last value — so the real audience loss during an outage is visible instead of hidden.</p>
               </div>
             </div>
+
           </div>
         </div>
         <div class="modal-footer">

@@ -1,47 +1,70 @@
 # 📡 KPFT Icecast Stream Monitor & Diagnostic Tool
 
-A modern, high-performance, dark Material Design web application for monitoring KPFT (Pacifica Foundation) Icecast live streams. Features adaptive talk-show friendly silence verification (rapid 5s re-verification probes with instant audio reset to eliminate false alarms during speech pauses), listener statistics, response time metrics, and email alerts.
+Monitors KPFT (Pacifica Foundation) Icecast live streams and — the point of the tool — **diagnoses which end broke**: the Barix encoder at the studio, or the Icecast server.
+
+A bare "stream is down" alert leaves you guessing who to call. This correlates connection-layer timings, Icecast's live mount inventory, and cross-stream behaviour to name the cause, and keeps a permanent record so patterns are visible over months rather than hours.
 
 ![Dashboard Preview](docs/dashboard_preview.png)
+
+---
+
+## 🔎 The Core Distinction
+
+Icecast returning **HTTP 404** on a mount does not mean the server is down. It means the opposite: the server is alive and answering, and the **source encoder has disconnected**. The mount vanishes from Icecast's inventory while every other station on the same host keeps streaming.
+
+That single fact separates two failures with completely different owners and completely different listener impact:
+
+| | Studio side — Barix encoder | Server side — Icecast |
+|---|---|---|
+| **Signature** | `HTTP 404`, mount absent from inventory, other stations fine | Connection reset/refused, often several streams in the same second |
+| **Confirmed by** | `stream_start` timestamp showing the source reconnect | Simultaneity across streams; Icecast uptime unchanged |
+| **Listeners already tuned in** | **All cut off.** Audience rebuilds slowly | Unaffected — established connections continue |
+| **Listeners pressing play** | Cannot connect until the source returns | **Cannot start playback** during the window |
+| **Who fixes it** | KPFT — check the encoder and studio audio chain | Pacifica — server load, connection limits, proxy |
+
+Observed on 2026-08-04/05: a Barix dropout took KPFT Main from 66 listeners to 10, with the audience taking over half an hour to rebuild. Server-side resets in the same period cost zero established listeners.
 
 ---
 
 ## 🎯 Architecture Overview
 
 ```
-                      ┌──────────────────────────────────────────────────┐
-                      │          Icecast Server (pacifica.org)           │
-                      │  - Streams: /live_128, /HD3_128, /classic_country │
-                      │  - Stats API: /status-json.xsl                   │
-                      └────────────────────────┬─────────────────────────┘
-                                               │
-                                               ▼
-                      ┌──────────────────────────────────────────────────┐
-                      │                Docker Container                  │
-                      │                                                  │
-                      │  ┌──────────────────────┐  ┌──────────────────┐  │
-                      │  │ Health & Stats Worker│  │ Silence Analyzer │  │
-                      │  │ (Listeners, Metadata)│  │ (RMS Amplitude)  │  │
-                      │  └──────────┬───────────┘  └────────┬─────────┘  │
-                      │             │                       │            │
-                      │             ▼                       ▼            │
-                      │  ┌─────────────────────────────────────────────┐ │
-                      │  │       In-Memory State + 24h JSON Cache      │ │
-                      │  └──────────────────────┬──────────────────────┘ │
-                      │                         │                        │
-                      │                         ▼                        │
-                      │  ┌─────────────────────────────────────────────┐ │
-                      │  │          Express API & Static SPA           │ │
-                      │  └─────────────────────────────────────────────┘ │
-                      └─────────────────────────┬────────────────────────┘
-                                                │
-                                                ▼
-                      ┌──────────────────────────────────────────────────┐
-                      │            Dark Material 3 SPA (Browser)         │
-                      │  - HTML5 Live Audio Preview Player               │
-                      │  - Real-time Listener Badges & Metadata          │
-                      │  - 24-Hour Uptime Bars & Incident Timeline       │
-                      └──────────────────────────────────────────────────┘
+                ┌──────────────────────────────────────────────────────┐
+                │            Icecast Server (pacifica.org)             │
+                │  Streams: /live_128, /HD3_128, /classic_country      │
+                │  Inventory: /status-json.xsl  (15 mounts, 5 stations)│
+                └───────────────┬──────────────────────┬───────────────┘
+                    probe each stream          full mount inventory
+                                │                      │
+                                ▼                      ▼
+                ┌──────────────────────────────────────────────────────┐
+                │                  Docker Container                    │
+                │                                                      │
+                │  diagnose.js ── instrumented probe (DNS/TCP/TLS/TTFB)│
+                │              └─ classifier: correlates the probe     │
+                │                 result, the mount inventory, and     │
+                │                 every other stream in the cycle      │
+                │                          │                           │
+                │  monitor.js  ── episode state machine                │
+                │                 blip → confirmed outage → recovery   │
+                │                 decides what is worth emailing       │
+                │                          │                           │
+                │  store.js    ── events.json   (permanent, forever)   │
+                │                 samples.json  (7d raw → hourly)      │
+                │                          │                           │
+                │  server.js   ── Express API + static SPA             │
+                └───────────────┬──────────────────────┬───────────────┘
+                                │                      │
+                                ▼                      ▼
+                ┌───────────────────────┐  ┌───────────────────────────┐
+                │   Dashboard (live)    │  │  History (permanent)      │
+                │  status, listeners,   │  │  heatmap, filters,        │
+                │  uptime bars          │  │  per-event drill-down     │
+                └───────────────────────┘  └───────────────────────────┘
+                                │
+                                ▼
+                        Email alerts — lead with root cause,
+                        include remediation, record delivery
 ```
 
 ---
@@ -116,7 +139,38 @@ CHECK_INTERVAL_MS=60000         # Routine check interval (default: 60000ms / 1 m
 FAILURE_THRESHOLD=2             # Consecutive failures before sending server DOWN alert
 SILENCE_PROBE_INTERVAL_MS=5000   # Rapid probe interval during silence evaluation (default: 5s)
 SILENCE_FAILURE_THRESHOLD=3      # Consecutive silent probes before confirming Dead Air (default: 3)
+
+# ── Alert Noise Control ──────────────────────────────
+# Email immediately when ONE failed check hits every stream at once — such a
+# failure is server-level by definition. Set false to email only on confirmed
+# outages (2+ consecutive failures). Blips are recorded either way.
+ALERT_ON_SERVER_BLIP=false
+
+# ── Retention ────────────────────────────────────────
+# Events are ALWAYS permanent. This controls only the per-check telemetry
+# behind uptime figures: raw samples kept this many days, then compacted into
+# hourly summaries kept forever.
+SAMPLE_RETENTION_DAYS=7
+DATA_DIR=/app/data              # MUST be a persistent volume in production
+
+# ── Diagnostics ──────────────────────────────────────
+ICECAST_STATUS_URL=https://streams.pacifica.org:9000/status-json.xsl
+SIBLING_MOUNTS=/live_128,/live_64,/HD3,/HD3_128,/HD3_64,/classic_country
 ```
+
+---
+
+## 🩺 Interpreting the Data
+
+**Uptime and the event log come from different sources.** Uptime percentages and the 24h bars are computed from per-check *samples*; the incident timeline comes from *events*. They are stored separately, so it is possible to restore one without the other and see a reassuring 100% on a day that contained real outages. If uptime looks implausibly clean, check `sampleCount` in `/api/stats`.
+
+**Blips are not noise, they are just not urgent.** A single failed check that self-clears is recorded permanently but does not email — by the time anyone reads an alert it is already over. The value is in the aggregate: if *Connection reset by server* climbs week over week in the Root Causes panel, that is evidence worth taking to Pacifica, and far more persuasive than an anecdote.
+
+**Listener counts during an outage.** When a mount vanishes, listeners correctly read **0** — the mount cannot serve anyone because it no longer exists. Earlier builds carried the last known count forward, which made outages appear to retain their full audience and hid the real loss. Counts are only carried forward when Icecast itself is unreachable and the true figure is genuinely unknown.
+
+**True outage duration.** Polling every 60s bounds resolution to a minute, but `stream_start_iso8601` records the exact moment a source reconnected. Recovery events carry a `sourceOutage` block with the real duration derived from it.
+
+**Reconstructed events.** Events flagged `reconstructed: true` were backfilled from raw telemetry rather than observed live — timestamps, statuses and errors are real recorded values, but the diagnosis was inferred after the fact. They render with a *Reconstructed* badge and a provenance note so they are never mistaken for live observations.
 
 ---
 

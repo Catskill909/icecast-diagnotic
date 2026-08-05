@@ -1,5 +1,11 @@
 # KPFT Icecast Diagnostic — Phase 2 Planning & Audit Document
 
+> **Status: complete — retained as a historical record.**
+> Everything below shipped. The system has since gained root-cause diagnosis,
+> permanent incident retention, and email delivery tracking, none of which are
+> described here. For current behaviour see [`../README.md`](../README.md), and
+> for the diagnosis engine see [`DIAGNOSTICS.md`](DIAGNOSTICS.md).
+
 This document outlines the technical audit and implementation plan for Phase 2 enhancements to the KPFT Icecast Stream Monitor.
 
 ---

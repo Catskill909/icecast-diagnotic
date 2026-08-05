@@ -573,10 +573,15 @@ body::before {
   background: var(--surface-1);
   border: 1px solid var(--border-hover);
   border-radius: var(--radius-xl);
-  max-width: 620px;
+  /* Wide enough for a multi-column guide, so the content fits on screen
+     instead of forcing a long scroll through a narrow column. */
+  max-width: 1180px;
   width: 100%;
   box-shadow: 0 16px 48px rgba(0, 0, 0, 0.6);
   overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  max-height: 92vh;
 }
 
 .modal-header {
@@ -616,25 +621,88 @@ body::before {
 }
 
 .modal-body {
-  padding: 24px;
-  max-height: 70vh;
+  padding: 18px 20px;
   overflow-y: auto;
+  flex: 1;
 }
 
 .guide-grid {
-  display: flex;
-  flex-direction: column;
-  gap: 16px;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  gap: 11px;
+  align-items: start;
 }
 
 .guide-item {
   display: flex;
   align-items: flex-start;
-  gap: 16px;
-  padding: 14px;
+  gap: 14px;
+  padding: 13px 14px;
   background: var(--surface-2);
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
+  height: 100%;
+}
+
+/* The headline capability spans the full width — it is the one thing a reader
+   should take away before anything else. */
+.guide-item.featured {
+  grid-column: 1 / -1;
+  background: linear-gradient(135deg, rgba(124, 106, 239, 0.1), rgba(124, 106, 239, 0.03));
+  border-color: rgba(124, 106, 239, 0.3);
+}
+
+.guide-item.featured .guide-icon {
+  background: var(--primary);
+  color: #fff;
+}
+
+.guide-item.featured h4 {
+  font-size: 15px;
+}
+
+.guide-split {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 10px;
+  margin-top: 10px;
+}
+
+.guide-case {
+  padding: 9px 11px;
+  border-radius: var(--radius-sm);
+  background: var(--surface-1);
+  border-left: 3px solid var(--border-hover);
+}
+
+.guide-case.studio { border-left-color: #f59e0b; }
+.guide-case.server { border-left-color: #38bdf8; }
+
+/* Direct child only — a <strong> emphasising a phrase inside the body text
+   must stay inline, not become its own block. */
+.guide-case > strong {
+  display: block;
+  font-size: 12px;
+  color: var(--text-primary);
+  margin-bottom: 3px;
+}
+
+.guide-case span strong {
+  display: inline;
+  color: var(--text-primary);
+}
+
+.guide-case span {
+  font-size: 11.5px;
+  color: var(--text-secondary);
+  line-height: 1.65;
+}
+
+/* Inline code sits inside flowing prose here — vertical padding would inflate
+   the line box and leave the paragraph unevenly spaced. */
+.guide-case code {
+  padding: 0 4px;
+  line-height: inherit;
 }
 
 .guide-icon {
