@@ -168,12 +168,31 @@ function applySeed() {
 
   events.push(...added);
   events.sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
+
+  // Raw telemetry drives every availability figure — uptime percentages and the
+  // 24h bars read samples, not events. Restoring events without their samples
+  // leaves an outage recorded in the log yet invisible to uptime, reporting a
+  // reassuring 100% for a day that had real downtime.
+  let samplesAdded = 0;
+  if (seed.samples && typeof seed.samples === 'object') {
+    for (const [streamId, arr] of Object.entries(seed.samples)) {
+      if (!Array.isArray(arr)) continue;
+      if (!samples[streamId]) samples[streamId] = [];
+      const seen = new Set(samples[streamId].map((s) => s.timestamp));
+      const fresh = arr.filter((s) => s && s.timestamp && !seen.has(s.timestamp));
+      samples[streamId].push(...fresh);
+      samples[streamId].sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
+      samplesAdded += fresh.length;
+    }
+    if (samplesAdded) dirtySamples = true;
+  }
+
   appliedSeeds.push(seed.seedId);
   dirtyEvents = true;
 
-  console.log(`[Store] Applied seed '${seed.seedId}': backfilled ${added.length} historical event(s)`);
+  console.log(`[Store] Applied seed '${seed.seedId}': backfilled ${added.length} event(s), ${samplesAdded} sample(s)`);
   if (added.length !== seed.events.length) {
-    console.log(`[Store]   (${seed.events.length - added.length} already present, skipped)`);
+    console.log(`[Store]   (${seed.events.length - added.length} event(s) already present, skipped)`);
   }
 }
 
