@@ -53,7 +53,11 @@ const SILENCE_PROBE_INTERVAL_MS = parseInt(process.env.SILENCE_PROBE_INTERVAL_MS
 const SILENCE_FAILURE_THRESHOLD = parseInt(process.env.SILENCE_FAILURE_THRESHOLD, 10) || 3;
 const SAVE_INTERVAL = parseInt(process.env.SAVE_INTERVAL_MS, 10) || 60 * 1000;
 // Email an unconfirmed blip when it hits every stream at once (server-level).
-const ALERT_ON_SERVER_BLIP = process.env.ALERT_ON_SERVER_BLIP !== 'false';
+// Tolerant of case and stray whitespace — this gets typed into a hosting-panel
+// text field, where a capitalised value or a pasted tab would otherwise leave
+// alerts silently switched on.
+const ALERT_ON_SERVER_BLIP =
+  String(process.env.ALERT_ON_SERVER_BLIP ?? '').trim().toLowerCase() !== 'false';
 
 // ── State ───────────────────────────────────────────────────────────────────
 let streams = [];
