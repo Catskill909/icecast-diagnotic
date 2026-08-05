@@ -51,12 +51,34 @@ A modern, high-performance, dark Material Design web application for monitoring 
 If you are an AI assistant or developer picking up this project, here is the essential state map:
 
 ### Key File Locations
-- **`server.js`**: Express server entrypoint. Serves static files from `public/` and API endpoints (`/api/status`, `/api/history`, `/api/config`, `/api/test-alert`, `/health`).
-- **`monitor.js`**: Core diagnostic engine. Handles HTTP checks, `/status-json.xsl` parsing, audio silence detection, state transitions, and Nodemailer email alerts.
-- **`public/index.html`**: Single Page Application shell.
-- **`public/app.js`**: Frontend app controller. Handles API polling every 10s, HTML5 audio preview player, rendering cards, 24h uptime bars, and incident logs.
-- **`public/style.css`**: Dark Material Design 3 theme system using HSL CSS variables, glassmorphism, glowing status dots, and micro-animations.
-- **`Dockerfile`**: Production Docker build based on `node:20-alpine` with `curl` installed for Coolify health probes.
+- **`server.js`**: Express server entrypoint. Serves static files from `public/` and the API.
+- **`monitor.js`**: Check engine. Owns the check cycle, the episode/event lifecycle, the silence engine, and Nodemailer alerts.
+- **`diagnose.js`**: Root-cause diagnosis engine. Instrumented stream probe (DNS/TCP/TLS/TTFB timings), Icecast mount-inventory snapshot, and the classifier that turns a transport error into an actionable cause.
+- **`store.js`**: Persistence. Splits the permanent event record from rolling telemetry; handles atomic writes, hourly compaction, and legacy migration.
+- **`public/index.html` / `app.js`**: Live dashboard.
+- **`public/history.html` / `history.js` / `history.css`**: Permanent incident history — heatmap, filters, per-event drill-down.
+- **`public/style.css`**: Dark Material Design 3 theme system using CSS variables.
+- **`Dockerfile`**: Production build on `node:20-alpine` with `curl` for Coolify health probes.
+
+### Event Model (important)
+
+Notification is decoupled from recording. **Every failed check is recorded permanently**; only some of them email.
+
+An *episode* runs from a stream's first failed check to its recovery. Within one episode:
+
+| Point | Recorded | Emails |
+|---|---|---|
+| Failure #1 | event, severity `blip` | no — unless it hits *every* stream at once (server-level) |
+| Failure #`FAILURE_THRESHOLD` | same event promoted to `outage` | yes |
+| Recovery | event resolved with true duration | yes, if an alert was sent |
+
+This fixes the prior behaviour where an isolated failed check painted a red segment on the uptime bar but produced no incident and no email. Those now appear as `blip` events carrying an explicit reason why no alert was sent.
+
+### Diagnosis
+
+The classifier correlates three independent signals: connection-layer timings, the Icecast `/status-json.xsl` mount inventory, and cross-stream correlation within the same cycle.
+
+The key distinction it draws: **an Icecast mount returning HTTP 404 means the server is healthy and the source encoder dropped off.** That is a studio problem (check the Barix), not a server problem. Because other Pacifica stations share the host, the engine can also confirm whether a fault is KPFT-specific or server-wide — and `stream_start_iso8601` gives the exact source reconnect moment, yielding a true outage duration independent of the polling interval.
 
 ### Streams Monitored
 | Name | Mount Point | M3U Source | Default URL |
@@ -104,10 +126,35 @@ SILENCE_FAILURE_THRESHOLD=3      # Consecutive silent probes before confirming D
 Returns real-time status of all monitored streams, including listener counts, response times, bitrate, now playing metadata, and error details.
 
 ### `GET /api/history`
-Returns rolling 24-hour check history array per stream and incident log array.
+Returns the rolling 24-hour check history per stream plus the last 24h of events. Kept for dashboard back-compatibility — use `/api/events` for the full record.
+
+### `GET /api/events`
+The **permanent** event log, never pruned by age. Each event carries its root-cause diagnosis, connection timings, Icecast state at the time of failure, resolution duration, and the email delivery outcome.
+
+Query params: `days`, `since`, `until`, `streamId`, `type`, `severity` (`outage`/`blip`/`dead_air`/`recovery`), `cause`, `scope` (`stream`/`station`/`server`), `emailed` (`true`/`false`), `limit`, `offset`, `order`.
+
+```bash
+# Every event that never generated an alert email
+curl 'localhost:3000/api/events?days=90&emailed=false'
+
+# Confirmed source-encoder dropouts only
+curl 'localhost:3000/api/events?cause=source_disconnected&severity=outage'
+```
+
+### `GET /api/events/:id`
+Full detail for a single event.
+
+### `GET /api/stats?days=30`
+Aggregates for the history view: per-stream uptime and counts, daily buckets for the heatmap, root-cause breakdown, and storage info.
+
+### `GET /api/samples/:streamId?hours=24`
+Raw per-check telemetry plus hourly rollups for one stream.
+
+### `GET /api/diagnostics`
+Live Icecast server state — the full mount inventory including other Pacifica stations, which is what the classifier correlates against.
 
 ### `GET /api/config`
-Returns public monitor settings (check interval, recipient counts, SMTP status).
+Returns public monitor settings (check interval, recipient counts, SMTP status, retention policy).
 
 ### `GET /api/test-alert?to=user@example.com`
 Sends a formatted test email alert to the requested address for deliverability verification.
@@ -141,7 +188,18 @@ curl "http://localhost:3000/api/test-alert?to=your-email@example.com"
 2. **Ports Exposes**: `3000`
 3. **Port Mappings**: `3000:3000`
 4. **Healthcheck URL**: `http://localhost:3000/health` (uses `curl -f`)
-5. **Persistent Storage**: Mount container path `/app/data` to persist 24-hour history across container restarts.
+5. **Persistent Storage** ⚠️ **required**: Mount a persistent volume at container path `/app/data`.
+
+   Incident history is retained **permanently** and lives in `/app/data/events.json`. Without a persistent volume, every redeploy silently resets the entire record to zero — the container filesystem does not survive a rebuild. Verify with:
+
+   ```bash
+   curl -s https://<your-host>/api/stats?days=1 | jq .storage
+   # oldestEvent should predate your last deploy
+   ```
+
+   Two files are written there:
+   - `events.json` — the permanent incident record (small; ~400 bytes/event)
+   - `samples.json` — rolling telemetry, 7 days raw then hourly rollups (~4 MB at 3 streams)
 
 ---
 

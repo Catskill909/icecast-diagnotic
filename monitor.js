@@ -1,8 +1,28 @@
-const https = require('https');
-const http = require('http');
+/* ═══════════════════════════════════════════════════════════════════════════
+   KPFT Icecast Monitor — Check Engine
+   ───────────────────────────────────────────────────────────────────────────
+   EVENT MODEL
+
+   Every failed check is recorded, permanently. Notification is decoupled from
+   recording, which is what fixes the old behaviour where an isolated failure
+   painted a red mark on the dashboard but left no trace anywhere else.
+
+   An "episode" spans from a stream's first failed check to its recovery.
+   Within one episode we record continuously but email at most twice — once
+   when it becomes notable, once when it recovers:
+
+     failure #1              → event recorded, severity 'blip'  (silent)
+     failure #FAILURE_THRESHOLD → same event promoted to 'outage' (emails)
+     recovery                → event resolved with true duration (emails, if alerted)
+
+   The exception that closes the real gap: when a blip hits EVERY monitored
+   stream in the same cycle it is server-level by definition, so it emails
+   immediately — as a single consolidated message rather than one per stream.
+   ═══════════════════════════════════════════════════════════════════════════ */
+
 const nodemailer = require('nodemailer');
-const fs = require('fs');
-const path = require('path');
+const diagnose = require('./diagnose');
+const store = require('./store');
 
 // ── Default Streams ─────────────────────────────────────────────────────────
 const DEFAULT_STREAMS = [
@@ -31,25 +51,23 @@ const CHECK_INTERVAL = parseInt(process.env.CHECK_INTERVAL_MS, 10) || 60000;
 const FAILURE_THRESHOLD = parseInt(process.env.FAILURE_THRESHOLD, 10) || 2;
 const SILENCE_PROBE_INTERVAL_MS = parseInt(process.env.SILENCE_PROBE_INTERVAL_MS, 10) || 5000;
 const SILENCE_FAILURE_THRESHOLD = parseInt(process.env.SILENCE_FAILURE_THRESHOLD, 10) || 3;
-const DATA_DIR = path.join(__dirname, 'data');
-const HISTORY_FILE = path.join(DATA_DIR, 'history.json');
-const MAX_HISTORY_AGE_MS = 24 * 60 * 60 * 1000; // 24 hours
-const HISTORY_FLUSH_INTERVAL = 5 * 60 * 1000; // flush to disk every 5 min
-const REQUEST_TIMEOUT = 15000; // 15s timeout for stream checks
+const SAVE_INTERVAL = parseInt(process.env.SAVE_INTERVAL_MS, 10) || 60 * 1000;
+// Email an unconfirmed blip when it hits every stream at once (server-level).
+const ALERT_ON_SERVER_BLIP = process.env.ALERT_ON_SERVER_BLIP !== 'false';
 
 // ── State ───────────────────────────────────────────────────────────────────
 let streams = [];
-let streamStatus = {};   // { [id]: { status, responseTime, lastChecked, consecutiveFailures, error } }
-let history = {};         // { [id]: [ { timestamp, status, responseTime, error } ] }
-let incidents = [];       // [ { timestamp, streamId, streamName, type: 'down'|'up', message } ]
-let silenceState = {};    // { [id]: { streak: 0, state: 'normal'|'evaluating'|'dead_air', timer: null } }
+let streamStatus = {};
+let silenceState = {};
+let episodes = {};        // { [streamId]: { eventId, startedAt, alerted, severity } }
+let snapshot = null;      // latest Icecast snapshot
+let prevSnapshot = null;
 let intervalHandle = null;
 let flushHandle = null;
 let transporter = null;
 
 // ── Initialize ──────────────────────────────────────────────────────────────
 function init() {
-  // Parse streams from env or use defaults
   if (process.env.STREAMS) {
     try {
       const parsed = JSON.parse(process.env.STREAMS);
@@ -67,7 +85,6 @@ function init() {
     streams = DEFAULT_STREAMS;
   }
 
-  // Initialize status for each stream
   streams.forEach((s) => {
     streamStatus[s.id] = {
       status: 'unknown',
@@ -76,22 +93,25 @@ function init() {
       consecutiveFailures: 0,
       error: null,
     };
-    silenceState[s.id] = {
-      streak: 0,
-      state: 'normal',
-      timer: null,
-    };
-    history[s.id] = [];
+    silenceState[s.id] = { streak: 0, state: 'normal', timer: null };
   });
 
-  // Load persisted history
-  loadHistory();
+  store.load(streams.map((s) => s.id));
 
-  // Setup email transporter
+  // Restore last known status, but never carry a failure streak across a
+  // restart — that would let a stale count trigger a spurious alert.
+  const cached = store.getStatusCache();
+  for (const id of Object.keys(cached || {})) {
+    if (streamStatus[id]) {
+      streamStatus[id] = { ...cached[id], consecutiveFailures: 0, status: 'unknown' };
+    }
+  }
+
   setupMailer();
 
   console.log(`[Monitor] Initialized with ${streams.length} streams`);
   console.log(`[Monitor] Check interval: ${CHECK_INTERVAL}ms, Failure threshold: ${FAILURE_THRESHOLD}`);
+  console.log(`[Monitor] Retention: events forever, raw samples ${store.SAMPLE_RETENTION_DAYS}d then hourly rollups`);
 }
 
 // ── SMTP Setup ──────────────────────────────────────────────────────────────
@@ -113,222 +133,47 @@ function setupMailer() {
     auth: { user, pass },
   });
 
-  transporter.verify().then(() => {
-    console.log('[Monitor] SMTP connection verified');
-  }).catch((err) => {
-    console.error('[Monitor] SMTP verification failed:', err.message);
-  });
+  transporter.verify()
+    .then(() => console.log('[Monitor] SMTP connection verified'))
+    .catch((err) => console.error('[Monitor] SMTP verification failed:', err.message));
 }
 
-// ── Icecast Server Stats (/status-json.xsl) ─────────────────────────────────
-function fetchIcecastStats() {
-  return new Promise((resolve) => {
-    const statsUrl = 'https://streams.pacifica.org:9000/status-json.xsl';
-    const req = https.get(statsUrl, { timeout: 10000 }, (res) => {
-      let body = '';
-      res.on('data', (chunk) => { body += chunk; });
-      res.on('end', () => {
-        try {
-          const parsed = JSON.parse(body);
-          const sources = parsed?.icestats?.source || [];
-          const sourceArray = Array.isArray(sources) ? sources : [sources];
-          const statsMap = {};
-
-          sourceArray.forEach((src) => {
-            if (!src || !src.listenurl) return;
-            const listenUrl = src.listenurl;
-            statsMap[listenUrl] = {
-              listeners: src.listeners || 0,
-              listenerPeak: src.listener_peak || 0,
-              title: src.title || src.server_name || '',
-              bitrate: src.bitrate || src['ice-bitrate'] || 0,
-              genre: src.genre || '',
-              serverDescription: src.server_description || '',
-              streamStart: src.stream_start_iso8601 || src.stream_start || '',
-            };
-          });
-
-          resolve(statsMap);
-        } catch (e) {
-          resolve({});
-        }
-      });
-    });
-
-    req.on('error', () => resolve({}));
-    req.on('timeout', () => { req.destroy(); resolve({}); });
-  });
-}
-
-// ── Audio Chunk Silence Analyzer ────────────────────────────────────────────
-function analyzeAudioChunk(buffer) {
-  if (!buffer || buffer.length < 1024) {
-    return { isSilent: false, energy: 100 };
-  }
-  let sumDiff = 0;
-  let nonZeroCount = 0;
-
-  for (let i = 0; i < buffer.length - 1; i++) {
-    const diff = Math.abs(buffer[i + 1] - buffer[i]);
-    sumDiff += diff;
-    if (buffer[i] > 10) nonZeroCount++;
-  }
-
-  const avgDiff = sumDiff / buffer.length;
-  const nonZeroRatio = nonZeroCount / buffer.length;
-
-  // Digital silence in MP3/AAC streams manifests as flat/repeating frame headers with near 0 byte variation
-  const isSilent = avgDiff < 0.5 && nonZeroRatio < 0.02;
-  return { isSilent, energy: Math.round(avgDiff * 100) / 100 };
-}
-
-// ── Stream Health Check ─────────────────────────────────────────────────────
-function checkStream(stream, sampleBytes = 8192) {
-  return new Promise((resolve) => {
-    const start = Date.now();
-    const urlObj = new URL(stream.url);
-    const client = urlObj.protocol === 'https:' ? https : http;
-
-    let receivedBytes = 0;
-    const chunks = [];
-    const maxSampleBytes = sampleBytes; // Customizable sample size for deep audio checks
-
-    const req = client.request(
-      {
-        hostname: urlObj.hostname,
-        port: urlObj.port,
-        path: urlObj.pathname,
-        method: 'GET',
-        timeout: REQUEST_TIMEOUT,
-        headers: {
-          'Icy-MetaData': '1',
-          'User-Agent': 'IcecastMonitor/1.0',
-        },
-      },
-      (res) => {
-        const responseTime = Date.now() - start;
-        const contentType = res.headers['content-type'] || '';
-        const icyName = res.headers['icy-name'] || '';
-
-        if (res.statusCode !== 200) {
-          res.destroy();
-          return resolve({
-            status: 'down',
-            responseTime,
-            error: `HTTP ${res.statusCode}, Content-Type: ${contentType}`,
-            isSilent: false,
-          });
-        }
-
-        if (!contentType.includes('audio') && !contentType.includes('ogg') && !icyName) {
-          res.destroy();
-          return resolve({
-            status: 'down',
-            responseTime,
-            error: `Invalid Content-Type: ${contentType}`,
-            isSilent: false,
-          });
-        }
-
-        // Stream audio sample for silence analysis
-        res.on('data', (chunk) => {
-          chunks.push(chunk);
-          receivedBytes += chunk.length;
-          if (receivedBytes >= maxSampleBytes) {
-            res.destroy();
-          }
-        });
-
-        res.on('close', () => {
-          const fullBuffer = Buffer.concat(chunks);
-          const silenceAnalysis = analyzeAudioChunk(fullBuffer);
-          resolve({
-            status: 'up',
-            responseTime,
-            error: null,
-            isSilent: silenceAnalysis.isSilent,
-            audioEnergy: silenceAnalysis.energy,
-          });
-        });
-
-        res.on('error', () => {
-          res.destroy();
-          resolve({ status: 'up', responseTime, error: null, isSilent: false });
-        });
-      },
-    );
-
-    req.on('timeout', () => {
-      req.destroy();
-      resolve({
-        status: 'down',
-        responseTime: Date.now() - start,
-        error: 'Connection timed out',
-        isSilent: false,
-      });
-    });
-
-    req.on('error', (err) => {
-      resolve({
-        status: 'down',
-        responseTime: Date.now() - start,
-        error: err.message,
-        isSilent: false,
-      });
-    });
-
-    req.end();
-  });
-}
-
-// ── Aggressive Silence Verification Engine ───────────────────────────────
+// ── Aggressive Silence Verification Engine ──────────────────────────────────
 function scheduleAggressiveProbe(stream) {
-  const st = silenceState[stream.id] || { streak: 0, state: 'normal', timer: null };
+  const st = silenceState[stream.id];
   if (st.timer) clearTimeout(st.timer);
 
   st.timer = setTimeout(async () => {
     st.timer = null;
     const probeNum = st.streak + 1;
-    console.log(`[Silence Engine] Running aggressive verification probe for ${stream.name} (Probe ${probeNum}/${SILENCE_FAILURE_THRESHOLD})`);
+    console.log(`[Silence Engine] Aggressive verification probe for ${stream.name} (Probe ${probeNum}/${SILENCE_FAILURE_THRESHOLD})`);
 
-    // Sample ~32KB (~2s audio) for deep audio phrase evaluation
-    const result = await checkStream(stream, 32768);
+    // ~32KB ≈ 2s of audio — enough to survive a natural speech pause.
+    const result = await diagnose.probeStream(stream, 32768);
     const timestamp = new Date().toISOString();
 
-    if (result.status === 'down') {
-      return; // Connection failure handled by standard cycle
-    }
+    if (result.status === 'down') return; // connection failure owned by the main cycle
 
     if (!result.isSilent) {
-      // 🟢 INSTANT RESET! Voice / Audio energy detected!
       const wasDeadAir = st.state === 'dead_air';
-      console.log(`[Silence Engine] 🟢 Audio detected on ${stream.name} (Energy: ${result.audioEnergy})! Instant reset of silence streak.`);
+      console.log(`[Silence Engine] 🟢 Audio detected on ${stream.name} (energy ${result.audioEnergy}) — resetting streak.`);
 
       st.streak = 0;
       st.state = 'normal';
 
       if (streamStatus[stream.id]) {
-        streamStatus[stream.id].isSilent = false;
-        streamStatus[stream.id].audioEnergy = result.audioEnergy;
-        streamStatus[stream.id].silenceState = 'normal';
-        streamStatus[stream.id].silenceStreak = 0;
+        Object.assign(streamStatus[stream.id], {
+          isSilent: false,
+          audioEnergy: result.audioEnergy,
+          silenceState: 'normal',
+          silenceStreak: 0,
+        });
       }
 
-      if (wasDeadAir) {
-        const incident = {
-          timestamp,
-          streamId: stream.id,
-          streamName: stream.name,
-          type: 'up',
-          message: `${stream.name} Audio Output Restored — Dead Air cleared`,
-        };
-        incidents.push(incident);
-        sendAlert(stream, result, 'up');
-      }
+      if (wasDeadAir) await resolveDeadAir(stream, result, timestamp);
       return;
     }
 
-    // Still silent! Increment streak
     st.streak += 1;
 
     if (st.streak < SILENCE_FAILURE_THRESHOLD) {
@@ -337,159 +182,348 @@ function scheduleAggressiveProbe(stream) {
         streamStatus[stream.id].silenceState = 'evaluating';
         streamStatus[stream.id].silenceStreak = st.streak;
       }
-      console.warn(`[Silence Engine] 🟡 Silence probe ${st.streak}/${SILENCE_FAILURE_THRESHOLD} confirmed for ${stream.name}. Scheduling next probe in ${SILENCE_PROBE_INTERVAL_MS}ms.`);
+      console.warn(`[Silence Engine] 🟡 Silence probe ${st.streak}/${SILENCE_FAILURE_THRESHOLD} on ${stream.name}.`);
       scheduleAggressiveProbe(stream);
     } else {
-      // 🔴 Sustained Dead Air Confirmed!
       st.state = 'dead_air';
       if (streamStatus[stream.id]) {
         streamStatus[stream.id].silenceState = 'dead_air';
         streamStatus[stream.id].silenceStreak = st.streak;
       }
       const durationSec = Math.round((st.streak * SILENCE_PROBE_INTERVAL_MS) / 1000);
-      console.error(`[Silence Engine] 🔴 Sustained DEAD AIR confirmed on ${stream.name} after ${st.streak} probes (~${durationSec}s continuous silence).`);
+      console.error(`[Silence Engine] 🔴 DEAD AIR confirmed on ${stream.name} (~${durationSec}s of continuous silence).`);
 
-      const incident = {
+      const dg = diagnose.classify({
+        stream, result, snapshot, prevSnapshot,
+        cycle: [{ stream, result }], deadAir: true,
+      });
+
+      const event = store.addEvent({
         timestamp,
         streamId: stream.id,
         streamName: stream.name,
-        type: 'down',
-        message: `${stream.name} has DEAD AIR — Continuous silence confirmed for ${durationSec}s+`,
+        type: 'dead_air',
+        severity: 'dead_air',
+        confirmed: true,
+        scope: 'stream',
+        message: `${stream.name} has DEAD AIR — continuous silence confirmed for ${durationSec}s+`,
+        detail: { audioEnergy: result.audioEnergy, silenceStreak: st.streak, durationSec },
+        diagnosis: dg,
+        email: { attempted: false, sent: null },
+      });
+
+      episodes[stream.id] = {
+        eventId: event.id, startedAt: timestamp, alerted: true, severity: 'dead_air',
       };
-      incidents.push(incident);
-      sendAlert(stream, result, 'dead_air');
+
+      const emailResult = await sendAlert({
+        kind: 'dead_air',
+        entries: [{ stream, result, diagnosis: dg }],
+        scope: 'stream',
+      });
+      store.updateEvent(event.id, { email: emailResult });
+      store.saveEvents();
     }
   }, SILENCE_PROBE_INTERVAL_MS);
+}
+
+async function resolveDeadAir(stream, result, timestamp) {
+  const episode = episodes[stream.id];
+  const dg = diagnose.classify({
+    stream, result, snapshot, prevSnapshot, cycle: [{ stream, result }],
+  });
+
+  if (episode?.eventId) {
+    const durationMs = new Date(timestamp) - new Date(episode.startedAt);
+    store.updateEvent(episode.eventId, {
+      resolvedAt: timestamp,
+      durationMs,
+      durationLabel: diagnose.fmtDuration(durationMs),
+    });
+  }
+
+  const event = store.addEvent({
+    timestamp,
+    streamId: stream.id,
+    streamName: stream.name,
+    type: 'up',
+    severity: 'recovery',
+    confirmed: true,
+    scope: 'stream',
+    message: `${stream.name} audio output restored — dead air cleared`,
+    relatedTo: episode?.eventId || null,
+    durationMs: episode ? new Date(timestamp) - new Date(episode.startedAt) : null,
+    diagnosis: dg,
+    email: { attempted: false, sent: null },
+  });
+
+  delete episodes[stream.id];
+
+  const emailResult = await sendAlert({
+    kind: 'recovery',
+    entries: [{ stream, result, diagnosis: dg }],
+    scope: 'stream',
+    recoveredFrom: 'dead air',
+  });
+  store.updateEvent(event.id, { email: emailResult });
+  store.saveEvents();
 }
 
 // ── Run Check Cycle ─────────────────────────────────────────────────────────
 async function runChecks() {
   const timestamp = new Date().toISOString();
-  console.log(`[Monitor] Running checks at ${timestamp}`);
 
-  const [checkResults, icecastStats] = await Promise.all([
-    Promise.all(streams.map((s) => checkStream(s))),
-    fetchIcecastStats(),
+  prevSnapshot = snapshot;
+  const [results, snap] = await Promise.all([
+    Promise.all(streams.map((s) => diagnose.probeStream(s))),
+    diagnose.fetchIcecastSnapshot(),
   ]);
+  snapshot = snap;
+
+  const cycle = streams.map((s, i) => ({ stream: s, result: results[i] }));
+  const downCount = cycle.filter((c) => c.result.status === 'down').length;
+  const allDown = downCount === streams.length && streams.length > 0;
+
+  console.log(
+    `[Monitor] Cycle ${timestamp} — ${streams.length - downCount}/${streams.length} up` +
+    (snap.reachable ? ` · Icecast OK (${snap.mountCount} mounts)` : ` · Icecast UNREACHABLE (${snap.fetchError})`),
+  );
+
+  const newlyNotable = [];   // episodes that just became worth emailing
+  const recoveries = [];     // episodes that just ended
 
   for (let i = 0; i < streams.length; i++) {
     const stream = streams[i];
-    const result = checkResults[i];
+    const result = results[i];
     const prev = streamStatus[stream.id] || {};
     const wasDown = prev.status === 'down';
     const isDown = result.status === 'down';
-    const isSilent = result.isSilent;
+    const mount = diagnose.findMount(snap, stream);
 
-    // Match mount point in Icecast JSON stats
-    let matchedStats = null;
-    for (const [listenUrl, stats] of Object.entries(icecastStats)) {
-      if (listenUrl.includes(stream.url.split(':9000')[1] || '____')) {
-        matchedStats = stats;
-        break;
-      }
-    }
-
-    // Silence evaluation state tracking
-    const st = silenceState[stream.id] || { streak: 0, state: 'normal', timer: null };
-
+    // ── Silence tracking (only meaningful while the stream is reachable) ────
+    const st = silenceState[stream.id];
     if (!isDown) {
-      if (!isSilent) {
-        // 🟢 INSTANT RESET: Sound / voice detected on routine check
+      if (!result.isSilent) {
         if (st.state !== 'normal') {
           const wasDeadAir = st.state === 'dead_air';
-          console.log(`[Silence Engine] 🟢 Routine check detected sound on ${stream.name} (Energy: ${result.audioEnergy}). Resetting silence evaluation.`);
+          console.log(`[Silence Engine] 🟢 Routine check found audio on ${stream.name} (energy ${result.audioEnergy}).`);
           if (st.timer) clearTimeout(st.timer);
           st.streak = 0;
           st.state = 'normal';
           st.timer = null;
-
-          if (wasDeadAir) {
-            const incident = {
-              timestamp,
-              streamId: stream.id,
-              streamName: stream.name,
-              type: 'up',
-              message: `${stream.name} Audio Output Restored — Dead Air cleared`,
-            };
-            incidents.push(incident);
-            sendAlert(stream, result, 'up');
-          }
+          if (wasDeadAir) await resolveDeadAir(stream, result, timestamp);
         }
-      } else {
-        // 🟡 Initial silence detected on routine check
-        if (st.state === 'normal') {
-          st.streak = 1;
-          st.state = 'evaluating';
-          console.warn(`[Silence Engine] 🟡 Routine check detected initial silence pause on ${stream.name}. Starting aggressive verification probe schedule.`);
-          scheduleAggressiveProbe(stream);
-        }
+      } else if (st.state === 'normal') {
+        st.streak = 1;
+        st.state = 'evaluating';
+        console.warn(`[Silence Engine] 🟡 Initial silence on ${stream.name} — starting verification probes.`);
+        scheduleAggressiveProbe(stream);
       }
     }
 
-    // Update status object
+    const failures = isDown ? (prev.consecutiveFailures || 0) + 1 : 0;
+
+    // ── Status snapshot ────────────────────────────────────────────────────
     streamStatus[stream.id] = {
       status: result.status,
       responseTime: result.responseTime,
       lastChecked: timestamp,
-      consecutiveFailures: isDown ? (prev.consecutiveFailures || 0) + 1 : 0,
-      isSilent: isSilent,
+      consecutiveFailures: failures,
+      isSilent: !!result.isSilent,
       audioEnergy: result.audioEnergy || 0,
       silenceState: st.state,
       silenceStreak: st.streak,
       error: result.error,
-      // Stats from /status-json.xsl
-      listeners: matchedStats?.listeners ?? prev.listeners ?? 0,
-      listenerPeak: matchedStats?.listenerPeak ?? prev.listenerPeak ?? 0,
-      title: matchedStats?.title || prev.title || '',
-      bitrate: matchedStats?.bitrate || prev.bitrate || 128,
-      streamStart: matchedStats?.streamStart || prev.streamStart || '',
+      httpStatus: result.httpStatus ?? null,
+      errorCode: result.errorCode || null,
+      timings: result.timings || {},
+      listeners: mount?.listeners ?? prev.listeners ?? 0,
+      listenerPeak: mount?.listenerPeak ?? prev.listenerPeak ?? 0,
+      title: mount?.title || prev.title || '',
+      bitrate: mount?.bitrate || prev.bitrate || 128,
+      streamStart: mount?.streamStart || prev.streamStart || '',
+      mountPresent: !!mount,
+      icecastReachable: !!snap.reachable,
     };
 
-    // Record history
-    history[stream.id].push({
+    store.addSample(stream.id, {
       timestamp,
       status: result.status,
       responseTime: result.responseTime,
       listeners: streamStatus[stream.id].listeners,
-      isSilent,
+      isSilent: !!result.isSilent,
       silenceState: st.state,
       error: result.error,
+      errorCode: result.errorCode || null,
     });
 
-    // State transition detection
-    const failures = streamStatus[stream.id].consecutiveFailures;
+    // ── Episode transitions ────────────────────────────────────────────────
+    if (isDown) {
+      const dg = diagnose.classify({ stream, result, snapshot: snap, prevSnapshot, cycle });
+      const episode = episodes[stream.id];
 
-    // DOWN alert (Network / Connection level)
-    if (isDown && failures === FAILURE_THRESHOLD) {
-      const incident = {
-        timestamp,
-        streamId: stream.id,
-        streamName: stream.name,
-        type: 'down',
-        message: `${stream.name} is DOWN — ${result.error || 'No response'}`,
-      };
-      incidents.push(incident);
-      console.error(`[ALERT] ${incident.message}`);
-      sendAlert(stream, result, 'down');
-    }
+      if (!episode) {
+        // First failure of a new episode. Always recorded, even though a
+        // single blip normally stays silent.
+        const serverLevel = allDown && streams.length > 1;
+        const event = store.addEvent({
+          timestamp,
+          streamId: stream.id,
+          streamName: stream.name,
+          type: 'down',
+          severity: 'blip',
+          confirmed: false,
+          scope: dg.scope,
+          message: `${stream.name} failed a check — ${dg.causeLabel}${result.error ? ` (${result.error})` : ''}`,
+          failedChecks: 1,
+          diagnosis: dg,
+          email: { attempted: false, sent: null, reason: 'unconfirmed single-check blip' },
+        });
 
-    // RECOVERY alert (Network / Connection level)
-    if (wasDown && !isDown && prev.consecutiveFailures >= FAILURE_THRESHOLD) {
-      const incident = {
-        timestamp,
-        streamId: stream.id,
-        streamName: stream.name,
-        type: 'up',
-        message: `${stream.name} has RECOVERED (response: ${result.responseTime}ms)`,
-      };
-      incidents.push(incident);
-      console.log(`[RECOVERY] ${incident.message}`);
-      sendAlert(stream, result, 'up');
+        episodes[stream.id] = {
+          eventId: event.id,
+          startedAt: timestamp,
+          alerted: false,
+          severity: 'blip',
+        };
+
+        console.warn(`[Monitor] ⚠️  BLIP recorded — ${stream.name}: ${dg.causeLabel} (${result.error})`);
+
+        if (serverLevel && ALERT_ON_SERVER_BLIP) {
+          newlyNotable.push({
+            stream, result, diagnosis: dg,
+            eventId: event.id,
+            reason: 'server-level blip',
+          });
+        }
+      } else {
+        // Ongoing episode: keep the single event up to date rather than
+        // creating a new one for every failed check.
+        const patch = {
+          failedChecks: failures,
+          diagnosis: dg,
+          lastCheckAt: timestamp,
+        };
+
+        if (failures >= FAILURE_THRESHOLD && episode.severity !== 'outage') {
+          patch.severity = 'outage';
+          patch.confirmed = true;
+          patch.scope = dg.scope;
+          patch.confirmedAt = timestamp;
+          patch.message = `${stream.name} is DOWN — ${dg.causeLabel}${result.error ? ` (${result.error})` : ''}`;
+          episode.severity = 'outage';
+          console.error(`[ALERT] ${stream.name} DOWN confirmed after ${failures} checks — ${dg.causeLabel}`);
+        }
+
+        store.updateEvent(episode.eventId, patch);
+
+        if (failures >= FAILURE_THRESHOLD && !episode.alerted) {
+          newlyNotable.push({
+            stream, result, diagnosis: dg,
+            eventId: episode.eventId,
+            reason: 'confirmed outage',
+          });
+        }
+      }
+    } else if (wasDown || episodes[stream.id]) {
+      const episode = episodes[stream.id];
+      if (episode && episode.severity !== 'dead_air') {
+        const durationMs = new Date(timestamp) - new Date(episode.startedAt);
+        const dg = diagnose.classify({ stream, result, snapshot: snap, prevSnapshot, cycle });
+        const sourceOutage = diagnose.deriveSourceOutage(snap, stream, episode.startedAt);
+
+        store.updateEvent(episode.eventId, {
+          resolvedAt: timestamp,
+          durationMs,
+          durationLabel: diagnose.fmtDuration(durationMs),
+          sourceOutage,
+          selfCleared: !episode.alerted,
+        });
+
+        if (episode.alerted) {
+          recoveries.push({ stream, result, diagnosis: dg, episode, durationMs, sourceOutage });
+        } else {
+          console.log(`[Monitor] ✓ ${stream.name} self-cleared after ${diagnose.fmtDuration(durationMs)} (blip, no alert sent)`);
+        }
+        delete episodes[stream.id];
+      }
     }
   }
 
-  // Prune old history
-  pruneHistory();
+  // ── Notification pass ─────────────────────────────────────────────────────
+  await dispatchNotifications(newlyNotable, recoveries, { allDown, timestamp, snapshot: snap });
+
+  store.prune();
+  store.saveEvents();
+  store.setStatusCache(streamStatus);
+}
+
+/**
+ * Sends at most one outage email and one recovery email per cycle. When
+ * several streams fail together the messages are consolidated, so a
+ * server-level event produces one email rather than one per mount.
+ */
+async function dispatchNotifications(newlyNotable, recoveries, ctx) {
+  if (newlyNotable.length > 0) {
+    const serverScope =
+      ctx.allDown && streams.length > 1
+        ? 'server'
+        : newlyNotable[0].diagnosis.scope;
+
+    const consolidated = newlyNotable.length > 1;
+    const entries = newlyNotable.map((n) => ({
+      stream: n.stream, result: n.result, diagnosis: n.diagnosis,
+    }));
+
+    const emailResult = await sendAlert({
+      kind: 'down',
+      entries,
+      scope: serverScope,
+      consolidated,
+    });
+
+    for (const n of newlyNotable) {
+      store.updateEvent(n.eventId, {
+        email: { ...emailResult, consolidated },
+        alertedAt: ctx.timestamp,
+      });
+      const ep = episodes[n.stream.id];
+      if (ep) ep.alerted = true;
+    }
+  }
+
+  if (recoveries.length > 0) {
+    const entries = recoveries.map((r) => ({
+      stream: r.stream, result: r.result, diagnosis: r.diagnosis,
+    }));
+
+    const emailResult = await sendAlert({
+      kind: 'recovery',
+      entries,
+      scope: recoveries.length > 1 ? 'server' : recoveries[0].diagnosis.scope,
+      consolidated: recoveries.length > 1,
+    });
+
+    for (const r of recoveries) {
+      const event = store.addEvent({
+        timestamp: ctx.timestamp,
+        streamId: r.stream.id,
+        streamName: r.stream.name,
+        type: 'up',
+        severity: 'recovery',
+        confirmed: true,
+        scope: r.diagnosis.scope,
+        message: `${r.stream.name} has RECOVERED after ${diagnose.fmtDuration(r.durationMs)} (response ${r.result.responseTime}ms)`,
+        relatedTo: r.episode.eventId,
+        durationMs: r.durationMs,
+        durationLabel: diagnose.fmtDuration(r.durationMs),
+        sourceOutage: r.sourceOutage,
+        diagnosis: r.diagnosis,
+        email: emailResult,
+      });
+      console.log(`[RECOVERY] ${event.message}`);
+    }
+  }
 }
 
 // ── Bulletproof Cross-Client Dark Mode Email Builder ─────────────────────────
@@ -523,7 +557,7 @@ function buildEmailHtml({ title, subtitle, headerBg, contentHtml }) {
     }
     body, table, td, a { -webkit-text-size-adjust: 100%; -ms-text-size-adjust: 100%; }
     table, td { mso-table-lspace: 0pt; mso-table-rspace: 0pt; }
-    
+
     /* Force iOS WebKit Dark Mode Compliance */
     @media (prefers-color-scheme: dark) {
       .body-bg { background-color: #0b0b14 !important; }
@@ -539,6 +573,8 @@ function buildEmailHtml({ title, subtitle, headerBg, contentHtml }) {
       .callout-box { background-color: #211e3b !important; border-color: #3d3575 !important; }
       .callout-title { color: #c4b5fd !important; }
       .callout-text { color: #e2e8f0 !important; }
+      .diag-box { background-color: #101a2e !important; border-color: #1e3a5f !important; }
+      .diag-title { color: #7dd3fc !important; }
       .btn-bg { background-color: #6c5ce7 !important; background-image: none !important; color: #ffffff !important; }
       .btn-text { color: #ffffff !important; }
       .footer-bg { background-color: #0f0f1a !important; border-top-color: #222235 !important; }
@@ -583,130 +619,223 @@ function buildEmailHtml({ title, subtitle, headerBg, contentHtml }) {
 </html>`;
 }
 
-// ── Email Alerts ────────────────────────────────────────────────────────────
-async function sendAlert(stream, result, type) {
-  if (!transporter) return;
+// ── Email fragments ─────────────────────────────────────────────────────────
+function esc(s) {
+  return String(s == null ? '' : s)
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
 
-  const recipients = (process.env.ALERT_EMAILS || '').split(',').map((e) => e.trim()).filter(Boolean);
-  if (recipients.length === 0) {
-    console.warn('[Monitor] No ALERT_EMAILS configured');
-    return;
+function row(label, valueHtml, last = false) {
+  const border = last ? '' : 'border-bottom: 1px solid #28283d;';
+  return `
+      <tr class="${last ? '' : 'row-border'}" style="${border}">
+        <td class="label-col" style="padding: 8px 0; color: #94a3b8 !important; width: 150px; font-size: 13px; vertical-align: top;"><span class="label-col" style="color: #94a3b8 !important;">${label}</span></td>
+        <td style="padding: 8px 0; font-size: 13px;">${valueHtml}</td>
+      </tr>`;
+}
+
+/** The diagnosis block — the part that tells an operator what to actually do. */
+function renderDiagnosis(dg) {
+  if (!dg || !dg.cause) return '';
+
+  const scopeLabel = {
+    server: '🌐 Server-wide — affects all stations on this Icecast host',
+    station: '📻 Station-wide — affects all KPFT mounts',
+    stream: '🎚️ Single stream',
+  }[dg.scope] || dg.scope;
+
+  const confidenceBadge = {
+    high: '<span style="color:#4ade80 !important; font-weight:600;">High confidence</span>',
+    medium: '<span style="color:#fbbf24 !important; font-weight:600;">Medium confidence</span>',
+    low: '<span style="color:#94a3b8 !important; font-weight:600;">Low confidence</span>',
+  }[dg.confidence] || dg.confidence;
+
+  const evidence = (dg.evidence || []).map((e) =>
+    `<li style="color:#e2e8f0 !important; margin-bottom:5px;"><span style="color:#e2e8f0 !important;">${esc(e)}</span></li>`,
+  ).join('');
+
+  const steps = (dg.remediation || []).map((r) =>
+    `<li style="color:#e2e8f0 !important; margin-bottom:5px;"><span style="color:#e2e8f0 !important;">${esc(r)}</span></li>`,
+  ).join('');
+
+  const t = dg.timings || {};
+  const timingParts = [];
+  if (t.dns != null) timingParts.push(`DNS ${t.dns}ms`);
+  if (t.tcp != null) timingParts.push(`TCP ${t.tcp}ms`);
+  if (t.tls != null) timingParts.push(`TLS ${t.tls}ms`);
+  if (t.ttfb != null) timingParts.push(`First byte ${t.ttfb}ms`);
+  const timingLine = timingParts.length
+    ? `<p style="margin:12px 0 0 0; font-size:12px; color:#94a3b8 !important;"><span style="color:#94a3b8 !important;">⏱ Connection breakdown: ${timingParts.join(' · ')}</span></p>`
+    : '';
+
+  const ice = dg.icecast || {};
+  const iceLines = [];
+  if (ice.reachable) {
+    iceLines.push(`Icecast status endpoint responded — ${ice.mountCount} mount(s) listed${ice.serverId ? ` on ${esc(ice.serverId)}` : ''}.`);
+    iceLines.push(`Mount <code style="background:#28283d;color:#a78bfa !important;padding:1px 4px;border-radius:3px;">${esc(ice.mountPath || '?')}</code> is <strong style="color:${ice.mountPresent ? '#4ade80' : '#f87171'} !important;">${ice.mountPresent ? 'PRESENT' : 'ABSENT'}</strong>.`);
+    if (ice.sourceConnectedSince) {
+      iceLines.push(`Source connected since ${esc(ice.sourceConnectedSince)}.`);
+    }
+  } else {
+    iceLines.push(`<strong style="color:#f87171 !important;">Icecast status endpoint is UNREACHABLE</strong>${ice.statusError ? ` — ${esc(ice.statusError)}` : ''}.`);
+  }
+  if (ice.serverRestarted) {
+    iceLines.push('<strong style="color:#fbbf24 !important;">Icecast server start time changed — the server was restarted.</strong>');
   }
 
-  const ccRecipients = (process.env.ALERT_CC || '').split(',').map((e) => e.trim()).filter(Boolean);
-  const fromAddr = process.env.SMTP_FROM || process.env.SMTP_USER;
-  const isDeadAir = type === 'dead_air';
-  const isDown = type === 'down' || isDeadAir;
-  const emoji = isDeadAir ? '🔇' : isDown ? '🔴' : '🟢';
-  const statusText = isDeadAir ? 'DEAD AIR (SILENCE)' : isDown ? 'DOWN' : 'RECOVERED';
-  const failures = streamStatus[stream.id]?.consecutiveFailures || 0;
-  const silenceStreak = streamStatus[stream.id]?.silenceStreak || SILENCE_FAILURE_THRESHOLD;
+  return `
+    <div class="diag-box" style="background-color:#101a2e; border:1px solid #1e3a5f; border-radius:8px; padding:16px; margin-top:16px;">
+      <p class="diag-title" style="font-weight:700; color:#7dd3fc !important; margin:0 0 4px 0; font-size:15px;"><span class="diag-title" style="color:#7dd3fc !important;">🔎 Diagnosis: ${esc(dg.causeLabel)}</span></p>
+      <p style="margin:0 0 12px 0; font-size:12px; color:#94a3b8 !important;"><span style="color:#94a3b8 !important;">${esc(scopeLabel)} · ${confidenceBadge}</span></p>
 
-  const subject = `${emoji} KPFT Alert: ${stream.name} — ${statusText}`;
+      <p style="margin:0 0 6px 0; font-size:12px; text-transform:uppercase; letter-spacing:0.05em; color:#94a3b8 !important;"><span style="color:#94a3b8 !important;">Evidence</span></p>
+      <ul style="margin:0 0 14px 0; padding-left:18px; font-size:13px; line-height:1.6;">${evidence}</ul>
 
-  // Header Background Gradient
-  const headerBg = isDeadAir
-    ? 'linear-gradient(135deg, #d97706, #b45309)'
-    : isDown
-    ? 'linear-gradient(135deg, #dc2626, #991b1b)'
-    : 'linear-gradient(135deg, #16a34a, #15803d)';
+      <p style="margin:0 0 6px 0; font-size:12px; text-transform:uppercase; letter-spacing:0.05em; color:#94a3b8 !important;"><span style="color:#94a3b8 !important;">Icecast server state</span></p>
+      <ul style="margin:0 0 14px 0; padding-left:18px; font-size:13px; line-height:1.6;">
+        ${iceLines.map((l) => `<li style="color:#e2e8f0 !important;"><span style="color:#e2e8f0 !important;">${l}</span></li>`).join('')}
+      </ul>
 
-  const subtitle = isDeadAir
-    ? `${stream.name} output audio is silent (Dead Air confirmed across multiple 5s probes).`
-    : isDown
-    ? `${stream.name} has gone offline after ${failures} consecutive failed checks.`
-    : `${stream.name} is back online and streaming normally.`;
+      <p style="margin:0 0 6px 0; font-size:12px; text-transform:uppercase; letter-spacing:0.05em; color:#94a3b8 !important;"><span style="color:#94a3b8 !important;">What to do</span></p>
+      <ol style="margin:0; padding-left:18px; font-size:13px; line-height:1.6;">${steps}</ol>
+      ${timingLine}
+    </div>`;
+}
 
-  // Build all-streams status summary table
-  const allStreamsRows = streams.map((s) => {
+function renderStreamBlock(entry, index, total) {
+  const { stream, result, diagnosis } = entry;
+  const heading = total > 1
+    ? `<h3 class="section-hdr" style="margin:${index === 0 ? '0' : '24px'} 0 12px 0; font-size:14px; color:#f8fafc !important; letter-spacing:0.02em;"><span style="color:#f8fafc !important;">${index + 1}. ${esc(stream.name)}</span></h3>`
+    : `<h3 class="section-hdr" style="margin:0 0 12px 0; font-size:13px; color:#cbd5e1 !important; text-transform:uppercase; letter-spacing:0.05em;"><span class="section-hdr" style="color:#cbd5e1 !important;">Affected Stream</span></h3>`;
+
+  const rows = [
+    row('Stream Name', `<span class="val-col" style="color:#f8fafc !important; font-weight:600;">${esc(stream.name)}</span>`),
+    row('Stream URL', `<code style="background:#28283d; color:#a78bfa !important; padding:3px 6px; border-radius:4px; font-size:12px;">${esc(stream.url)}</code>`),
+    result.httpStatus != null
+      ? row('HTTP Status', `<span class="val-col" style="color:${result.httpStatus === 200 ? '#4ade80' : '#f87171'} !important; font-weight:600;">${result.httpStatus}</span>`)
+      : '',
+    result.error
+      ? row('Error', `<code style="background:rgba(239,68,68,0.15); color:#f87171 !important; padding:3px 6px; border-radius:4px; font-size:12px;">${esc(result.error)}</code>`)
+      : '',
+    result.errorCode
+      ? row('Error Code', `<code style="background:#28283d; color:#fbbf24 !important; padding:3px 6px; border-radius:4px; font-size:12px;">${esc(result.errorCode)}</code>`)
+      : '',
+    row('Response Time', `<span class="val-col" style="color:#f8fafc !important;">${result.responseTime}ms</span>`, true),
+  ].filter(Boolean).join('');
+
+  return `${heading}
+    <table role="presentation" width="100%" border="0" cellspacing="0" cellpadding="0" style="margin-bottom:8px;">${rows}</table>
+    ${renderDiagnosis(diagnosis)}`;
+}
+
+function renderAllStreamsTable() {
+  const rows = streams.map((s) => {
     const st = streamStatus[s.id] || {};
-    const isStDeadAir = st.silenceState === 'dead_air';
-    const dot = isStDeadAir ? '🔇' : st.status === 'up' ? '🟢' : st.status === 'down' ? '🔴' : '⚪';
-    const stText = isStDeadAir ? 'Dead Air' : st.status === 'up' ? 'Online' : st.status === 'down' ? 'Offline' : 'Unknown';
-    const stColor = isStDeadAir ? '#f59e0b' : st.status === 'up' ? '#4ade80' : '#f87171';
+    const isDeadAir = st.silenceState === 'dead_air';
+    const dot = isDeadAir ? '🔇' : st.status === 'up' ? '🟢' : st.status === 'down' ? '🔴' : '⚪';
+    const text = isDeadAir ? 'Dead Air' : st.status === 'up' ? 'Online' : st.status === 'down' ? 'Offline' : 'Unknown';
+    const color = isDeadAir ? '#f59e0b' : st.status === 'up' ? '#4ade80' : '#f87171';
     const rt = st.responseTime != null ? `${st.responseTime}ms` : '—';
     return `
           <tr class="row-border" style="border-bottom: 1px solid #28283d;">
-            <td class="val-col" style="padding: 8px; color: #f8fafc !important; font-size: 13px;"><span class="val-col" style="color: #f8fafc !important;">${dot} ${s.name}</span></td>
-            <td style="padding: 8px; color: ${stColor} !important; font-weight: 600; font-size: 13px;"><span style="color: ${stColor} !important;">${stText}</span></td>
+            <td class="val-col" style="padding: 8px; color: #f8fafc !important; font-size: 13px;"><span class="val-col" style="color: #f8fafc !important;">${dot} ${esc(s.name)}</span></td>
+            <td style="padding: 8px; color: ${color} !important; font-weight: 600; font-size: 13px;"><span style="color: ${color} !important;">${text}</span></td>
             <td class="label-col" style="padding: 8px; color: #94a3b8 !important; font-size: 13px;"><span class="label-col" style="color: #94a3b8 !important;">${rt}</span></td>
+            <td class="label-col" style="padding: 8px; color: #94a3b8 !important; font-size: 13px;"><span class="label-col" style="color: #94a3b8 !important;">${st.listeners ?? '—'}</span></td>
           </tr>`;
   }).join('');
 
-  // Troubleshooting steps callout
-  const troubleshooting = isDeadAir ? `
-    <div class="callout-box" style="background-color: #261d10; border: 1px solid #52370e; border-radius: 8px; padding: 16px; margin-top: 16px;">
-      <p class="callout-title" style="font-weight: 600; color: #fbbf24 !important; margin: 0 0 8px 0; font-size: 14px;"><span class="callout-title" style="color: #fbbf24 !important;">⚠️ Dead Air Troubleshooting Steps</span></p>
-      <ol class="callout-text" style="margin: 0; padding-left: 20px; color: #e2e8f0 !important; font-size: 13px; line-height: 1.8;">
-        <li style="color: #e2e8f0 !important;"><span style="color: #e2e8f0 !important;">HTTP stream connection is active (HTTP 200 OK), but output audio is silent</span></li>
-        <li style="color: #e2e8f0 !important;"><span style="color: #e2e8f0 !important;">Check studio audio routing, mixing console master output, or automation software</span></li>
-        <li style="color: #e2e8f0 !important;"><span style="color: #e2e8f0 !important;">Verify studio audio interface / soundcard connections to stream encoder</span></li>
-        <li style="color: #e2e8f0 !important;"><span style="color: #e2e8f0 !important;">Check if broadcast source player or automation software is paused or stopped</span></li>
-      </ol>
-    </div>` : isDown ? `
-    <div class="callout-box" style="background-color: #291418; border: 1px solid #5c2028; border-radius: 8px; padding: 16px; margin-top: 16px;">
-      <p class="callout-title" style="font-weight: 600; color: #f87171 !important; margin: 0 0 8px 0; font-size: 14px;"><span class="callout-title" style="color: #f87171 !important;">⚠️ Server Down Troubleshooting Steps</span></p>
-      <ol class="callout-text" style="margin: 0; padding-left: 20px; color: #e2e8f0 !important; font-size: 13px; line-height: 1.8;">
-        <li style="color: #e2e8f0 !important;"><span style="color: #e2e8f0 !important;">Check if the Icecast server at <code style="background: #28283d; color: #a78bfa !important; padding: 2px 5px; border-radius: 3px;">streams.pacifica.org:9000</code> is reachable</span></li>
-        <li style="color: #e2e8f0 !important;"><span style="color: #e2e8f0 !important;">Verify the source client is connected and sending audio</span></li>
-        <li style="color: #e2e8f0 !important;"><span style="color: #e2e8f0 !important;">Check Icecast admin panel for mount point status</span></li>
-        <li style="color: #e2e8f0 !important;"><span style="color: #e2e8f0 !important;">Review Icecast server logs for errors</span></li>
-        <li style="color: #e2e8f0 !important;"><span style="color: #e2e8f0 !important;">Restart the source encoder if needed</span></li>
-      </ol>
-    </div>` : '';
-
-  const contentHtml = `
-    <h3 class="section-hdr" style="margin: 0 0 12px 0; font-size: 13px; color: #cbd5e1 !important; text-transform: uppercase; letter-spacing: 0.05em;"><span class="section-hdr" style="color: #cbd5e1 !important;">Affected Stream</span></h3>
-    <table role="presentation" width="100%" border="0" cellspacing="0" cellpadding="0" style="margin-bottom: 16px;">
-      <tr class="row-border" style="border-bottom: 1px solid #28283d;">
-        <td class="label-col" style="padding: 8px 0; color: #94a3b8 !important; width: 140px; font-size: 13px;"><span class="label-col" style="color: #94a3b8 !important;">Stream Name</span></td>
-        <td class="val-col" style="padding: 8px 0; font-weight: 600; color: #f8fafc !important; font-size: 13px;"><span class="val-col" style="color: #f8fafc !important;">${stream.name}</span></td>
-      </tr>
-      <tr class="row-border" style="border-bottom: 1px solid #28283d;">
-        <td class="label-col" style="padding: 8px 0; color: #94a3b8 !important; font-size: 13px;"><span class="label-col" style="color: #94a3b8 !important;">Stream URL</span></td>
-        <td style="padding: 8px 0;"><code style="background: #28283d; color: #a78bfa !important; padding: 3px 6px; border-radius: 4px; font-size: 12px;">${stream.url}</code></td>
-      </tr>
-      <tr class="row-border" style="border-bottom: 1px solid #28283d;">
-        <td class="label-col" style="padding: 8px 0; color: #94a3b8 !important; font-size: 13px;"><span class="label-col" style="color: #94a3b8 !important;">M3U Playlist</span></td>
-        <td style="padding: 8px 0;"><a href="${stream.m3u}" style="color: #a78bfa !important; text-decoration: none; font-size: 12px;">${stream.m3u}</a></td>
-      </tr>
-      <tr class="row-border" style="border-bottom: 1px solid #28283d;">
-        <td class="label-col" style="padding: 8px 0; color: #94a3b8 !important; font-size: 13px;"><span class="label-col" style="color: #94a3b8 !important;">Status</span></td>
-        <td style="padding: 8px 0; font-weight: 700; color: ${isDown ? '#f87171' : '#4ade80'} !important; font-size: 15px;"><span style="color: ${isDown ? '#f87171' : '#4ade80'} !important;">${statusText}</span></td>
-      </tr>
-      <tr class="row-border" style="border-bottom: 1px solid #28283d;">
-        <td class="label-col" style="padding: 8px 0; color: #94a3b8 !important; font-size: 13px;"><span class="label-col" style="color: #94a3b8 !important;">Response Time</span></td>
-        <td class="val-col" style="padding: 8px 0; color: #f8fafc !important; font-size: 13px;"><span class="val-col" style="color: #f8fafc !important;">${result.responseTime}ms</span></td>
-      </tr>
-      ${result.error ? `
-      <tr class="row-border" style="border-bottom: 1px solid #28283d;">
-        <td class="label-col" style="padding: 8px 0; color: #94a3b8 !important; font-size: 13px;"><span class="label-col" style="color: #94a3b8 !important;">Error Details</span></td>
-        <td style="padding: 8px 0;"><code style="background: rgba(239,68,68,0.15); color: #f87171 !important; padding: 3px 6px; border-radius: 4px; font-size: 12px;">${result.error}</code></td>
-      </tr>` : ''}
-      ${isDown ? `
-      <tr class="row-border" style="border-bottom: 1px solid #28283d;">
-        <td class="label-col" style="padding: 8px 0; color: #94a3b8 !important; font-size: 13px;"><span class="label-col" style="color: #94a3b8 !important;">Failed Checks</span></td>
-        <td style="padding: 8px 0; color: #f59e0b !important; font-weight: 600; font-size: 13px;"><span style="color: #f59e0b !important;">${isDeadAir ? `${silenceStreak} consecutive (probes every 5s)` : `${failures} consecutive`}</span></td>
-      </tr>` : ''}
-      <tr>
-        <td class="label-col" style="padding: 8px 0; color: #94a3b8 !important; font-size: 13px;"><span class="label-col" style="color: #94a3b8 !important;">Detected At</span></td>
-        <td class="val-col" style="padding: 8px 0; color: #f8fafc !important; font-size: 13px;"><span class="val-col" style="color: #f8fafc !important;">${new Date().toLocaleString('en-US', { timeZone: 'America/Chicago', weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', second: '2-digit', hour12: true })} CT</span></td>
-      </tr>
-    </table>
-
-    ${troubleshooting}
-
-    <hr style="border: none; border-top: 1px solid #28283d; margin: 20px 0;">
-
+  return `
     <h3 class="section-hdr" style="margin: 0 0 12px 0; font-size: 13px; color: #cbd5e1 !important; text-transform: uppercase; letter-spacing: 0.05em;"><span class="section-hdr" style="color: #cbd5e1 !important;">All Streams Overview</span></h3>
     <table role="presentation" width="100%" border="0" cellspacing="0" cellpadding="0">
       <tr style="color: #64748b; font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em;">
         <td class="label-col" style="padding: 6px 8px; border-bottom: 1px solid #28283d;"><span class="label-col" style="color: #94a3b8 !important;">Stream</span></td>
         <td class="label-col" style="padding: 6px 8px; border-bottom: 1px solid #28283d;"><span class="label-col" style="color: #94a3b8 !important;">Status</span></td>
         <td class="label-col" style="padding: 6px 8px; border-bottom: 1px solid #28283d;"><span class="label-col" style="color: #94a3b8 !important;">Response</span></td>
+        <td class="label-col" style="padding: 6px 8px; border-bottom: 1px solid #28283d;"><span class="label-col" style="color: #94a3b8 !important;">Listeners</span></td>
       </tr>
-      ${allStreamsRows}
+      ${rows}
     </table>`;
+}
+
+// ── Email Alerts ────────────────────────────────────────────────────────────
+/**
+ * Sends an alert and RETURNS the delivery outcome, so every event carries a
+ * verifiable record of whether an email actually went out. Previously an SMTP
+ * failure was logged and forgotten, leaving no way to tell a delivered alert
+ * from a silently dropped one.
+ */
+async function sendAlert({ kind, entries, scope, consolidated = false, recoveredFrom = null }) {
+  const attemptedAt = new Date().toISOString();
+
+  if (!transporter) {
+    return { attempted: false, sent: false, reason: 'SMTP not configured', attemptedAt };
+  }
+
+  const recipients = (process.env.ALERT_EMAILS || '').split(',').map((e) => e.trim()).filter(Boolean);
+  if (recipients.length === 0) {
+    console.warn('[Monitor] No ALERT_EMAILS configured');
+    return { attempted: false, sent: false, reason: 'no recipients configured', attemptedAt };
+  }
+
+  const ccRecipients = (process.env.ALERT_CC || '').split(',').map((e) => e.trim()).filter(Boolean);
+  const fromAddr = process.env.SMTP_FROM || process.env.SMTP_USER;
+
+  const isDeadAir = kind === 'dead_air';
+  const isRecovery = kind === 'recovery';
+  const isDown = !isRecovery;
+
+  const emoji = isDeadAir ? '🔇' : isDown ? '🔴' : '🟢';
+  const statusText = isDeadAir ? 'DEAD AIR (SILENCE)' : isDown ? 'DOWN' : 'RECOVERED';
+
+  const names = entries.map((e) => e.stream.name);
+  const nameList = names.length > 2
+    ? `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}`
+    : names.join(' and ');
+
+  const primaryCause = entries[0]?.diagnosis?.causeLabel || '';
+
+  // Subject leads with the root cause, so the inbox itself is diagnostic.
+  let subject;
+  if (consolidated) {
+    subject = `${emoji} KPFT Alert: ${entries.length} streams ${statusText}${primaryCause ? ` — ${primaryCause}` : ''}`;
+  } else {
+    subject = `${emoji} KPFT Alert: ${nameList} — ${statusText}${primaryCause && isDown ? ` (${primaryCause})` : ''}`;
+  }
+
+  const headerBg = isDeadAir
+    ? 'linear-gradient(135deg, #d97706, #b45309)'
+    : isDown
+    ? 'linear-gradient(135deg, #dc2626, #991b1b)'
+    : 'linear-gradient(135deg, #16a34a, #15803d)';
+
+  const scopeNote = scope === 'server'
+    ? ' This is a SERVER-LEVEL event affecting every monitored stream.'
+    : scope === 'station'
+    ? ' This affects all KPFT mounts.'
+    : '';
+
+  const subtitle = isDeadAir
+    ? `${nameList} is connected but silent — dead air confirmed across ${SILENCE_FAILURE_THRESHOLD} consecutive probes.`
+    : isDown
+    ? `${nameList} ${entries.length > 1 ? 'have' : 'has'} gone offline.${scopeNote}`
+    : `${nameList} ${entries.length > 1 ? 'are' : 'is'} back online${recoveredFrom ? ` (recovered from ${recoveredFrom})` : ''}.`;
+
+  const detectedAt = new Date().toLocaleString('en-US', {
+    timeZone: 'America/Chicago', weekday: 'short', month: 'short', day: 'numeric',
+    hour: 'numeric', minute: '2-digit', second: '2-digit', hour12: true,
+  });
+
+  const blocks = entries.map((e, i) => renderStreamBlock(e, i, entries.length)).join('');
+
+  const contentHtml = `
+    ${blocks}
+    <table role="presentation" width="100%" border="0" cellspacing="0" cellpadding="0" style="margin-top:16px;">
+      ${row('Detected At', `<span class="val-col" style="color:#f8fafc !important;">${detectedAt} CT</span>`, true)}
+    </table>
+    <hr style="border: none; border-top: 1px solid #28283d; margin: 20px 0;">
+    ${renderAllStreamsTable()}`;
 
   const html = buildEmailHtml({
     title: `${emoji} Stream ${statusText}`,
@@ -716,88 +845,54 @@ async function sendAlert(stream, result, type) {
   });
 
   try {
-    const mailOptions = {
-      from: fromAddr,
-      to: recipients.join(', '),
+    const mailOptions = { from: fromAddr, to: recipients.join(', '), subject, html };
+    if (ccRecipients.length > 0) mailOptions.cc = ccRecipients.join(', ');
+
+    const info = await transporter.sendMail(mailOptions);
+
+    console.log(`[Monitor] ✉️  Alert sent to ${recipients.length} recipient(s)${ccRecipients.length ? ` + ${ccRecipients.length} CC` : ''} — ${subject}`);
+    return {
+      attempted: true,
+      sent: true,
+      attemptedAt,
+      sentAt: new Date().toISOString(),
+      recipients,
+      cc: ccRecipients,
       subject,
-      html,
+      messageId: info?.messageId || null,
+      accepted: info?.accepted?.length ?? recipients.length,
+      rejected: info?.rejected || [],
+      error: null,
     };
-    if (ccRecipients.length > 0) {
-      mailOptions.cc = ccRecipients.join(', ');
-    }
-    await transporter.sendMail(mailOptions);
-    console.log(`[Monitor] Alert email sent to ${recipients.length} recipient(s)${ccRecipients.length ? ` + ${ccRecipients.length} CC` : ''}`);
   } catch (err) {
-    console.error('[Monitor] Failed to send alert email:', err.message);
-  }
-}
-
-// ── History Management ──────────────────────────────────────────────────────
-function pruneHistory() {
-  const cutoff = Date.now() - MAX_HISTORY_AGE_MS;
-  for (const id of Object.keys(history)) {
-    history[id] = history[id].filter((h) => new Date(h.timestamp).getTime() > cutoff);
-  }
-  // Also prune incidents
-  incidents = incidents.filter((i) => new Date(i.timestamp).getTime() > cutoff);
-}
-
-function loadHistory() {
-  try {
-    if (fs.existsSync(HISTORY_FILE)) {
-      const data = JSON.parse(fs.readFileSync(HISTORY_FILE, 'utf-8'));
-      if (data.history) history = { ...history, ...data.history };
-      if (data.incidents) incidents = data.incidents;
-      if (data.streamStatus) {
-        // Restore last known status but reset consecutiveFailures
-        for (const id of Object.keys(data.streamStatus)) {
-          if (streamStatus[id]) {
-            streamStatus[id] = {
-              ...data.streamStatus[id],
-              consecutiveFailures: 0,
-              status: 'unknown',
-            };
-          }
-        }
-      }
-      console.log('[Monitor] Loaded persisted history');
-      pruneHistory();
-    }
-  } catch (err) {
-    console.error('[Monitor] Failed to load history:', err.message);
-  }
-}
-
-function saveHistory() {
-  try {
-    if (!fs.existsSync(DATA_DIR)) {
-      fs.mkdirSync(DATA_DIR, { recursive: true });
-    }
-    fs.writeFileSync(
-      HISTORY_FILE,
-      JSON.stringify({ history, incidents, streamStatus, savedAt: new Date().toISOString() }, null, 2),
-    );
-  } catch (err) {
-    console.error('[Monitor] Failed to save history:', err.message);
+    console.error('[Monitor] ✉️  FAILED to send alert email:', err.message);
+    return {
+      attempted: true,
+      sent: false,
+      attemptedAt,
+      recipients,
+      cc: ccRecipients,
+      subject,
+      error: err.message,
+      errorCode: err.code || null,
+    };
   }
 }
 
 // ── Public API ──────────────────────────────────────────────────────────────
 function start() {
   init();
+  runChecks().catch((err) => console.error('[Monitor] Check cycle failed:', err));
 
-  // Run first check immediately
-  runChecks();
+  intervalHandle = setInterval(() => {
+    runChecks().catch((err) => console.error('[Monitor] Check cycle failed:', err));
+  }, CHECK_INTERVAL);
 
-  // Schedule periodic checks
-  intervalHandle = setInterval(runChecks, CHECK_INTERVAL);
+  flushHandle = setInterval(() => store.save(), SAVE_INTERVAL);
 
-  // Schedule periodic history flush
-  flushHandle = setInterval(saveHistory, HISTORY_FLUSH_INTERVAL);
-
-  // Save on shutdown
-  process.on('SIGTERM', () => { saveHistory(); process.exit(0); });
-  process.on('SIGINT', () => { saveHistory(); process.exit(0); });
+  const shutdown = () => { store.save(true); process.exit(0); };
+  process.on('SIGTERM', shutdown);
+  process.on('SIGINT', shutdown);
 
   console.log('[Monitor] Started');
 }
@@ -805,28 +900,34 @@ function start() {
 function stop() {
   if (intervalHandle) clearInterval(intervalHandle);
   if (flushHandle) clearInterval(flushHandle);
-  saveHistory();
+  Object.values(silenceState).forEach((st) => { if (st.timer) clearTimeout(st.timer); });
+  store.save(true);
   console.log('[Monitor] Stopped');
 }
 
-function getStreams() {
-  return streams;
-}
+function getStreams() { return streams; }
 
 function getStatus() {
-  return streams.map((s) => ({
-    ...s,
-    ...streamStatus[s.id],
-  }));
+  return streams.map((s) => ({ ...s, ...streamStatus[s.id] }));
 }
 
+/** Back-compatible shape for the existing dashboard. */
 function getHistory() {
-  return history;
+  return store.getAllSamples(24 * 60 * 60 * 1000);
 }
 
 function getIncidents() {
-  return incidents;
+  return store.getEvents({ since: new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString() }).events;
 }
+
+function getEvents(opts) { return store.getEvents(opts); }
+function getSamples(streamId, sinceMs) { return store.getSamples(streamId, sinceMs); }
+function getRollups(streamId) { return store.getRollups(streamId); }
+function getSummary(windowMs) { return store.getSummary(streams.map((s) => s.id), windowMs); }
+function getDailyBuckets(days) { return store.getDailyBuckets(days); }
+function getCauseBreakdown(windowMs) { return store.getCauseBreakdown(windowMs); }
+function getStorageInfo() { return store.getStorageInfo(); }
+function getSnapshot() { return snapshot; }
 
 function getConfig() {
   return {
@@ -836,50 +937,39 @@ function getConfig() {
     silenceFailureThreshold: SILENCE_FAILURE_THRESHOLD,
     emailConfigured: !!transporter,
     alertRecipients: (process.env.ALERT_EMAILS || '').split(',').map((e) => e.trim()).filter(Boolean).length,
+    alertOnServerBlip: ALERT_ON_SERVER_BLIP,
+    sampleRetentionDays: store.SAMPLE_RETENTION_DAYS,
+    eventRetention: 'permanent',
+    streams: streams.map((s) => ({ id: s.id, name: s.name })),
   };
 }
 
 async function sendTestAlert(toEmail) {
-  if (!transporter) {
-    throw new Error('SMTP not configured');
-  }
+  if (!transporter) throw new Error('SMTP not configured');
 
   const fromAddr = process.env.SMTP_FROM || process.env.SMTP_USER;
-
-  // Build current status of all streams
-  const allStreamsRows = streams.map((s) => {
-    const st = streamStatus[s.id] || {};
-    const isStDeadAir = st.silenceState === 'dead_air';
-    const dot = isStDeadAir ? '🔇' : st.status === 'up' ? '🟢' : st.status === 'down' ? '🔴' : '⚪';
-    const stText = isStDeadAir ? 'Dead Air' : st.status === 'up' ? 'Online' : st.status === 'down' ? 'Offline' : 'Unknown';
-    const stColor = isStDeadAir ? '#f59e0b' : st.status === 'up' ? '#4ade80' : '#f87171';
-    const rt = st.responseTime != null ? `${st.responseTime}ms` : '—';
-    return `
-          <tr class="row-border" style="border-bottom: 1px solid #28283d;">
-            <td class="val-col" style="padding: 8px; color: #f8fafc !important; font-size: 13px;"><span class="val-col" style="color: #f8fafc !important;">${dot} ${s.name}</span></td>
-            <td style="padding: 8px; color: ${stColor} !important; font-weight: 600; font-size: 13px;"><span style="color: ${stColor} !important;">${stText}</span></td>
-            <td class="label-col" style="padding: 8px; color: #94a3b8 !important; font-size: 13px;"><span class="label-col" style="color: #94a3b8 !important;">${rt}</span></td>
-          </tr>`;
-  }).join('');
+  const storage = store.getStorageInfo();
 
   const contentHtml = `
-    <h3 class="section-hdr" style="margin: 0 0 12px 0; font-size: 13px; color: #cbd5e1 !important; text-transform: uppercase; letter-spacing: 0.05em;"><span class="section-hdr" style="color: #cbd5e1 !important;">Current Stream Status</span></h3>
-    <table role="presentation" width="100%" border="0" cellspacing="0" cellpadding="0">
-      <tr style="color: #64748b; font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em;">
-        <td class="label-col" style="padding: 6px 8px; border-bottom: 1px solid #28283d;"><span class="label-col" style="color: #94a3b8 !important;">Stream</span></td>
-        <td class="label-col" style="padding: 6px 8px; border-bottom: 1px solid #28283d;"><span class="label-col" style="color: #94a3b8 !important;">Status</span></td>
-        <td class="label-col" style="padding: 6px 8px; border-bottom: 1px solid #28283d;"><span class="label-col" style="color: #94a3b8 !important;">Response</span></td>
-      </tr>
-      ${allStreamsRows}
-    </table>
+    ${renderAllStreamsTable()}
 
     <div class="callout-box" style="background-color: #1e1b38; border: 1px solid #3d3575; border-radius: 8px; padding: 16px; margin-top: 20px;">
       <p class="callout-title" style="font-weight: 600; color: #c4b5fd !important; margin: 0 0 8px 0; font-size: 14px;"><span class="callout-title" style="color: #c4b5fd !important;">ℹ️ What to expect</span></p>
       <ul class="callout-text" style="margin: 0; padding-left: 20px; color: #e2e8f0 !important; font-size: 13px; line-height: 1.8;">
-        <li style="color: #e2e8f0 !important;"><span style="color: #e2e8f0 !important;">🔴 <strong>Down alert</strong> when a stream fails ${FAILURE_THRESHOLD} consecutive checks</span></li>
+        <li style="color: #e2e8f0 !important;"><span style="color: #e2e8f0 !important;">🔴 <strong>Down alert</strong> after ${FAILURE_THRESHOLD} consecutive failed checks — with a root-cause diagnosis</span></li>
+        <li style="color: #e2e8f0 !important;"><span style="color: #e2e8f0 !important;">🌐 <strong>Server-level alert</strong> immediately if a single failure hits every stream at once</span></li>
         <li style="color: #e2e8f0 !important;"><span style="color: #e2e8f0 !important;">🔇 <strong>Dead Air alert</strong> when silence persists across ${SILENCE_FAILURE_THRESHOLD} 5-second probes</span></li>
-        <li style="color: #e2e8f0 !important;"><span style="color: #e2e8f0 !important;">🟢 <strong>Recovery alert</strong> when a stream comes back online</span></li>
+        <li style="color: #e2e8f0 !important;"><span style="color: #e2e8f0 !important;">🟢 <strong>Recovery alert</strong> with the true outage duration</span></li>
         <li style="color: #e2e8f0 !important;"><span style="color: #e2e8f0 !important;">Checks run every ${Math.round(CHECK_INTERVAL / 1000)} seconds</span></li>
+      </ul>
+    </div>
+
+    <div class="diag-box" style="background-color:#101a2e; border:1px solid #1e3a5f; border-radius:8px; padding:16px; margin-top:16px;">
+      <p class="diag-title" style="font-weight:600; color:#7dd3fc !important; margin:0 0 8px 0; font-size:14px;"><span class="diag-title" style="color:#7dd3fc !important;">📚 Incident history</span></p>
+      <ul style="margin:0; padding-left:20px; font-size:13px; line-height:1.8;">
+        <li style="color:#e2e8f0 !important;"><span style="color:#e2e8f0 !important;">Every failed check is recorded permanently — including brief blips that do not trigger an email</span></li>
+        <li style="color:#e2e8f0 !important;"><span style="color:#e2e8f0 !important;">${storage.eventCount} event(s) currently on record${storage.oldestEvent ? `, back to ${new Date(storage.oldestEvent).toLocaleDateString('en-US')}` : ''}</span></li>
+        <li style="color:#e2e8f0 !important;"><span style="color:#e2e8f0 !important;">Per-minute telemetry kept ${storage.sampleRetentionDays} days, then compacted to hourly summaries kept forever</span></li>
       </ul>
     </div>`;
 
@@ -899,4 +989,8 @@ async function sendTestAlert(toEmail) {
   console.log(`[Monitor] Test alert sent to ${toEmail}`);
 }
 
-module.exports = { start, stop, getStreams, getStatus, getHistory, getIncidents, getConfig, sendTestAlert };
+module.exports = {
+  start, stop, getStreams, getStatus, getHistory, getIncidents, getConfig, sendTestAlert,
+  getEvents, getSamples, getRollups, getSummary, getDailyBuckets, getCauseBreakdown,
+  getStorageInfo, getSnapshot,
+};

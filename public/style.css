@@ -919,6 +919,85 @@ body::before {
   border: 1px solid rgba(34, 197, 94, 0.2);
 }
 
+/* ── Blip & Dead Air severities ────────────────────────────────────────────── */
+.incident-icon.blip {
+  background: rgba(234, 179, 8, 0.1);
+  color: #eab308;
+}
+
+.incident-icon.dead-air {
+  background: rgba(245, 158, 11, 0.1);
+  color: #f59e0b;
+}
+
+.incident-badge.blip {
+  background: rgba(234, 179, 8, 0.1);
+  color: #eab308;
+  border: 1px solid rgba(234, 179, 8, 0.2);
+}
+
+.incident-badge.dead-air {
+  background: rgba(245, 158, 11, 0.1);
+  color: #f59e0b;
+  border: 1px solid rgba(245, 158, 11, 0.2);
+}
+
+.incident-cause {
+  color: var(--text-tertiary);
+}
+
+/* Email-delivery indicator — makes it visible at a glance which events
+   actually generated an alert and which were recorded silently. */
+.incident-mail {
+  font-size: 11px;
+  font-weight: 600;
+  padding: 3px 9px;
+  border-radius: 100px;
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+
+.incident-mail.sent {
+  background: var(--status-up-surface);
+  color: var(--status-up);
+}
+
+.incident-mail.failed {
+  background: var(--status-down-surface);
+  color: var(--status-down);
+}
+
+.incident-mail.none {
+  background: var(--surface-3);
+  color: var(--text-tertiary);
+}
+
+.incidents-more {
+  text-align: center;
+  padding: 14px 0 4px;
+}
+
+.incidents-more a,
+.section-link {
+  color: var(--primary-light);
+  text-decoration: none;
+  font-size: 13px;
+  font-weight: 500;
+  transition: var(--transition);
+}
+
+.incidents-more a:hover,
+.section-link:hover {
+  color: var(--text-primary);
+  text-decoration: underline;
+}
+
+.section-link {
+  margin-left: auto;
+  text-transform: none;
+  letter-spacing: 0;
+}
+
 /* ── Footer ────────────────────────────────────────────────────────────────── */
 .footer {
   text-align: center;

@@ -1,0 +1,197 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+  <!-- Search Engine Anti-Indexing (Unlisted Page) -->
+  <meta name="robots" content="noindex, nofollow, noarchive, nosnippet">
+  <meta name="googlebot" content="noindex, nofollow">
+
+  <!-- HTTP Cache-Busting (Dev & Live Update Enforcement) -->
+  <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+  <meta http-equiv="Pragma" content="no-cache">
+  <meta http-equiv="Expires" content="0">
+
+  <title>Incident History — KPFT Stream Monitor</title>
+  <meta name="description" content="Complete permanent incident history for KPFT Icecast streams with root-cause diagnosis.">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📡</text></svg>">
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20..48,100..700,0..1,-50..200&display=swap">
+  <link rel="stylesheet" href="style.css?v=dev">
+  <link rel="stylesheet" href="history.css?v=dev">
+</head>
+<body>
+
+<div class="app">
+  <!-- Loading State -->
+  <div class="loading-screen" id="loading">
+    <div class="loading-spinner"></div>
+    <div class="loading-text">Loading incident history…</div>
+  </div>
+
+  <div id="history-view" style="display: none;">
+
+    <!-- Header -->
+    <header class="header fade-in">
+      <div class="header-left">
+        <a href="index.html" class="back-link" title="Back to dashboard">
+          <span class="material-symbols-outlined">arrow_back</span>
+        </a>
+        <div class="logo">📡</div>
+        <div>
+          <div class="header-title">Incident History</div>
+          <div class="header-subtitle" id="retention-note">Complete permanent record</div>
+        </div>
+      </div>
+      <div class="header-right">
+        <div class="config-badge" id="storage-badge" title="Storage">
+          <span class="material-symbols-outlined">database</span>
+          <span id="storage-text">—</span>
+        </div>
+        <button class="help-btn" id="export-btn" title="Download the filtered events as JSON">
+          <span class="material-symbols-outlined">download</span>
+          <span>Export</span>
+        </button>
+        <a href="index.html" class="help-btn" title="Live dashboard">
+          <span class="material-symbols-outlined">monitor_heart</span>
+          <span>Live</span>
+        </a>
+      </div>
+    </header>
+
+    <!-- Summary tiles -->
+    <div class="summary-bar fade-in">
+      <div class="summary-card">
+        <div class="summary-label">Confirmed Outages</div>
+        <div class="summary-value down" id="stat-outages">—</div>
+        <div class="summary-detail" id="stat-outages-detail">in range</div>
+      </div>
+      <div class="summary-card">
+        <div class="summary-label">Blips (unconfirmed)</div>
+        <div class="summary-value" id="stat-blips" style="color: var(--warn);">—</div>
+        <div class="summary-detail">single failed checks</div>
+      </div>
+      <div class="summary-card">
+        <div class="summary-label">Dead Air</div>
+        <div class="summary-value" id="stat-deadair" style="color: #f59e0b;">—</div>
+        <div class="summary-detail">silence events</div>
+      </div>
+      <div class="summary-card">
+        <div class="summary-label">Alerts Emailed</div>
+        <div class="summary-value neutral" id="stat-emailed" style="color: var(--primary-light);">—</div>
+        <div class="summary-detail" id="stat-emailed-detail">of notifiable events</div>
+      </div>
+      <div class="summary-card">
+        <div class="summary-label">Total Downtime</div>
+        <div class="summary-value neutral" id="stat-downtime">—</div>
+        <div class="summary-detail">across all streams</div>
+      </div>
+    </div>
+
+    <!-- Heatmap -->
+    <div class="section-title">
+      <span class="material-symbols-outlined">calendar_month</span>
+      Outage Density
+      <span class="section-hint" id="heatmap-range"></span>
+    </div>
+    <div class="panel heatmap-panel fade-in">
+      <div class="heatmap-scroll">
+        <div class="heatmap-months" id="heatmap-months"></div>
+        <div class="heatmap" id="heatmap"></div>
+      </div>
+      <div class="heatmap-legend">
+        <span class="legend-label">Fewer</span>
+        <span class="legend-cell l0"></span>
+        <span class="legend-cell l1"></span>
+        <span class="legend-cell l2"></span>
+        <span class="legend-cell l3"></span>
+        <span class="legend-cell l4"></span>
+        <span class="legend-label">More</span>
+        <span class="legend-spacer"></span>
+        <span class="legend-label">Click a day to filter the timeline</span>
+      </div>
+    </div>
+
+    <!-- Root cause breakdown -->
+    <div class="section-title">
+      <span class="material-symbols-outlined">troubleshoot</span>
+      Root Causes
+    </div>
+    <div class="panel fade-in" id="causes-panel">
+      <div class="causes-list" id="causes-list"></div>
+    </div>
+
+    <!-- Filters -->
+    <div class="section-title">
+      <span class="material-symbols-outlined">history</span>
+      Event Timeline
+      <span class="section-hint" id="timeline-count"></span>
+    </div>
+
+    <div class="filter-bar fade-in">
+      <div class="filter-group">
+        <label for="f-range">Range</label>
+        <select id="f-range">
+          <option value="1">Last 24 hours</option>
+          <option value="7">Last 7 days</option>
+          <option value="30" selected>Last 30 days</option>
+          <option value="90">Last 90 days</option>
+          <option value="365">Last year</option>
+          <option value="all">All time</option>
+        </select>
+      </div>
+      <div class="filter-group">
+        <label for="f-stream">Stream</label>
+        <select id="f-stream"><option value="">All streams</option></select>
+      </div>
+      <div class="filter-group">
+        <label for="f-severity">Severity</label>
+        <select id="f-severity">
+          <option value="">All</option>
+          <option value="outage">Confirmed outage</option>
+          <option value="blip">Blip (unconfirmed)</option>
+          <option value="dead_air">Dead air</option>
+          <option value="recovery">Recovery</option>
+        </select>
+      </div>
+      <div class="filter-group">
+        <label for="f-cause">Root cause</label>
+        <select id="f-cause"><option value="">Any cause</option></select>
+      </div>
+      <div class="filter-group">
+        <label for="f-email">Email</label>
+        <select id="f-email">
+          <option value="">Any</option>
+          <option value="true">Alert sent</option>
+          <option value="false">No alert sent</option>
+        </select>
+      </div>
+      <div class="filter-group filter-search">
+        <label for="f-search">Search</label>
+        <input type="search" id="f-search" placeholder="Filter by text…">
+      </div>
+      <button class="filter-reset" id="f-reset" title="Clear all filters">
+        <span class="material-symbols-outlined">filter_alt_off</span>
+        Reset
+      </button>
+    </div>
+
+    <div class="active-filter-note" id="active-filter-note" style="display:none;"></div>
+
+    <!-- Timeline -->
+    <div class="panel timeline-panel fade-in">
+      <div id="timeline"></div>
+      <div class="timeline-more" id="timeline-more" style="display:none;">
+        <button class="btn-primary" id="load-more">Load more events</button>
+      </div>
+    </div>
+
+    <footer class="footer">
+      KPFT Icecast Stream Monitor · Incidents retained permanently · Powered by Pacifica Foundation
+    </footer>
+  </div>
+</div>
+
+<script src="history.js?v=dev"></script>
+</body>
+</html>

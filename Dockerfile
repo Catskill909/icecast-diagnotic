@@ -24,10 +24,16 @@ COPY --from=deps /app/node_modules ./node_modules
 COPY package.json ./
 COPY server.js ./
 COPY monitor.js ./
+COPY diagnose.js ./
+COPY store.js ./
 COPY public/ ./public/
 
 # Create data directory
 RUN mkdir -p /app/data && chown -R monitor:monitor /app
+
+# Incident history lives here and is retained permanently — this MUST be backed
+# by a persistent volume, or every redeploy starts the record over from zero.
+VOLUME ["/app/data"]
 
 USER monitor
 

@@ -53,6 +53,10 @@
           <span class="material-symbols-outlined">mail</span>
           <span id="email-status-text">—</span>
         </div>
+        <a href="history.html" class="help-btn" title="Complete permanent incident history">
+          <span class="material-symbols-outlined">history</span>
+          <span>History</span>
+        </a>
         <button class="help-btn" id="help-btn" title="App Documentation & Help">
           <span class="material-symbols-outlined">help</span>
           <span>Help</span>
@@ -103,6 +107,7 @@
       <div class="section-title">
         <span class="material-symbols-outlined">history</span>
         Recent Incidents
+        <a href="history.html" class="section-link">View all history →</a>
       </div>
       <div id="incidents-container">
         <div class="incidents-empty">
@@ -149,10 +154,26 @@
             </div>
 
             <div class="guide-item">
+              <div class="guide-icon"><span class="material-symbols-outlined">troubleshoot</span></div>
+              <div>
+                <h4>Root Cause Diagnosis</h4>
+                <p>Every failure is diagnosed, not just reported. Correlates the DNS/TCP/TLS timing breakdown against Icecast's live mount inventory to tell a <strong>source encoder dropout</strong> (mount 404s but the server is healthy — a studio problem) apart from a genuine <strong>server outage</strong>. Also checks whether other Pacifica stations are still streaming to confirm whether the fault is ours.</p>
+              </div>
+            </div>
+
+            <div class="guide-item">
               <div class="guide-icon"><span class="material-symbols-outlined">mail</span></div>
               <div>
                 <h4>Smart Email Alerts</h4>
-                <p>Sends immediate email alerts to staff (gm@kpft.org, omaclay@gmail.com, paul@hype.net) when a stream goes down or recovers, requiring 2 consecutive failures to prevent false alarms.</p>
+                <p>Alerts staff when a stream fails 2 consecutive checks, or <em>immediately</em> if a single failure hits every stream at once (server-level). Emails lead with the root cause and include specific remediation steps. Every event records whether its alert actually sent — a failed SMTP delivery is now visible rather than silent.</p>
+              </div>
+            </div>
+
+            <div class="guide-item">
+              <div class="guide-icon"><span class="material-symbols-outlined">history</span></div>
+              <div>
+                <h4>Permanent Incident History</h4>
+                <p>Every failed check is recorded forever — including brief <strong>blips</strong> that self-clear before triggering an alert, which previously left a red mark on the uptime bar with no record anywhere. Open <a href="history.html" style="color: var(--primary-light);">History</a> for the full filterable timeline, outage heatmap, and per-event drill-down.</p>
               </div>
             </div>
 

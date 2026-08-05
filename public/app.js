@@ -441,26 +441,54 @@
 
     // Sort by timestamp, newest first
     const sorted = [...incidents].sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
+    const shown = sorted.slice(0, 8);
+    const hidden = sorted.length - shown.length;
+
+    // Severity is richer than the old down/up split: a 'blip' is a single
+    // failed check that never met the alert threshold. Those used to leave a
+    // red mark on the uptime bar with no corresponding entry here.
+    const META = {
+      outage: { icon: 'error', label: 'Outage', cls: 'down' },
+      blip: { icon: 'bolt', label: 'Blip', cls: 'blip' },
+      dead_air: { icon: 'volume_off', label: 'Dead Air', cls: 'dead-air' },
+      recovery: { icon: 'check_circle', label: 'Recovered', cls: 'up' },
+    };
 
     container.innerHTML = `
       <div class="incidents-list">
-        ${sorted
-          .map(
-            (inc) => `
+        ${shown
+          .map((inc) => {
+            const sev = inc.severity || (inc.type === 'down' ? 'outage' : 'recovery');
+            const meta = META[sev] || META.outage;
+            const cause = inc.diagnosis?.causeLabel && inc.type !== 'up'
+              ? ` <span class="incident-cause">· ${escapeHtml(inc.diagnosis.causeLabel)}</span>`
+              : '';
+            const duration = inc.durationLabel
+              ? ` <span class="incident-cause">· lasted ${escapeHtml(inc.durationLabel)}</span>`
+              : '';
+            const mail = inc.email?.sent === true
+              ? '<span class="incident-mail sent" title="Alert email delivered">✉ sent</span>'
+              : inc.email?.attempted
+              ? '<span class="incident-mail failed" title="Alert email failed to send">✉ failed</span>'
+              : '<span class="incident-mail none" title="No alert email sent for this event">✉ none</span>';
+            return `
           <div class="incident">
-            <div class="incident-icon ${inc.type}">
-              <span class="material-symbols-outlined">${inc.type === 'down' ? 'error' : 'check_circle'}</span>
+            <div class="incident-icon ${meta.cls}">
+              <span class="material-symbols-outlined">${meta.icon}</span>
             </div>
             <div class="incident-content">
               <div class="incident-message">${escapeHtml(inc.message)}</div>
-              <div class="incident-time">${formatTimestamp(inc.timestamp)}</div>
+              <div class="incident-time">${formatTimestamp(inc.timestamp)}${cause}${duration}</div>
             </div>
-            <div class="incident-badge ${inc.type}">${inc.type === 'down' ? 'Outage' : 'Recovered'}</div>
-          </div>
-        `,
-          )
+            ${mail}
+            <div class="incident-badge ${meta.cls}">${meta.label}</div>
+          </div>`;
+          })
           .join('')}
       </div>
+      ${hidden > 0
+        ? `<div class="incidents-more"><a href="history.html">View all ${sorted.length} events from the last 24h, plus the full permanent history →</a></div>`
+        : '<div class="incidents-more"><a href="history.html">Open the full permanent incident history →</a></div>'}
     `;
   }
 
