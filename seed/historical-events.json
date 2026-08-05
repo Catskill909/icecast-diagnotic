@@ -1,0 +1,962 @@
+{
+ "seedId": "kpft-2026-08-04-to-08-05-reconstruction",
+ "generatedAt": "2026-08-05T13:41:01.954Z",
+ "note": "One-time historical backfill. Reconstructed from raw per-check telemetry captured from the live server on 2026-08-05 before the persistent-volume migration. Real timestamps/statuses/errors; inferred diagnoses.",
+ "events": [
+  {
+   "id": "evt_1785865973123_kpft-main_r0",
+   "timestamp": "2026-08-04T17:52:53.123Z",
+   "streamId": "kpft-main",
+   "streamName": "KPFT Main",
+   "type": "down",
+   "severity": "outage",
+   "confirmed": true,
+   "scope": "stream",
+   "message": "KPFT Main is DOWN — Source encoder disconnected (HTTP 404, Content-Type: text/html; charset=utf-8)",
+   "failedChecks": 4,
+   "resolvedAt": "2026-08-04T17:56:53.128Z",
+   "durationMs": 240005,
+   "durationLabel": "4m 0s",
+   "selfCleared": false,
+   "diagnosis": {
+    "cause": "source_disconnected",
+    "causeLabel": "Source encoder disconnected",
+    "confidence": "high",
+    "scope": "stream",
+    "httpStatus": 404,
+    "errorCode": "HTTP_404",
+    "errorMessage": "HTTP 404, Content-Type: text/html; charset=utf-8",
+    "evidence": [
+     "Icecast answered the request and returned HTTP 404 — the server process was alive and serving.",
+     "Mount /live_128 was not attached: no source client was connected to it.",
+     "A 404 on an Icecast mount means the SERVER is healthy and the SOURCE dropped — this is a studio-side fault, not a Pacifica server fault.",
+     "Only this stream was affected at this timestamp."
+    ],
+    "remediation": [
+     "The Icecast server is healthy — this is a SOURCE-side failure.",
+     "Check the Barix encoder / studio streaming appliance is powered and online.",
+     "Verify the encoder’s network link and its Icecast source password.",
+     "The mount reappears automatically once the source reconnects."
+    ],
+    "timings": {},
+    "icecast": {
+     "reachable": true,
+     "mountPath": "/live_128",
+     "mountPresent": false,
+     "serverId": "Icecast 2.4.3",
+     "host": "stations1.pacifica.org",
+     "admin": "streams@stations1.pacifica.org"
+    }
+   },
+   "reconstructed": true,
+   "reconstructionNote": "Reconstructed on 2026-08-05 from raw per-check telemetry captured before the storage migration. Timestamps, statuses and error strings are the real recorded values; the root-cause diagnosis was inferred from those errors plus cross-stream correlation, not from a live probe.",
+   "email": {
+    "attempted": false,
+    "sent": null,
+    "reason": "predates delivery tracking (alert was sent by the previous build, delivery not recorded)"
+   }
+  },
+  {
+   "id": "evt_1785865973123_kpft-hd2_r10",
+   "timestamp": "2026-08-04T17:52:53.123Z",
+   "streamId": "kpft-hd2",
+   "streamName": "KPFT HD2",
+   "type": "down",
+   "severity": "blip",
+   "confirmed": false,
+   "scope": "stream",
+   "message": "KPFT HD2 failed a check — Source encoder disconnected (HTTP 404, Content-Type: text/html; charset=utf-8)",
+   "failedChecks": 1,
+   "resolvedAt": "2026-08-04T17:53:53.125Z",
+   "durationMs": 60002,
+   "durationLabel": "1m 0s",
+   "selfCleared": true,
+   "diagnosis": {
+    "cause": "source_disconnected",
+    "causeLabel": "Source encoder disconnected",
+    "confidence": "high",
+    "scope": "stream",
+    "httpStatus": 404,
+    "errorCode": "HTTP_404",
+    "errorMessage": "HTTP 404, Content-Type: text/html; charset=utf-8",
+    "evidence": [
+     "Icecast answered the request and returned HTTP 404 — the server process was alive and serving.",
+     "Mount /HD3_128 was not attached: no source client was connected to it.",
+     "A 404 on an Icecast mount means the SERVER is healthy and the SOURCE dropped — this is a studio-side fault, not a Pacifica server fault.",
+     "2 of 3 monitored KPFT streams failed at this same timestamp."
+    ],
+    "remediation": [
+     "The Icecast server is healthy — this is a SOURCE-side failure.",
+     "Check the Barix encoder / studio streaming appliance is powered and online.",
+     "Verify the encoder’s network link and its Icecast source password.",
+     "The mount reappears automatically once the source reconnects."
+    ],
+    "timings": {},
+    "icecast": {
+     "reachable": true,
+     "mountPath": "/HD3_128",
+     "mountPresent": false,
+     "serverId": "Icecast 2.4.3",
+     "host": "stations1.pacifica.org",
+     "admin": "streams@stations1.pacifica.org"
+    }
+   },
+   "reconstructed": true,
+   "reconstructionNote": "Reconstructed on 2026-08-05 from raw per-check telemetry captured before the storage migration. Timestamps, statuses and error strings are the real recorded values; the root-cause diagnosis was inferred from those errors plus cross-stream correlation, not from a live probe.",
+   "email": {
+    "attempted": false,
+    "sent": null,
+    "reason": "unconfirmed single-check blip — the previous build sent no alert and kept no record"
+   }
+  },
+  {
+   "id": "evt_1785866093126_kpft-hd2_r11",
+   "timestamp": "2026-08-04T17:54:53.126Z",
+   "streamId": "kpft-hd2",
+   "streamName": "KPFT HD2",
+   "type": "down",
+   "severity": "blip",
+   "confirmed": false,
+   "scope": "stream",
+   "message": "KPFT HD2 failed a check — Source encoder disconnected (HTTP 404, Content-Type: text/html; charset=utf-8)",
+   "failedChecks": 1,
+   "resolvedAt": "2026-08-04T17:55:53.127Z",
+   "durationMs": 60001,
+   "durationLabel": "1m 0s",
+   "selfCleared": true,
+   "diagnosis": {
+    "cause": "source_disconnected",
+    "causeLabel": "Source encoder disconnected",
+    "confidence": "high",
+    "scope": "stream",
+    "httpStatus": 404,
+    "errorCode": "HTTP_404",
+    "errorMessage": "HTTP 404, Content-Type: text/html; charset=utf-8",
+    "evidence": [
+     "Icecast answered the request and returned HTTP 404 — the server process was alive and serving.",
+     "Mount /HD3_128 was not attached: no source client was connected to it.",
+     "A 404 on an Icecast mount means the SERVER is healthy and the SOURCE dropped — this is a studio-side fault, not a Pacifica server fault.",
+     "2 of 3 monitored KPFT streams failed at this same timestamp."
+    ],
+    "remediation": [
+     "The Icecast server is healthy — this is a SOURCE-side failure.",
+     "Check the Barix encoder / studio streaming appliance is powered and online.",
+     "Verify the encoder’s network link and its Icecast source password.",
+     "The mount reappears automatically once the source reconnects."
+    ],
+    "timings": {},
+    "icecast": {
+     "reachable": true,
+     "mountPath": "/HD3_128",
+     "mountPresent": false,
+     "serverId": "Icecast 2.4.3",
+     "host": "stations1.pacifica.org",
+     "admin": "streams@stations1.pacifica.org"
+    }
+   },
+   "reconstructed": true,
+   "reconstructionNote": "Reconstructed on 2026-08-05 from raw per-check telemetry captured before the storage migration. Timestamps, statuses and error strings are the real recorded values; the root-cause diagnosis was inferred from those errors plus cross-stream correlation, not from a live probe.",
+   "email": {
+    "attempted": false,
+    "sent": null,
+    "reason": "unconfirmed single-check blip — the previous build sent no alert and kept no record"
+   }
+  },
+  {
+   "id": "evt_1785866213128_kpft-main_r1",
+   "timestamp": "2026-08-04T17:56:53.128Z",
+   "streamId": "kpft-main",
+   "streamName": "KPFT Main",
+   "type": "up",
+   "severity": "recovery",
+   "confirmed": true,
+   "scope": "stream",
+   "message": "KPFT Main has RECOVERED after 4m 0s (response 297ms)",
+   "relatedTo": "evt_1785865973123_kpft-main_r0",
+   "durationMs": 240005,
+   "durationLabel": "4m 0s",
+   "diagnosis": {
+    "cause": null,
+    "causeLabel": "Healthy",
+    "confidence": "high",
+    "scope": "stream",
+    "evidence": [
+     "Stream responded normally with audio content."
+    ],
+    "remediation": [],
+    "httpStatus": 200,
+    "errorCode": null,
+    "errorMessage": null,
+    "timings": {},
+    "icecast": {
+     "reachable": true,
+     "mountPath": "/live_128",
+     "mountPresent": true
+    }
+   },
+   "reconstructed": true,
+   "email": {
+    "attempted": false,
+    "sent": null,
+    "reason": "predates delivery tracking"
+   }
+  },
+  {
+   "id": "evt_1785866213128_kpft-hd2_r12",
+   "timestamp": "2026-08-04T17:56:53.128Z",
+   "streamId": "kpft-hd2",
+   "streamName": "KPFT HD2",
+   "type": "down",
+   "severity": "blip",
+   "confirmed": false,
+   "scope": "stream",
+   "message": "KPFT HD2 failed a check — Source encoder disconnected (HTTP 404, Content-Type: text/html; charset=utf-8)",
+   "failedChecks": 1,
+   "resolvedAt": "2026-08-04T17:57:53.128Z",
+   "durationMs": 60000,
+   "durationLabel": "1m 0s",
+   "selfCleared": true,
+   "diagnosis": {
+    "cause": "source_disconnected",
+    "causeLabel": "Source encoder disconnected",
+    "confidence": "high",
+    "scope": "stream",
+    "httpStatus": 404,
+    "errorCode": "HTTP_404",
+    "errorMessage": "HTTP 404, Content-Type: text/html; charset=utf-8",
+    "evidence": [
+     "Icecast answered the request and returned HTTP 404 — the server process was alive and serving.",
+     "Mount /HD3_128 was not attached: no source client was connected to it.",
+     "A 404 on an Icecast mount means the SERVER is healthy and the SOURCE dropped — this is a studio-side fault, not a Pacifica server fault.",
+     "Only this stream was affected at this timestamp."
+    ],
+    "remediation": [
+     "The Icecast server is healthy — this is a SOURCE-side failure.",
+     "Check the Barix encoder / studio streaming appliance is powered and online.",
+     "Verify the encoder’s network link and its Icecast source password.",
+     "The mount reappears automatically once the source reconnects."
+    ],
+    "timings": {},
+    "icecast": {
+     "reachable": true,
+     "mountPath": "/HD3_128",
+     "mountPresent": false,
+     "serverId": "Icecast 2.4.3",
+     "host": "stations1.pacifica.org",
+     "admin": "streams@stations1.pacifica.org"
+    }
+   },
+   "reconstructed": true,
+   "reconstructionNote": "Reconstructed on 2026-08-05 from raw per-check telemetry captured before the storage migration. Timestamps, statuses and error strings are the real recorded values; the root-cause diagnosis was inferred from those errors plus cross-stream correlation, not from a live probe.",
+   "email": {
+    "attempted": false,
+    "sent": null,
+    "reason": "unconfirmed single-check blip — the previous build sent no alert and kept no record"
+   }
+  },
+  {
+   "id": "evt_1785866273128_kpft-main_r2",
+   "timestamp": "2026-08-04T17:57:53.128Z",
+   "streamId": "kpft-main",
+   "streamName": "KPFT Main",
+   "type": "down",
+   "severity": "outage",
+   "confirmed": true,
+   "scope": "stream",
+   "message": "KPFT Main is DOWN — Source encoder disconnected (HTTP 404, Content-Type: text/html; charset=utf-8)",
+   "failedChecks": 3,
+   "resolvedAt": "2026-08-04T18:00:53.134Z",
+   "durationMs": 180006,
+   "durationLabel": "3m 0s",
+   "selfCleared": false,
+   "diagnosis": {
+    "cause": "source_disconnected",
+    "causeLabel": "Source encoder disconnected",
+    "confidence": "high",
+    "scope": "stream",
+    "httpStatus": 404,
+    "errorCode": "HTTP_404",
+    "errorMessage": "HTTP 404, Content-Type: text/html; charset=utf-8",
+    "evidence": [
+     "Icecast answered the request and returned HTTP 404 — the server process was alive and serving.",
+     "Mount /live_128 was not attached: no source client was connected to it.",
+     "A 404 on an Icecast mount means the SERVER is healthy and the SOURCE dropped — this is a studio-side fault, not a Pacifica server fault.",
+     "2 of 3 monitored KPFT streams failed at this same timestamp."
+    ],
+    "remediation": [
+     "The Icecast server is healthy — this is a SOURCE-side failure.",
+     "Check the Barix encoder / studio streaming appliance is powered and online.",
+     "Verify the encoder’s network link and its Icecast source password.",
+     "The mount reappears automatically once the source reconnects."
+    ],
+    "timings": {},
+    "icecast": {
+     "reachable": true,
+     "mountPath": "/live_128",
+     "mountPresent": false,
+     "serverId": "Icecast 2.4.3",
+     "host": "stations1.pacifica.org",
+     "admin": "streams@stations1.pacifica.org"
+    }
+   },
+   "reconstructed": true,
+   "reconstructionNote": "Reconstructed on 2026-08-05 from raw per-check telemetry captured before the storage migration. Timestamps, statuses and error strings are the real recorded values; the root-cause diagnosis was inferred from those errors plus cross-stream correlation, not from a live probe.",
+   "email": {
+    "attempted": false,
+    "sent": null,
+    "reason": "predates delivery tracking (alert was sent by the previous build, delivery not recorded)"
+   }
+  },
+  {
+   "id": "evt_1785866333131_kpft-hd2_r13",
+   "timestamp": "2026-08-04T17:58:53.131Z",
+   "streamId": "kpft-hd2",
+   "streamName": "KPFT HD2",
+   "type": "down",
+   "severity": "outage",
+   "confirmed": true,
+   "scope": "stream",
+   "message": "KPFT HD2 is DOWN — Source encoder disconnected (HTTP 404, Content-Type: text/html; charset=utf-8)",
+   "failedChecks": 2,
+   "resolvedAt": "2026-08-04T18:00:53.134Z",
+   "durationMs": 120003,
+   "durationLabel": "2m 0s",
+   "selfCleared": false,
+   "diagnosis": {
+    "cause": "source_disconnected",
+    "causeLabel": "Source encoder disconnected",
+    "confidence": "high",
+    "scope": "stream",
+    "httpStatus": 404,
+    "errorCode": "HTTP_404",
+    "errorMessage": "HTTP 404, Content-Type: text/html; charset=utf-8",
+    "evidence": [
+     "Icecast answered the request and returned HTTP 404 — the server process was alive and serving.",
+     "Mount /HD3_128 was not attached: no source client was connected to it.",
+     "A 404 on an Icecast mount means the SERVER is healthy and the SOURCE dropped — this is a studio-side fault, not a Pacifica server fault.",
+     "2 of 3 monitored KPFT streams failed at this same timestamp."
+    ],
+    "remediation": [
+     "The Icecast server is healthy — this is a SOURCE-side failure.",
+     "Check the Barix encoder / studio streaming appliance is powered and online.",
+     "Verify the encoder’s network link and its Icecast source password.",
+     "The mount reappears automatically once the source reconnects."
+    ],
+    "timings": {},
+    "icecast": {
+     "reachable": true,
+     "mountPath": "/HD3_128",
+     "mountPresent": false,
+     "serverId": "Icecast 2.4.3",
+     "host": "stations1.pacifica.org",
+     "admin": "streams@stations1.pacifica.org"
+    }
+   },
+   "reconstructed": true,
+   "reconstructionNote": "Reconstructed on 2026-08-05 from raw per-check telemetry captured before the storage migration. Timestamps, statuses and error strings are the real recorded values; the root-cause diagnosis was inferred from those errors plus cross-stream correlation, not from a live probe.",
+   "email": {
+    "attempted": false,
+    "sent": null,
+    "reason": "predates delivery tracking (alert was sent by the previous build, delivery not recorded)"
+   }
+  },
+  {
+   "id": "evt_1785866453134_kpft-main_r3",
+   "timestamp": "2026-08-04T18:00:53.134Z",
+   "streamId": "kpft-main",
+   "streamName": "KPFT Main",
+   "type": "up",
+   "severity": "recovery",
+   "confirmed": true,
+   "scope": "stream",
+   "message": "KPFT Main has RECOVERED after 3m 0s (response 370ms)",
+   "relatedTo": "evt_1785866273128_kpft-main_r2",
+   "durationMs": 180006,
+   "durationLabel": "3m 0s",
+   "diagnosis": {
+    "cause": null,
+    "causeLabel": "Healthy",
+    "confidence": "high",
+    "scope": "stream",
+    "evidence": [
+     "Stream responded normally with audio content."
+    ],
+    "remediation": [],
+    "httpStatus": 200,
+    "errorCode": null,
+    "errorMessage": null,
+    "timings": {},
+    "icecast": {
+     "reachable": true,
+     "mountPath": "/live_128",
+     "mountPresent": true
+    }
+   },
+   "reconstructed": true,
+   "email": {
+    "attempted": false,
+    "sent": null,
+    "reason": "predates delivery tracking"
+   }
+  },
+  {
+   "id": "evt_1785866453134_kpft-hd2_r14",
+   "timestamp": "2026-08-04T18:00:53.134Z",
+   "streamId": "kpft-hd2",
+   "streamName": "KPFT HD2",
+   "type": "up",
+   "severity": "recovery",
+   "confirmed": true,
+   "scope": "stream",
+   "message": "KPFT HD2 has RECOVERED after 2m 0s (response 478ms)",
+   "relatedTo": "evt_1785866333131_kpft-hd2_r13",
+   "durationMs": 120003,
+   "durationLabel": "2m 0s",
+   "diagnosis": {
+    "cause": null,
+    "causeLabel": "Healthy",
+    "confidence": "high",
+    "scope": "stream",
+    "evidence": [
+     "Stream responded normally with audio content."
+    ],
+    "remediation": [],
+    "httpStatus": 200,
+    "errorCode": null,
+    "errorMessage": null,
+    "timings": {},
+    "icecast": {
+     "reachable": true,
+     "mountPath": "/HD3_128",
+     "mountPresent": true
+    }
+   },
+   "reconstructed": true,
+   "email": {
+    "attempted": false,
+    "sent": null,
+    "reason": "predates delivery tracking"
+   }
+  },
+  {
+   "id": "evt_1785866813141_kpft-main_r4",
+   "timestamp": "2026-08-04T18:06:53.141Z",
+   "streamId": "kpft-main",
+   "streamName": "KPFT Main",
+   "type": "down",
+   "severity": "outage",
+   "confirmed": true,
+   "scope": "stream",
+   "message": "KPFT Main is DOWN — Source encoder disconnected (HTTP 404, Content-Type: text/html; charset=utf-8)",
+   "failedChecks": 7,
+   "resolvedAt": "2026-08-04T18:13:53.146Z",
+   "durationMs": 420005,
+   "durationLabel": "7m 0s",
+   "selfCleared": false,
+   "diagnosis": {
+    "cause": "source_disconnected",
+    "causeLabel": "Source encoder disconnected",
+    "confidence": "high",
+    "scope": "stream",
+    "httpStatus": 404,
+    "errorCode": "HTTP_404",
+    "errorMessage": "HTTP 404, Content-Type: text/html; charset=utf-8",
+    "evidence": [
+     "Icecast answered the request and returned HTTP 404 — the server process was alive and serving.",
+     "Mount /live_128 was not attached: no source client was connected to it.",
+     "A 404 on an Icecast mount means the SERVER is healthy and the SOURCE dropped — this is a studio-side fault, not a Pacifica server fault.",
+     "Only this stream was affected at this timestamp."
+    ],
+    "remediation": [
+     "The Icecast server is healthy — this is a SOURCE-side failure.",
+     "Check the Barix encoder / studio streaming appliance is powered and online.",
+     "Verify the encoder’s network link and its Icecast source password.",
+     "The mount reappears automatically once the source reconnects."
+    ],
+    "timings": {},
+    "icecast": {
+     "reachable": true,
+     "mountPath": "/live_128",
+     "mountPresent": false,
+     "serverId": "Icecast 2.4.3",
+     "host": "stations1.pacifica.org",
+     "admin": "streams@stations1.pacifica.org"
+    }
+   },
+   "reconstructed": true,
+   "reconstructionNote": "Reconstructed on 2026-08-05 from raw per-check telemetry captured before the storage migration. Timestamps, statuses and error strings are the real recorded values; the root-cause diagnosis was inferred from those errors plus cross-stream correlation, not from a live probe.",
+   "email": {
+    "attempted": false,
+    "sent": null,
+    "reason": "predates delivery tracking (alert was sent by the previous build, delivery not recorded)"
+   }
+  },
+  {
+   "id": "evt_1785867233146_kpft-main_r5",
+   "timestamp": "2026-08-04T18:13:53.146Z",
+   "streamId": "kpft-main",
+   "streamName": "KPFT Main",
+   "type": "up",
+   "severity": "recovery",
+   "confirmed": true,
+   "scope": "stream",
+   "message": "KPFT Main has RECOVERED after 7m 0s (response 209ms)",
+   "relatedTo": "evt_1785866813141_kpft-main_r4",
+   "durationMs": 420005,
+   "durationLabel": "7m 0s",
+   "diagnosis": {
+    "cause": null,
+    "causeLabel": "Healthy",
+    "confidence": "high",
+    "scope": "stream",
+    "evidence": [
+     "Stream responded normally with audio content."
+    ],
+    "remediation": [],
+    "httpStatus": 200,
+    "errorCode": null,
+    "errorMessage": null,
+    "timings": {},
+    "icecast": {
+     "reachable": true,
+     "mountPath": "/live_128",
+     "mountPresent": true
+    }
+   },
+   "reconstructed": true,
+   "email": {
+    "attempted": false,
+    "sent": null,
+    "reason": "predates delivery tracking"
+   }
+  },
+  {
+   "id": "evt_1785870353208_kpft-main_r6",
+   "timestamp": "2026-08-04T19:05:53.208Z",
+   "streamId": "kpft-main",
+   "streamName": "KPFT Main",
+   "type": "down",
+   "severity": "blip",
+   "confirmed": false,
+   "scope": "server",
+   "message": "KPFT Main failed a check — Connection reset by server (socket hang up)",
+   "failedChecks": 1,
+   "resolvedAt": "2026-08-04T19:06:53.209Z",
+   "durationMs": 60001,
+   "durationLabel": "1m 0s",
+   "selfCleared": true,
+   "diagnosis": {
+    "cause": "connection_reset",
+    "causeLabel": "Connection reset by server",
+    "confidence": "high",
+    "scope": "server",
+    "httpStatus": null,
+    "errorCode": "ECONNRESET",
+    "errorMessage": "socket hang up",
+    "evidence": [
+     "The server accepted the connection then dropped it mid-transfer.",
+     "ALL 3 monitored streams failed at this same timestamp — a server-level or network-level event, not a per-stream fault.",
+     "Typical of an Icecast restart, a hit connection limit, or a proxy recycling connections."
+    ],
+    "remediation": [
+     "Often transient: an Icecast restart, a connection-limit ceiling, or a proxy recycling.",
+     "If this repeats, check Icecast max-clients and server load."
+    ],
+    "timings": {},
+    "icecast": {
+     "reachable": true,
+     "mountPath": "/live_128",
+     "mountPresent": true,
+     "serverId": "Icecast 2.4.3"
+    }
+   },
+   "reconstructed": true,
+   "reconstructionNote": "Reconstructed on 2026-08-05 from raw per-check telemetry captured before the storage migration. Timestamps, statuses and error strings are the real recorded values; the root-cause diagnosis was inferred from those errors plus cross-stream correlation, not from a live probe.",
+   "email": {
+    "attempted": false,
+    "sent": null,
+    "reason": "unconfirmed single-check blip — the previous build sent no alert and kept no record"
+   }
+  },
+  {
+   "id": "evt_1785870353208_kpft-hd2_r15",
+   "timestamp": "2026-08-04T19:05:53.208Z",
+   "streamId": "kpft-hd2",
+   "streamName": "KPFT HD2",
+   "type": "down",
+   "severity": "blip",
+   "confirmed": false,
+   "scope": "server",
+   "message": "KPFT HD2 failed a check — Connection reset by server (socket hang up)",
+   "failedChecks": 1,
+   "resolvedAt": "2026-08-04T19:06:53.209Z",
+   "durationMs": 60001,
+   "durationLabel": "1m 0s",
+   "selfCleared": true,
+   "diagnosis": {
+    "cause": "connection_reset",
+    "causeLabel": "Connection reset by server",
+    "confidence": "high",
+    "scope": "server",
+    "httpStatus": null,
+    "errorCode": "ECONNRESET",
+    "errorMessage": "socket hang up",
+    "evidence": [
+     "The server accepted the connection then dropped it mid-transfer.",
+     "ALL 3 monitored streams failed at this same timestamp — a server-level or network-level event, not a per-stream fault.",
+     "Typical of an Icecast restart, a hit connection limit, or a proxy recycling connections."
+    ],
+    "remediation": [
+     "Often transient: an Icecast restart, a connection-limit ceiling, or a proxy recycling.",
+     "If this repeats, check Icecast max-clients and server load."
+    ],
+    "timings": {},
+    "icecast": {
+     "reachable": true,
+     "mountPath": "/HD3_128",
+     "mountPresent": true,
+     "serverId": "Icecast 2.4.3"
+    }
+   },
+   "reconstructed": true,
+   "reconstructionNote": "Reconstructed on 2026-08-05 from raw per-check telemetry captured before the storage migration. Timestamps, statuses and error strings are the real recorded values; the root-cause diagnosis was inferred from those errors plus cross-stream correlation, not from a live probe.",
+   "email": {
+    "attempted": false,
+    "sent": null,
+    "reason": "unconfirmed single-check blip — the previous build sent no alert and kept no record"
+   }
+  },
+  {
+   "id": "evt_1785870353208_kpft-hd3_r19",
+   "timestamp": "2026-08-04T19:05:53.208Z",
+   "streamId": "kpft-hd3",
+   "streamName": "KPFT HD3",
+   "type": "down",
+   "severity": "blip",
+   "confirmed": false,
+   "scope": "server",
+   "message": "KPFT HD3 failed a check — Connection reset by server (socket hang up)",
+   "failedChecks": 1,
+   "resolvedAt": "2026-08-04T19:06:53.209Z",
+   "durationMs": 60001,
+   "durationLabel": "1m 0s",
+   "selfCleared": true,
+   "diagnosis": {
+    "cause": "connection_reset",
+    "causeLabel": "Connection reset by server",
+    "confidence": "high",
+    "scope": "server",
+    "httpStatus": null,
+    "errorCode": "ECONNRESET",
+    "errorMessage": "socket hang up",
+    "evidence": [
+     "The server accepted the connection then dropped it mid-transfer.",
+     "ALL 3 monitored streams failed at this same timestamp — a server-level or network-level event, not a per-stream fault.",
+     "Typical of an Icecast restart, a hit connection limit, or a proxy recycling connections."
+    ],
+    "remediation": [
+     "Often transient: an Icecast restart, a connection-limit ceiling, or a proxy recycling.",
+     "If this repeats, check Icecast max-clients and server load."
+    ],
+    "timings": {},
+    "icecast": {
+     "reachable": true,
+     "mountPath": "/classic_country",
+     "mountPresent": true,
+     "serverId": "Icecast 2.4.3"
+    }
+   },
+   "reconstructed": true,
+   "reconstructionNote": "Reconstructed on 2026-08-05 from raw per-check telemetry captured before the storage migration. Timestamps, statuses and error strings are the real recorded values; the root-cause diagnosis was inferred from those errors plus cross-stream correlation, not from a live probe.",
+   "email": {
+    "attempted": false,
+    "sent": null,
+    "reason": "unconfirmed single-check blip — the previous build sent no alert and kept no record"
+   }
+  },
+  {
+   "id": "evt_1785894113783_kpft-main_r7",
+   "timestamp": "2026-08-05T01:41:53.783Z",
+   "streamId": "kpft-main",
+   "streamName": "KPFT Main",
+   "type": "down",
+   "severity": "blip",
+   "confirmed": false,
+   "scope": "stream",
+   "message": "KPFT Main failed a check — Connection reset by server (socket hang up)",
+   "failedChecks": 1,
+   "resolvedAt": "2026-08-05T01:42:53.784Z",
+   "durationMs": 60001,
+   "durationLabel": "1m 0s",
+   "selfCleared": true,
+   "diagnosis": {
+    "cause": "connection_reset",
+    "causeLabel": "Connection reset by server",
+    "confidence": "high",
+    "scope": "stream",
+    "httpStatus": null,
+    "errorCode": "ECONNRESET",
+    "errorMessage": "socket hang up",
+    "evidence": [
+     "The server accepted the connection then dropped it mid-transfer.",
+     "2 of 3 monitored streams failed at this timestamp.",
+     "Typical of an Icecast restart, a hit connection limit, or a proxy recycling connections."
+    ],
+    "remediation": [
+     "Often transient: an Icecast restart, a connection-limit ceiling, or a proxy recycling.",
+     "If this repeats, check Icecast max-clients and server load."
+    ],
+    "timings": {},
+    "icecast": {
+     "reachable": true,
+     "mountPath": "/live_128",
+     "mountPresent": true,
+     "serverId": "Icecast 2.4.3"
+    }
+   },
+   "reconstructed": true,
+   "reconstructionNote": "Reconstructed on 2026-08-05 from raw per-check telemetry captured before the storage migration. Timestamps, statuses and error strings are the real recorded values; the root-cause diagnosis was inferred from those errors plus cross-stream correlation, not from a live probe.",
+   "email": {
+    "attempted": false,
+    "sent": null,
+    "reason": "unconfirmed single-check blip — the previous build sent no alert and kept no record"
+   }
+  },
+  {
+   "id": "evt_1785894113783_kpft-hd2_r16",
+   "timestamp": "2026-08-05T01:41:53.783Z",
+   "streamId": "kpft-hd2",
+   "streamName": "KPFT HD2",
+   "type": "down",
+   "severity": "blip",
+   "confirmed": false,
+   "scope": "stream",
+   "message": "KPFT HD2 failed a check — Connection reset by server (socket hang up)",
+   "failedChecks": 1,
+   "resolvedAt": "2026-08-05T01:42:53.784Z",
+   "durationMs": 60001,
+   "durationLabel": "1m 0s",
+   "selfCleared": true,
+   "diagnosis": {
+    "cause": "connection_reset",
+    "causeLabel": "Connection reset by server",
+    "confidence": "high",
+    "scope": "stream",
+    "httpStatus": null,
+    "errorCode": "ECONNRESET",
+    "errorMessage": "socket hang up",
+    "evidence": [
+     "The server accepted the connection then dropped it mid-transfer.",
+     "2 of 3 monitored streams failed at this timestamp.",
+     "Typical of an Icecast restart, a hit connection limit, or a proxy recycling connections."
+    ],
+    "remediation": [
+     "Often transient: an Icecast restart, a connection-limit ceiling, or a proxy recycling.",
+     "If this repeats, check Icecast max-clients and server load."
+    ],
+    "timings": {},
+    "icecast": {
+     "reachable": true,
+     "mountPath": "/HD3_128",
+     "mountPresent": true,
+     "serverId": "Icecast 2.4.3"
+    }
+   },
+   "reconstructed": true,
+   "reconstructionNote": "Reconstructed on 2026-08-05 from raw per-check telemetry captured before the storage migration. Timestamps, statuses and error strings are the real recorded values; the root-cause diagnosis was inferred from those errors plus cross-stream correlation, not from a live probe.",
+   "email": {
+    "attempted": false,
+    "sent": null,
+    "reason": "unconfirmed single-check blip — the previous build sent no alert and kept no record"
+   }
+  },
+  {
+   "id": "evt_1785894473793_kpft-hd2_r17",
+   "timestamp": "2026-08-05T01:47:53.793Z",
+   "streamId": "kpft-hd2",
+   "streamName": "KPFT HD2",
+   "type": "down",
+   "severity": "blip",
+   "confirmed": false,
+   "scope": "stream",
+   "message": "KPFT HD2 failed a check — Connection reset by server (socket hang up)",
+   "failedChecks": 1,
+   "resolvedAt": "2026-08-05T01:48:53.795Z",
+   "durationMs": 60002,
+   "durationLabel": "1m 0s",
+   "selfCleared": true,
+   "diagnosis": {
+    "cause": "connection_reset",
+    "causeLabel": "Connection reset by server",
+    "confidence": "medium",
+    "scope": "stream",
+    "httpStatus": null,
+    "errorCode": "ECONNRESET",
+    "errorMessage": "socket hang up",
+    "evidence": [
+     "The server accepted the connection then dropped it mid-transfer.",
+     "1 of 3 monitored streams failed at this timestamp.",
+     "Typical of an Icecast restart, a hit connection limit, or a proxy recycling connections."
+    ],
+    "remediation": [
+     "Often transient: an Icecast restart, a connection-limit ceiling, or a proxy recycling.",
+     "If this repeats, check Icecast max-clients and server load."
+    ],
+    "timings": {},
+    "icecast": {
+     "reachable": true,
+     "mountPath": "/HD3_128",
+     "mountPresent": true,
+     "serverId": "Icecast 2.4.3"
+    }
+   },
+   "reconstructed": true,
+   "reconstructionNote": "Reconstructed on 2026-08-05 from raw per-check telemetry captured before the storage migration. Timestamps, statuses and error strings are the real recorded values; the root-cause diagnosis was inferred from those errors plus cross-stream correlation, not from a live probe.",
+   "email": {
+    "attempted": false,
+    "sent": null,
+    "reason": "unconfirmed single-check blip — the previous build sent no alert and kept no record"
+   }
+  },
+  {
+   "id": "evt_1785909894347_kpft-hd2_r18",
+   "timestamp": "2026-08-05T06:04:54.347Z",
+   "streamId": "kpft-hd2",
+   "streamName": "KPFT HD2",
+   "type": "down",
+   "severity": "blip",
+   "confirmed": false,
+   "scope": "stream",
+   "message": "KPFT HD2 failed a check — Connection reset by server (socket hang up)",
+   "failedChecks": 1,
+   "resolvedAt": "2026-08-05T06:05:54.350Z",
+   "durationMs": 60003,
+   "durationLabel": "1m 0s",
+   "selfCleared": true,
+   "diagnosis": {
+    "cause": "connection_reset",
+    "causeLabel": "Connection reset by server",
+    "confidence": "medium",
+    "scope": "stream",
+    "httpStatus": null,
+    "errorCode": "ECONNRESET",
+    "errorMessage": "socket hang up",
+    "evidence": [
+     "The server accepted the connection then dropped it mid-transfer.",
+     "1 of 3 monitored streams failed at this timestamp.",
+     "Typical of an Icecast restart, a hit connection limit, or a proxy recycling connections."
+    ],
+    "remediation": [
+     "Often transient: an Icecast restart, a connection-limit ceiling, or a proxy recycling.",
+     "If this repeats, check Icecast max-clients and server load."
+    ],
+    "timings": {},
+    "icecast": {
+     "reachable": true,
+     "mountPath": "/HD3_128",
+     "mountPresent": true,
+     "serverId": "Icecast 2.4.3"
+    }
+   },
+   "reconstructed": true,
+   "reconstructionNote": "Reconstructed on 2026-08-05 from raw per-check telemetry captured before the storage migration. Timestamps, statuses and error strings are the real recorded values; the root-cause diagnosis was inferred from those errors plus cross-stream correlation, not from a live probe.",
+   "email": {
+    "attempted": false,
+    "sent": null,
+    "reason": "unconfirmed single-check blip — the previous build sent no alert and kept no record"
+   }
+  },
+  {
+   "id": "evt_1785922974819_kpft-main_r8",
+   "timestamp": "2026-08-05T09:42:54.819Z",
+   "streamId": "kpft-main",
+   "streamName": "KPFT Main",
+   "type": "down",
+   "severity": "outage",
+   "confirmed": true,
+   "scope": "stream",
+   "message": "KPFT Main is DOWN — Source encoder disconnected (HTTP 404, Content-Type: text/html; charset=utf-8)",
+   "failedChecks": 8,
+   "resolvedAt": "2026-08-05T09:50:54.835Z",
+   "durationMs": 480016,
+   "durationLabel": "8m 0s",
+   "selfCleared": false,
+   "diagnosis": {
+    "cause": "source_disconnected",
+    "causeLabel": "Source encoder disconnected",
+    "confidence": "high",
+    "scope": "stream",
+    "httpStatus": 404,
+    "errorCode": "HTTP_404",
+    "errorMessage": "HTTP 404, Content-Type: text/html; charset=utf-8",
+    "evidence": [
+     "Icecast answered the request and returned HTTP 404 — the server process was alive and serving.",
+     "Mount /live_128 was not attached: no source client was connected to it.",
+     "A 404 on an Icecast mount means the SERVER is healthy and the SOURCE dropped — this is a studio-side fault, not a Pacifica server fault.",
+     "Only this stream was affected at this timestamp."
+    ],
+    "remediation": [
+     "The Icecast server is healthy — this is a SOURCE-side failure.",
+     "Check the Barix encoder / studio streaming appliance is powered and online.",
+     "Verify the encoder’s network link and its Icecast source password.",
+     "The mount reappears automatically once the source reconnects."
+    ],
+    "timings": {},
+    "icecast": {
+     "reachable": true,
+     "mountPath": "/live_128",
+     "mountPresent": false,
+     "serverId": "Icecast 2.4.3",
+     "host": "stations1.pacifica.org",
+     "admin": "streams@stations1.pacifica.org"
+    }
+   },
+   "reconstructed": true,
+   "reconstructionNote": "Reconstructed on 2026-08-05 from raw per-check telemetry captured before the storage migration. Timestamps, statuses and error strings are the real recorded values; the root-cause diagnosis was inferred from those errors plus cross-stream correlation, not from a live probe.",
+   "email": {
+    "attempted": false,
+    "sent": null,
+    "reason": "predates delivery tracking (alert was sent by the previous build, delivery not recorded)"
+   }
+  },
+  {
+   "id": "evt_1785923454835_kpft-main_r9",
+   "timestamp": "2026-08-05T09:50:54.835Z",
+   "streamId": "kpft-main",
+   "streamName": "KPFT Main",
+   "type": "up",
+   "severity": "recovery",
+   "confirmed": true,
+   "scope": "stream",
+   "message": "KPFT Main has RECOVERED after 8m 0s (response 465ms)",
+   "relatedTo": "evt_1785922974819_kpft-main_r8",
+   "durationMs": 480016,
+   "durationLabel": "8m 0s",
+   "diagnosis": {
+    "cause": null,
+    "causeLabel": "Healthy",
+    "confidence": "high",
+    "scope": "stream",
+    "evidence": [
+     "Stream responded normally with audio content."
+    ],
+    "remediation": [],
+    "httpStatus": 200,
+    "errorCode": null,
+    "errorMessage": null,
+    "timings": {},
+    "icecast": {
+     "reachable": true,
+     "mountPath": "/live_128",
+     "mountPresent": true
+    }
+   },
+   "reconstructed": true,
+   "email": {
+    "attempted": false,
+    "sent": null,
+    "reason": "predates delivery tracking"
+   }
+  }
+ ]
+}

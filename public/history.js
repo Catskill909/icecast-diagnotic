@@ -348,6 +348,11 @@
       ? '<span class="badge scope-station">Station-wide</span>'
       : '';
 
+    // Backfilled history must never read as a live observation.
+    const reconBadge = e.reconstructed
+      ? '<span class="badge reconstructed" title="Backfilled from raw telemetry — diagnosis inferred, not observed live">Reconstructed</span>'
+      : '';
+
     let mailChip;
     if (e.email?.sent === true) {
       mailChip = '<span class="mail-chip sent"><span class="material-symbols-outlined">mark_email_read</span>Alert sent</span>';
@@ -378,6 +383,7 @@
             <div class="evt-sub">${subParts.join('')}</div>
           </div>
           <div class="evt-badges">
+            ${reconBadge}
             ${scopeBadge}
             <span class="badge ${e.severity}">${meta.label}</span>
             ${mailChip}
@@ -397,6 +403,17 @@
         <div class="diag-head">
           <span class="diag-cause">🔎 ${esc(d.causeLabel)}</span>
           <span class="conf ${esc(d.confidence)}">${esc(d.confidence)} confidence</span>
+        </div>`);
+    }
+
+    if (e.reconstructed) {
+      blocks.push(`
+        <div class="recon-note">
+          <span class="material-symbols-outlined">history_toggle_off</span>
+          <div>
+            <strong>Reconstructed event.</strong>
+            ${esc(e.reconstructionNote || 'Backfilled from raw per-check telemetry captured before the storage migration. Timestamps, statuses and error strings are the real recorded values; the root-cause diagnosis was inferred from those errors plus cross-stream correlation, not from a live probe.')}
+          </div>
         </div>`);
     }
 

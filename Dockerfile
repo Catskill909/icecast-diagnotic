@@ -26,6 +26,7 @@ COPY server.js ./
 COPY monitor.js ./
 COPY diagnose.js ./
 COPY store.js ./
+COPY seed/ ./seed/
 COPY public/ ./public/
 
 # Create data directory

@@ -361,6 +361,33 @@ a.help-btn { text-decoration: none; }
 .badge.recovery { background: var(--status-up-surface); color: var(--status-up); }
 .badge.scope-server { background: rgba(239, 68, 68, 0.15); color: #fca5a5; }
 .badge.scope-station { background: rgba(245, 158, 11, 0.12); color: #fcd34d; }
+.badge.reconstructed {
+  background: rgba(148, 163, 184, 0.12);
+  color: #94a3b8;
+  border: 1px dashed rgba(148, 163, 184, 0.35);
+}
+
+/* Provenance notice — keeps backfilled history visibly distinct from live
+   observations, so nobody reads an inferred diagnosis as a measured one. */
+.recon-note {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  background: rgba(148, 163, 184, 0.07);
+  border: 1px dashed rgba(148, 163, 184, 0.3);
+  border-radius: var(--radius-sm);
+  padding: 12px 14px;
+  margin-bottom: 16px;
+  font-size: 0.8rem;
+  color: var(--text-secondary);
+  line-height: 1.6;
+}
+.recon-note .material-symbols-outlined {
+  font-size: 19px;
+  color: var(--text-tertiary);
+  flex-shrink: 0;
+}
+.recon-note strong { color: var(--text-primary); }
 
 .mail-chip {
   display: inline-flex;

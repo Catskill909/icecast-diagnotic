@@ -23,6 +23,8 @@ const DATA_DIR = process.env.DATA_DIR || path.join(__dirname, 'data');
 const EVENTS_FILE = path.join(DATA_DIR, 'events.json');
 const SAMPLES_FILE = path.join(DATA_DIR, 'samples.json');
 const LEGACY_FILE = path.join(DATA_DIR, 'history.json');
+// Optional one-time historical backfill, applied at most once per seedId.
+const SEED_FILE = process.env.SEED_FILE || path.join(__dirname, 'seed', 'historical-events.json');
 
 const SAMPLE_RETENTION_DAYS = parseInt(process.env.SAMPLE_RETENTION_DAYS, 10) || 7;
 const SAMPLE_RETENTION_MS = SAMPLE_RETENTION_DAYS * 24 * 60 * 60 * 1000;
@@ -37,6 +39,7 @@ let events = [];             // permanent incident record, oldest → newest
 let samples = {};            // { [streamId]: [ sample ] }  raw, rolling window
 let rollups = {};            // { [streamId]: [ hourlyRollup ] }  permanent
 let streamStatusCache = {};  // last known status, for warm restarts
+let appliedSeeds = [];       // seedIds already backfilled — guards against re-import
 let dirtyEvents = false;
 let dirtySamples = false;
 
@@ -86,6 +89,7 @@ function load(streamIds) {
   if (ev) {
     events = Array.isArray(ev.events) ? ev.events : [];
     streamStatusCache = ev.streamStatus || {};
+    appliedSeeds = Array.isArray(ev.appliedSeeds) ? ev.appliedSeeds : [];
     console.log(`[Store] Loaded ${events.length} permanent event(s)`);
   }
 
@@ -139,7 +143,38 @@ function load(streamIds) {
     }
   }
 
+  applySeed();
   prune();
+}
+
+/**
+ * One-time historical backfill. Restores events that predate this storage
+ * layer — telemetry that was captured before the migration and would otherwise
+ * be unrecoverable. Applied at most once per seedId, tracked in events.json, so
+ * redeploys never duplicate it. Seeded events keep their `reconstructed: true`
+ * flag so they are never mistaken for live observations.
+ */
+function applySeed() {
+  const seed = readJson(SEED_FILE);
+  if (!seed || !seed.seedId || !Array.isArray(seed.events)) return;
+
+  if (appliedSeeds.includes(seed.seedId)) {
+    console.log(`[Store] Seed '${seed.seedId}' already applied — skipping`);
+    return;
+  }
+
+  const existing = new Set(events.map((e) => e.id));
+  const added = seed.events.filter((e) => e && e.id && !existing.has(e.id));
+
+  events.push(...added);
+  events.sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
+  appliedSeeds.push(seed.seedId);
+  dirtyEvents = true;
+
+  console.log(`[Store] Applied seed '${seed.seedId}': backfilled ${added.length} historical event(s)`);
+  if (added.length !== seed.events.length) {
+    console.log(`[Store]   (${seed.events.length - added.length} already present, skipped)`);
+  }
 }
 
 // ── Events (permanent) ──────────────────────────────────────────────────────
@@ -415,7 +450,13 @@ function saveEvents(force = false) {
   try {
     atomicWrite(
       EVENTS_FILE,
-      JSON.stringify({ version: 2, savedAt: new Date().toISOString(), events, streamStatus: streamStatusCache }, null, 1),
+      JSON.stringify({
+        version: 2,
+        savedAt: new Date().toISOString(),
+        appliedSeeds,
+        events,
+        streamStatus: streamStatusCache,
+      }, null, 1),
     );
     dirtyEvents = false;
   } catch (err) {
