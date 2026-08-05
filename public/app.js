@@ -426,8 +426,14 @@
   }
 
   // ── Incidents ───────────────────────────────────────────────────────────
+  // Expanded rows are tracked by id so they survive the 10s poll re-render —
+  // otherwise reading an incident's detail would collapse under you.
+  const openIncidents = new Set();
+  let lastIncidents = [];
+
   function renderIncidents(incidents) {
     const container = $('#incidents-container');
+    lastIncidents = incidents || [];
 
     if (!incidents || incidents.length === 0) {
       container.innerHTML = `
@@ -471,17 +477,26 @@
               : inc.email?.attempted
               ? '<span class="incident-mail failed" title="Alert email failed to send">✉ failed</span>'
               : '<span class="incident-mail none" title="No alert email sent for this event">✉ none</span>';
+            const isOpen = openIncidents.has(inc.id);
+            const recon = inc.reconstructed
+              ? '<span class="incident-badge reconstructed" title="Backfilled from raw telemetry — diagnosis inferred, not observed live">Reconstructed</span>'
+              : '';
             return `
-          <div class="incident">
-            <div class="incident-icon ${meta.cls}">
-              <span class="material-symbols-outlined">${meta.icon}</span>
+          <div class="incident${isOpen ? ' open' : ''}" data-id="${escapeHtml(inc.id)}">
+            <div class="incident-head">
+              <div class="incident-icon ${meta.cls}">
+                <span class="material-symbols-outlined">${meta.icon}</span>
+              </div>
+              <div class="incident-content">
+                <div class="incident-message">${escapeHtml(inc.message)}</div>
+                <div class="incident-time">${formatTimestamp(inc.timestamp)}${cause}${duration}</div>
+              </div>
+              ${recon}
+              ${mail}
+              <div class="incident-badge ${meta.cls}">${meta.label}</div>
+              <div class="incident-chevron"><span class="material-symbols-outlined">expand_more</span></div>
             </div>
-            <div class="incident-content">
-              <div class="incident-message">${escapeHtml(inc.message)}</div>
-              <div class="incident-time">${formatTimestamp(inc.timestamp)}${cause}${duration}</div>
-            </div>
-            ${mail}
-            <div class="incident-badge ${meta.cls}">${meta.label}</div>
+            <div class="incident-body">${isOpen ? renderIncidentDetail(inc) : ''}</div>
           </div>`;
           })
           .join('')}
@@ -490,6 +505,34 @@
         ? `<div class="incidents-more"><a href="history.html">View all ${sorted.length} events from the last 24h, plus the full permanent history →</a></div>`
         : '<div class="incidents-more"><a href="history.html">Open the full permanent incident history →</a></div>'}
     `;
+
+    wireIncidentRows(container);
+  }
+
+  /** Shared with the history page via event-detail.js. */
+  function renderIncidentDetail(inc) {
+    if (!window.EventDetail) return '<p class="incident-detail-fallback">Detail view unavailable.</p>';
+    return window.EventDetail.render(inc);
+  }
+
+  function wireIncidentRows(container) {
+    container.querySelectorAll('.incident[data-id]').forEach((row) => {
+      const head = row.querySelector('.incident-head');
+      if (!head) return;
+      head.onclick = () => {
+        const id = row.dataset.id;
+        const body = row.querySelector('.incident-body');
+        if (openIncidents.has(id)) {
+          openIncidents.delete(id);
+          row.classList.remove('open');
+        } else {
+          openIncidents.add(id);
+          const inc = lastIncidents.find((x) => x.id === id);
+          if (inc && !body.innerHTML.trim()) body.innerHTML = renderIncidentDetail(inc);
+          row.classList.add('open');
+        }
+      };
+    });
   }
 
   // ── Utilities ───────────────────────────────────────────────────────────

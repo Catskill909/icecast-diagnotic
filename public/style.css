@@ -30,6 +30,12 @@
   --status-unknown: #6b7280;
   --status-unknown-glow: rgba(107, 114, 128, 0.25);
 
+  /* Severity accents used by the shared event drill-down */
+  --warn: #f59e0b;
+  --warn-surface: rgba(245, 158, 11, 0.08);
+  --blip: #eab308;
+  --info: #38bdf8;
+
   /* Text */
   --text-primary: #f0f0f5;
   --text-secondary: #9090a8;
@@ -909,19 +915,72 @@ body::before {
 }
 
 .incident {
-  display: flex;
-  align-items: center;
-  gap: 16px;
-  padding: 14px 20px;
   background: var(--surface-1);
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
-  transition: all var(--transition);
+  transition: border-color var(--transition);
+  overflow: hidden;
 }
 
 .incident:hover {
   border-color: var(--border-hover);
+}
+
+.incident.open {
+  border-color: var(--primary);
+}
+
+.incident-head {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 14px 20px;
+  cursor: pointer;
+  user-select: none;
+  transition: background var(--transition);
+}
+
+.incident-head:hover {
   background: var(--surface-2);
+}
+
+.incident-chevron {
+  color: var(--text-tertiary);
+  display: flex;
+  transition: transform var(--transition);
+  flex-shrink: 0;
+}
+
+.incident-chevron .material-symbols-outlined {
+  font-size: 20px;
+}
+
+.incident.open .incident-chevron {
+  transform: rotate(180deg);
+}
+
+/* Detail markup comes from event-detail.js and is styled by the shared
+   drill-down rules further down this file. */
+.incident-body {
+  display: none;
+  border-top: 1px solid var(--border);
+  padding: 18px 20px;
+  background: var(--surface-0);
+}
+
+.incident.open .incident-body {
+  display: block;
+}
+
+.incident-badge.reconstructed {
+  background: rgba(148, 163, 184, 0.12);
+  color: var(--text-secondary);
+  border: 1px dashed rgba(148, 163, 184, 0.35);
+}
+
+.incident-detail-fallback {
+  color: var(--text-tertiary);
+  font-size: 13px;
 }
 
 .incident-icon {
@@ -1065,6 +1124,155 @@ body::before {
   text-transform: none;
   letter-spacing: 0;
 }
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   Event Detail Drill-Down (shared by dashboard + history)
+   Paired with public/event-detail.js — both pages render incident detail from
+   the same markup, so they cannot drift apart.
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+/* Provenance notice — keeps backfilled history visibly distinct from live
+   observations, so nobody reads an inferred diagnosis as a measured one. */
+.recon-note {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  background: rgba(148, 163, 184, 0.07);
+  border: 1px dashed rgba(148, 163, 184, 0.3);
+  border-radius: var(--radius-sm);
+  padding: 12px 14px;
+  margin-bottom: 16px;
+  font-size: 0.8rem;
+  color: var(--text-secondary);
+  line-height: 1.6;
+}
+.recon-note .material-symbols-outlined {
+  font-size: 19px;
+  color: var(--text-tertiary);
+  flex-shrink: 0;
+}
+.recon-note strong { color: var(--text-primary); }
+
+/* ── Drill-down body ───────────────────────────────────────────────────────── */
+.evt-body {
+  display: none;
+  border-top: 1px solid var(--border);
+  padding: 18px;
+  background: var(--surface-1);
+}
+.evt.open .evt-body { display: block; }
+
+.diag-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-bottom: 14px;
+}
+.diag-cause {
+  font-size: 1.02rem;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+.conf {
+  font-size: 0.68rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  padding: 3px 8px;
+  border-radius: 20px;
+}
+.conf.high { background: var(--status-up-surface); color: var(--status-up); }
+.conf.medium { background: var(--warn-surface); color: var(--warn); }
+.conf.low { background: var(--surface-3); color: var(--text-tertiary); }
+
+.detail-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+  gap: 18px;
+}
+.detail-block h5 {
+  font-size: 0.68rem;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  color: var(--text-tertiary);
+  margin-bottom: 8px;
+  font-weight: 700;
+}
+.detail-block ul { margin: 0; padding-left: 17px; }
+.detail-block li {
+  font-size: 0.82rem;
+  color: var(--text-secondary);
+  line-height: 1.6;
+  margin-bottom: 5px;
+}
+.detail-block ol { margin: 0; padding-left: 17px; }
+
+.kv { display: flex; flex-direction: column; gap: 6px; }
+.kv-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 0.82rem;
+  padding-bottom: 5px;
+  border-bottom: 1px solid var(--border);
+}
+.kv-row:last-child { border-bottom: none; }
+.kv-key { color: var(--text-tertiary); flex-shrink: 0; }
+.kv-val {
+  color: var(--text-primary);
+  text-align: right;
+  word-break: break-word;
+  font-variant-numeric: tabular-nums;
+}
+.kv-val.good { color: var(--status-up); }
+.kv-val.bad { color: var(--status-down); }
+.kv-val.warn { color: var(--warn); }
+
+code.inline {
+  background: var(--surface-3);
+  color: var(--primary-light);
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-size: 0.78rem;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+/* Connection-layer timing strip */
+.timing-strip {
+  display: flex;
+  gap: 3px;
+  margin-top: 8px;
+  height: 26px;
+  border-radius: 5px;
+  overflow: hidden;
+  background: var(--surface-3);
+}
+.timing-seg {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.64rem;
+  font-weight: 600;
+  color: #0a0a12;
+  min-width: 2px;
+  white-space: nowrap;
+  overflow: hidden;
+}
+.timing-seg.dns { background: #60a5fa; }
+.timing-seg.tcp { background: #34d399; }
+.timing-seg.tls { background: #fbbf24; }
+.timing-seg.ttfb { background: #a78bfa; }
+.timing-legend {
+  display: flex;
+  gap: 12px;
+  margin-top: 7px;
+  font-size: 0.7rem;
+  color: var(--text-tertiary);
+  flex-wrap: wrap;
+}
+.timing-legend span { display: flex; align-items: center; gap: 5px; }
+.timing-dot { width: 9px; height: 9px; border-radius: 2px; }
 
 /* ── Footer ────────────────────────────────────────────────────────────────── */
 .footer {
