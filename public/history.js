@@ -44,9 +44,11 @@
 
   async function reload() {
     const days = rangeDays();
-    const [statsRes, eventsRes] = await Promise.all([
+    const isAllTime = $('#f-range').value === 'all';
+    const [statsRes, eventsRes, uptimeRes] = await Promise.all([
       fetch(`/api/stats?days=${days}`).then((r) => r.json()),
       fetch(`/api/events?days=${days}&limit=2000`).then((r) => r.json()),
+      fetch(`/api/uptime?days=${days}`).then((r) => r.json()),
     ]);
 
     stats = statsRes;
@@ -56,9 +58,42 @@
     populateStreamFilter();
     populateCauseFilter();
     renderStorage();
+    renderUptimeStat(uptimeRes, isAllTime);
     renderHeatmap();
     renderCauses();
     applyFilters();
+  }
+
+  // ── Uptime tile ─────────────────────────────────────────────────────────
+  function coverageLabel(coverageDays) {
+    if (!coverageDays) return '0h';
+    if (coverageDays < 1) return `${Math.max(1, Math.round(coverageDays * 24))}h`;
+    return `${coverageDays < 10 ? coverageDays.toFixed(1) : Math.round(coverageDays)}d`;
+  }
+
+  function renderUptimeStat(uptimeRes, isAllTime) {
+    const valueEl = $('#stat-uptime');
+    const detailEl = $('#stat-uptime-detail');
+
+    if (uptimeRes.uptime == null) {
+      valueEl.textContent = '—';
+      valueEl.className = 'summary-value neutral';
+      detailEl.textContent = 'Collecting data — check back soon';
+      detailEl.className = 'summary-detail partial';
+      return;
+    }
+
+    valueEl.textContent = `${uptimeRes.uptime}%`;
+    valueEl.className = uptimeRes.uptime >= 99 ? 'summary-value up' : uptimeRes.uptime >= 95 ? 'summary-value neutral' : 'summary-value down';
+
+    const partial = !isAllTime && uptimeRes.coverageDays < uptimeRes.days * 0.95;
+    if (partial) {
+      detailEl.textContent = `Partial — only ${coverageLabel(uptimeRes.coverageDays)} of history collected so far`;
+      detailEl.className = 'summary-detail partial';
+    } else {
+      detailEl.textContent = 'across all streams';
+      detailEl.className = 'summary-detail';
+    }
   }
 
   // ── Filter option population ────────────────────────────────────────────

@@ -407,6 +407,55 @@ function getUptime(streamId, windowMs) {
   return Math.round((up / total) * 10000) / 100;
 }
 
+/**
+ * Uptime across a window, combined over every given stream (not averaged
+ * per-stream percentages) — the figure behind the dashboard's single
+ * top-line "Uptime" tile.
+ */
+function getOverallUptime(streamIds, windowMs) {
+  const cutoff = Date.now() - windowMs;
+  let total = 0;
+  let up = 0;
+
+  for (const id of streamIds) {
+    for (const s of samples[id] || []) {
+      if (new Date(s.timestamp).getTime() <= cutoff) continue;
+      total++;
+      if (s.status === 'up') up++;
+    }
+    for (const r of rollups[id] || []) {
+      if (new Date(r.hour).getTime() + HOUR_MS <= cutoff) continue;
+      total += r.checks;
+      up += r.up;
+    }
+  }
+
+  if (total === 0) return null;
+  return Math.round((up / total) * 10000) / 100;
+}
+
+/**
+ * Earliest telemetry timestamp across the given streams — how far back
+ * uptime figures can actually reach. Lets the UI tell a real 30-day figure
+ * apart from one padded out by a monitor that only started a few days ago.
+ */
+function getCoverageStart(streamIds) {
+  let earliest = null;
+  for (const id of streamIds) {
+    const r = rollups[id] || [];
+    if (r.length) {
+      const t = new Date(r[0].hour).getTime();
+      if (earliest === null || t < earliest) earliest = t;
+    }
+    const s = samples[id] || [];
+    if (s.length) {
+      const t = new Date(s[0].timestamp).getTime();
+      if (earliest === null || t < earliest) earliest = t;
+    }
+  }
+  return earliest === null ? null : new Date(earliest).toISOString();
+}
+
 function getSummary(streamIds, windowMs) {
   const out = {};
   for (const id of streamIds) {
@@ -524,7 +573,7 @@ module.exports = {
   load, save, saveEvents, saveSamples, prune,
   addEvent, updateEvent, getEvents, findOpenOutage,
   addSample, getSamples, getAllSamples, getRollups,
-  getUptime, getSummary, getDailyBuckets, getCauseBreakdown,
+  getUptime, getOverallUptime, getCoverageStart, getSummary, getDailyBuckets, getCauseBreakdown,
   getStatusCache, setStatusCache, getStorageInfo,
   SAMPLE_RETENTION_DAYS,
 };

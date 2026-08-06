@@ -101,6 +101,26 @@ app.get('/api/stats', (req, res) => {
   });
 });
 
+// ── Uptime Over a Range (24h / 7d / 30d / 90d / 1y / all) ───────────────────
+// Lightweight on purpose — the dashboard's range tabs and the History page's
+// summary tile call this on demand, so it skips the heavier daily-bucket and
+// cause-breakdown work that /api/stats does.
+app.get('/api/uptime', (req, res) => {
+  const days = Math.min(Math.max(parseInt(req.query.days, 10) || 1, 1), 3650);
+  const windowMs = days * 24 * 60 * 60 * 1000;
+  const coverageStart = monitor.getCoverageStart();
+  const coverageDays = coverageStart
+    ? Math.round(((Date.now() - new Date(coverageStart).getTime()) / (24 * 60 * 60 * 1000)) * 100) / 100
+    : 0;
+
+  res.json({
+    days,
+    uptime: monitor.getOverallUptime(windowMs),
+    coverageStart,
+    coverageDays,
+  });
+});
+
 // ── Per-stream Telemetry (raw samples + hourly rollups) ─────────────────────
 app.get('/api/samples/:streamId', (req, res) => {
   const hours = Math.min(Math.max(parseInt(req.query.hours, 10) || 24, 1), 24 * 365);

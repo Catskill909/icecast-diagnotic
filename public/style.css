@@ -249,6 +249,49 @@ body::before {
   margin-top: 4px;
 }
 
+.summary-detail.partial { color: var(--warn); }
+
+/* ── Uptime range pills ────────────────────────────────────────────────────── */
+.summary-card-uptime { min-width: 260px; }
+
+.summary-label-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+
+.summary-label-row .summary-label { margin-bottom: 0; }
+
+.range-pills {
+  display: flex;
+  gap: 2px;
+  background: var(--surface-2, rgba(255, 255, 255, 0.04));
+  border-radius: 100px;
+  padding: 2px;
+}
+
+.range-pill {
+  appearance: none;
+  border: none;
+  background: transparent;
+  color: var(--text-tertiary);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  padding: 3px 7px;
+  border-radius: 100px;
+  cursor: pointer;
+  transition: all var(--transition);
+}
+
+.range-pill:hover { color: var(--text-secondary); }
+
+.range-pill.active {
+  background: var(--primary);
+  color: #fff;
+}
+
 /* ── Stream Cards ──────────────────────────────────────────────────────────── */
 .section-title {
   font-size: 16px;

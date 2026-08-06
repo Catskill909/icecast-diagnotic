@@ -14,6 +14,7 @@
   let lastStatus = null;
   let pollTimer = null;
   let isFirstLoad = true;
+  let uptimeRangeDays = 1; // active tab on the top "Uptime" tile
 
   // ── Boot ────────────────────────────────────────────────────────────────
   async function boot() {
@@ -45,6 +46,7 @@
 
       // Setup Help Modal
       setupHelpModal();
+      setupUptimeRangePills();
 
       // Start polling
       pollTimer = setInterval(poll, POLL_INTERVAL);
@@ -156,17 +158,8 @@
 
     $('#summary-response').textContent = `${avgResponse}`;
 
-    // Calculate 24h uptime
-    const uptimePercent = calculate24hUptime();
-    const uptimeEl = $('#summary-uptime');
-    uptimeEl.textContent = `${uptimePercent}%`;
-    if (uptimePercent >= 99) {
-      uptimeEl.className = 'summary-value up';
-    } else if (uptimePercent >= 95) {
-      uptimeEl.style.color = '#f59e0b';
-    } else {
-      uptimeEl.className = 'summary-value down';
-    }
+    // Uptime tile — respects whichever range tab is active
+    refreshUptimeTile();
 
     // Stream cards
     renderStreamCards(streams);
@@ -182,6 +175,85 @@
     }
     if (totalChecks === 0) return 100;
     return Math.round((upChecks / totalChecks) * 10000) / 100;
+  }
+
+  // ── Uptime range tile ───────────────────────────────────────────────────
+  const UPTIME_RANGE_LABELS = { 1: 'last 24 hours', 7: 'last 7 days', 30: 'last 30 days', 90: 'last 90 days', 365: 'last year' };
+
+  function coverageLabel(coverageDays) {
+    if (!coverageDays) return '0h';
+    if (coverageDays < 1) return `${Math.max(1, Math.round(coverageDays * 24))}h`;
+    return `${coverageDays < 10 ? coverageDays.toFixed(1) : Math.round(coverageDays)}d`;
+  }
+
+  function applyUptimeValue(percent, { partial = false, detail = 'across all streams', collecting = false } = {}) {
+    const uptimeEl = $('#summary-uptime');
+    const detailEl = $('#summary-uptime-detail');
+    if (!uptimeEl || !detailEl) return;
+
+    if (collecting || percent == null) {
+      uptimeEl.textContent = '—';
+      uptimeEl.style.color = '';
+      uptimeEl.className = 'summary-value neutral';
+      detailEl.textContent = 'Collecting data — check back soon';
+      detailEl.className = 'summary-detail partial';
+      return;
+    }
+
+    uptimeEl.textContent = `${percent}%`;
+    uptimeEl.style.color = '';
+    if (percent >= 99) {
+      uptimeEl.className = 'summary-value up';
+    } else if (percent >= 95) {
+      uptimeEl.className = 'summary-value neutral';
+      uptimeEl.style.color = '#f59e0b';
+    } else {
+      uptimeEl.className = 'summary-value down';
+    }
+    detailEl.textContent = detail;
+    detailEl.className = partial ? 'summary-detail partial' : 'summary-detail';
+  }
+
+  let uptimeFetchToken = 0;
+  async function refreshUptimeTile() {
+    const rangeLabel = UPTIME_RANGE_LABELS[uptimeRangeDays] || `last ${uptimeRangeDays} days`;
+
+    if (uptimeRangeDays === 1) {
+      applyUptimeValue(calculate24hUptime(), { detail: `across all streams · ${rangeLabel}` });
+      return;
+    }
+
+    const token = ++uptimeFetchToken;
+    try {
+      const res = await fetch(`/api/uptime?days=${uptimeRangeDays}`).then((r) => r.json());
+      if (token !== uptimeFetchToken) return; // a newer tab click superseded this request
+      if (res.uptime == null) {
+        applyUptimeValue(null, { collecting: true });
+        return;
+      }
+      if (res.coverageDays < uptimeRangeDays * 0.95) {
+        applyUptimeValue(res.uptime, {
+          partial: true,
+          detail: `Partial — only ${coverageLabel(res.coverageDays)} of history collected so far`,
+        });
+      } else {
+        applyUptimeValue(res.uptime, { detail: `across all streams · ${rangeLabel}` });
+      }
+    } catch (err) {
+      console.error('Uptime range fetch failed:', err);
+    }
+  }
+
+  function setupUptimeRangePills() {
+    const container = $('#uptime-range-pills');
+    if (!container) return;
+    container.querySelectorAll('.range-pill').forEach((btn) => {
+      btn.onclick = () => {
+        uptimeRangeDays = parseInt(btn.dataset.days, 10);
+        container.querySelectorAll('.range-pill').forEach((b) => b.classList.toggle('active', b === btn));
+        refreshUptimeTile();
+      };
+    });
   }
 
   // Player state tracking: { [streamId]: 'stopped' | 'buffering' | 'playing' }

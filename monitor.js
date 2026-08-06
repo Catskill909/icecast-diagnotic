@@ -938,6 +938,8 @@ function getEvents(opts) { return store.getEvents(opts); }
 function getSamples(streamId, sinceMs) { return store.getSamples(streamId, sinceMs); }
 function getRollups(streamId) { return store.getRollups(streamId); }
 function getSummary(windowMs) { return store.getSummary(streams.map((s) => s.id), windowMs); }
+function getOverallUptime(windowMs) { return store.getOverallUptime(streams.map((s) => s.id), windowMs); }
+function getCoverageStart() { return store.getCoverageStart(streams.map((s) => s.id)); }
 function getDailyBuckets(days) { return store.getDailyBuckets(days); }
 function getCauseBreakdown(windowMs) { return store.getCauseBreakdown(windowMs); }
 function getStorageInfo() { return store.getStorageInfo(); }
@@ -1005,6 +1007,6 @@ async function sendTestAlert(toEmail) {
 
 module.exports = {
   start, stop, getStreams, getStatus, getHistory, getIncidents, getConfig, sendTestAlert,
-  getEvents, getSamples, getRollups, getSummary, getDailyBuckets, getCauseBreakdown,
-  getStorageInfo, getSnapshot,
+  getEvents, getSamples, getRollups, getSummary, getOverallUptime, getCoverageStart,
+  getDailyBuckets, getCauseBreakdown, getStorageInfo, getSnapshot,
 };

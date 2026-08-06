@@ -86,10 +86,19 @@
         <div class="summary-value neutral" id="summary-response">—</div>
         <div class="summary-detail">milliseconds</div>
       </div>
-      <div class="summary-card">
-        <div class="summary-label">24h Uptime</div>
+      <div class="summary-card summary-card-uptime">
+        <div class="summary-label-row">
+          <div class="summary-label">Uptime</div>
+          <div class="range-pills" id="uptime-range-pills">
+            <button type="button" class="range-pill active" data-days="1">24H</button>
+            <button type="button" class="range-pill" data-days="7">7D</button>
+            <button type="button" class="range-pill" data-days="30">30D</button>
+            <button type="button" class="range-pill" data-days="90">90D</button>
+            <button type="button" class="range-pill" data-days="365">1Y</button>
+          </div>
+        </div>
         <div class="summary-value neutral" id="summary-uptime">—</div>
-        <div class="summary-detail">across all streams</div>
+        <div class="summary-detail" id="summary-uptime-detail">across all streams</div>
       </div>
     </div>
 
