@@ -187,10 +187,27 @@ function applySeed() {
     if (samplesAdded) dirtySamples = true;
   }
 
+  // Corrections repair fields on events an earlier seed already backfilled —
+  // alert delivery the previous build performed but never recorded, say. Only
+  // events still flagged `reconstructed` are eligible, so a live observation
+  // can never be rewritten by a seed file.
+  let corrected = 0;
+  if (Array.isArray(seed.corrections)) {
+    const byId = new Map(events.map((e) => [e.id, e]));
+    for (const fix of seed.corrections) {
+      if (!fix || !fix.id) continue;
+      const target = byId.get(fix.id);
+      if (!target || target.reconstructed !== true) continue;
+      const { id, ...patch } = fix;
+      Object.assign(target, patch);
+      corrected++;
+    }
+  }
+
   appliedSeeds.push(seed.seedId);
   dirtyEvents = true;
 
-  console.log(`[Store] Applied seed '${seed.seedId}': backfilled ${added.length} event(s), ${samplesAdded} sample(s)`);
+  console.log(`[Store] Applied seed '${seed.seedId}': backfilled ${added.length} event(s), ${samplesAdded} sample(s), corrected ${corrected} event(s)`);
   if (added.length !== seed.events.length) {
     console.log(`[Store]   (${seed.events.length - added.length} event(s) already present, skipped)`);
   }

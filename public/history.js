@@ -310,6 +310,11 @@
     // out, we simply have no record of it. Lumping them in with genuine
     // non-delivery reads as an alerting failure that never happened.
     const untracked = notifiable.filter((e) => e.email?.sent == null).length;
+    // Delivery we know happened but never logged live — flagged so the tile
+    // never passes reconstruction off as a measured send.
+    const reconstructedSends = filtered.filter(
+      (e) => e.email?.sent === true && e.email?.deliveryReconstructed,
+    ).length;
 
     const downtimeMs = filtered
       .filter((e) => e.type !== 'up' && e.durationMs)
@@ -320,9 +325,10 @@
     $('#stat-blips').textContent = blips;
     $('#stat-deadair').textContent = deadAir;
     $('#stat-emailed').textContent = emailed;
-    $('#stat-emailed-detail').textContent = untracked
-      ? `of ${notifiable.length} notifiable · ${untracked} predate tracking`
-      : `of ${notifiable.length} notifiable`;
+    let emailedDetail = `of ${notifiable.length} notifiable`;
+    if (untracked) emailedDetail += ` · ${untracked} predate tracking`;
+    else if (reconstructedSends === emailed && emailed) emailedDetail += ' · delivery reconstructed';
+    $('#stat-emailed-detail').textContent = emailedDetail;
     $('#stat-emailed-detail').className = untracked && !emailed
       ? 'summary-detail partial'
       : 'summary-detail';
