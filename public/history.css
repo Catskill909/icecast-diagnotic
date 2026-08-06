@@ -442,3 +442,13 @@ a.help-btn { text-decoration: none; }
 @media (min-width: 1500px) {
   .summary-bar { grid-template-columns: repeat(6, 1fr); }
 }
+
+/* ── Overview period control ───────────────────────────────────────────────── */
+/* The range control belongs beside the numbers it governs, not buried in the
+   timeline filter bar below the fold. */
+.section-title .range-pills { margin-left: auto; }
+
+@media (max-width: 560px) {
+  .section-title .range-pills { margin-left: 0; width: 100%; justify-content: space-between; }
+  .section-title { flex-wrap: wrap; }
+}

@@ -15,6 +15,8 @@
   let streams = [];
   let openIds = new Set(); // survive re-renders
   let dayFilter = null;    // set by clicking a heatmap cell
+  let lastUptime = null;   // last /api/uptime payload, re-read on filter changes
+  let lastRangeIsAllTime = false;
 
   const SEVERITY_META = {
     outage:   { icon: 'error',        label: 'Outage' },
@@ -61,13 +63,53 @@
     allEvents = eventsRes.events || [];
     streams = statsRes.streams || [];
 
+    lastUptime = uptimeRes;
+    lastRangeIsAllTime = isAllTime;
+
     populateStreamFilter();
     populateCauseFilter();
     renderStorage();
-    renderUptimeStat(uptimeRes, isAllTime);
+    syncRangePills();
+    renderOverviewRange();
     renderHeatmap();
     renderCauses();
     applyFilters();
+  }
+
+  // ── Period control ──────────────────────────────────────────────────────
+  const RANGE_LABELS = {
+    1: 'Last 24 hours', 7: 'Last 7 days', 30: 'Last 30 days',
+    90: 'Last 90 days', 365: 'Last year', all: 'All time',
+  };
+
+  /** Keep the header pills and the timeline dropdown showing one truth. */
+  function syncRangePills() {
+    const current = $('#f-range').value;
+    document.querySelectorAll('#history-range-pills .range-pill').forEach((btn) => {
+      btn.classList.toggle('active', btn.dataset.days === current);
+    });
+  }
+
+  /** States the window the tiles cover, in plain dates. */
+  function renderOverviewRange() {
+    const el = $('#overview-range');
+    if (!el) return;
+    const value = $('#f-range').value;
+    const label = RANGE_LABELS[value] || `Last ${value} days`;
+    const fmt = (d) => d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+
+    const end = new Date();
+    let startText;
+    if (value === 'all') {
+      const oldest = stats?.storage?.oldestEvent;
+      startText = oldest ? fmt(new Date(oldest)) : null;
+    } else {
+      const start = new Date(end);
+      start.setDate(start.getDate() - (parseInt(value, 10) - 1));
+      startText = fmt(start);
+    }
+
+    el.textContent = startText ? `${label} · ${startText} – ${fmt(end)}` : label;
   }
 
   // ── Uptime tile ─────────────────────────────────────────────────────────
@@ -77,29 +119,46 @@
     return `${coverageDays < 10 ? coverageDays.toFixed(1) : Math.round(coverageDays)}d`;
   }
 
-  function renderUptimeStat(uptimeRes, isAllTime) {
+  /**
+   * Reads from the last fetch rather than taking arguments, so it can be
+   * re-run whenever the stream filter changes without another round trip —
+   * otherwise this tile would keep reporting every stream while its five
+   * neighbours narrowed to one.
+   */
+  function renderUptimeStat() {
     const valueEl = $('#stat-uptime');
     const detailEl = $('#stat-uptime-detail');
+    if (!valueEl || !detailEl) return;
 
-    if (!uptimeRes || uptimeRes.uptime == null) {
+    const streamId = $('#f-stream').value;
+    const perStream = streamId ? stats?.summary?.[streamId] : null;
+    const percent = streamId ? perStream?.uptime : lastUptime?.uptime;
+    const scope = streamId
+      ? (streams.find((s) => s.id === streamId)?.name || streamId)
+      : 'across all streams';
+
+    if (percent == null) {
       valueEl.textContent = '—';
       valueEl.className = 'summary-value neutral';
-      detailEl.textContent = uptimeRes
-        ? 'Collecting data — check back soon'
-        : 'Uptime unavailable';
+      detailEl.textContent = !streamId && !lastUptime
+        ? 'Uptime unavailable'
+        : 'Collecting data — check back soon';
       detailEl.className = 'summary-detail partial';
       return;
     }
 
-    valueEl.textContent = `${uptimeRes.uptime}%`;
-    valueEl.className = uptimeRes.uptime >= 99 ? 'summary-value up' : uptimeRes.uptime >= 95 ? 'summary-value neutral' : 'summary-value down';
+    valueEl.textContent = `${percent}%`;
+    valueEl.className = percent >= 99 ? 'summary-value up' : percent >= 95 ? 'summary-value neutral' : 'summary-value down';
 
-    const partial = !isAllTime && uptimeRes.coverageDays < uptimeRes.days * 0.95;
+    // Coverage is a property of the monitor's lifetime, not of the selected
+    // stream, so the shortfall warning applies either way.
+    const partial = !lastRangeIsAllTime && lastUptime
+      && lastUptime.coverageDays < lastUptime.days * 0.95;
     if (partial) {
-      detailEl.textContent = `Partial — only ${coverageLabel(uptimeRes.coverageDays)} of history collected so far`;
+      detailEl.textContent = `${scope} · partial, only ${coverageLabel(lastUptime.coverageDays)} collected`;
       detailEl.className = 'summary-detail partial';
     } else {
-      detailEl.textContent = 'across all streams';
+      detailEl.textContent = scope;
       detailEl.className = 'summary-detail';
     }
   }
@@ -274,6 +333,7 @@
       return true;
     });
 
+    renderUptimeStat();
     renderSummary();
     renderActiveFilterNote();
 
@@ -481,6 +541,15 @@
   // ── Controls ────────────────────────────────────────────────────────────
   function wireControls() {
     $('#f-range').onchange = () => { dayFilter = null; reload(); };
+
+    document.querySelectorAll('#history-range-pills .range-pill').forEach((btn) => {
+      btn.onclick = () => {
+        $('#f-range').value = btn.dataset.days;
+        dayFilter = null;
+        syncRangePills();
+        reload();
+      };
+    });
     ['#f-stream', '#f-severity', '#f-cause', '#f-email'].forEach((sel) => {
       $(sel).onchange = () => { renderCauses(); applyFilters(); };
     });
