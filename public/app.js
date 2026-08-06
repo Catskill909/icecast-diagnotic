@@ -9,7 +9,6 @@
   const $ = (sel) => document.querySelector(sel);
   const $$ = (sel) => document.querySelectorAll(sel);
 
-  let config = {};
   let history = {};
   let lastStatus = null;
   let pollTimer = null;
@@ -19,18 +18,13 @@
   // ── Boot ────────────────────────────────────────────────────────────────
   async function boot() {
     try {
-      // Fetch config and initial status in parallel
-      const [configRes, statusRes, historyRes] = await Promise.all([
-        fetch('/api/config').then((r) => r.json()),
+      // Fetch initial status in parallel
+      const [statusRes, historyRes] = await Promise.all([
         fetch('/api/status').then((r) => r.json()),
         fetch('/api/history').then((r) => r.json()),
       ]);
 
-      config = configRes;
       history = historyRes.history || {};
-
-      // Update config display
-      renderConfig(config);
 
       // Show dashboard
       $('#loading').style.display = 'none';
@@ -92,21 +86,6 @@
     } catch (err) {
       console.error('Poll failed:', err);
       setConnected(false);
-    }
-  }
-
-  // ── Config Render ───────────────────────────────────────────────────────
-  function renderConfig(cfg) {
-    const intervalSec = Math.round(cfg.checkInterval / 1000);
-    $('#check-interval-text').textContent = `${intervalSec}s interval`;
-
-    if (cfg.emailConfigured) {
-      $('#email-status-text').textContent = `${cfg.alertRecipients} recipient${cfg.alertRecipients !== 1 ? 's' : ''}`;
-      $('#email-badge').style.borderColor = 'rgba(34, 197, 94, 0.15)';
-    } else {
-      $('#email-status-text').textContent = 'Not configured';
-      $('#email-badge').style.borderColor = 'rgba(239, 68, 68, 0.15)';
-      $('#email-badge').style.color = '#f87171';
     }
   }
 
