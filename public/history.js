@@ -48,7 +48,13 @@
     const [statsRes, eventsRes, uptimeRes] = await Promise.all([
       fetch(`/api/stats?days=${days}`).then((r) => r.json()),
       fetch(`/api/events?days=${days}&limit=2000`).then((r) => r.json()),
-      fetch(`/api/uptime?days=${days}`).then((r) => r.json()),
+      // Supplementary — the incident record must never depend on it. A monitor
+      // mid-deploy serves the new page from a process that lacks this route,
+      // and a rejection here would take every summary tile, the heatmap and
+      // the timeline down with it.
+      fetch(`/api/uptime?days=${days}`)
+        .then((r) => (r.ok ? r.json() : null))
+        .catch(() => null),
     ]);
 
     stats = statsRes;
@@ -75,10 +81,12 @@
     const valueEl = $('#stat-uptime');
     const detailEl = $('#stat-uptime-detail');
 
-    if (uptimeRes.uptime == null) {
+    if (!uptimeRes || uptimeRes.uptime == null) {
       valueEl.textContent = '—';
       valueEl.className = 'summary-value neutral';
-      detailEl.textContent = 'Collecting data — check back soon';
+      detailEl.textContent = uptimeRes
+        ? 'Collecting data — check back soon'
+        : 'Uptime unavailable';
       detailEl.className = 'summary-detail partial';
       return;
     }
@@ -298,6 +306,10 @@
     // Only events that could plausibly notify count toward the ratio.
     const notifiable = filtered.filter((e) => e.severity !== 'blip');
     const emailed = filtered.filter((e) => e.email?.sent === true).length;
+    // Backfilled events predate delivery tracking: an alert may well have gone
+    // out, we simply have no record of it. Lumping them in with genuine
+    // non-delivery reads as an alerting failure that never happened.
+    const untracked = notifiable.filter((e) => e.email?.sent == null).length;
 
     const downtimeMs = filtered
       .filter((e) => e.type !== 'up' && e.durationMs)
@@ -308,7 +320,12 @@
     $('#stat-blips').textContent = blips;
     $('#stat-deadair').textContent = deadAir;
     $('#stat-emailed').textContent = emailed;
-    $('#stat-emailed-detail').textContent = `of ${notifiable.length} notifiable`;
+    $('#stat-emailed-detail').textContent = untracked
+      ? `of ${notifiable.length} notifiable · ${untracked} predate tracking`
+      : `of ${notifiable.length} notifiable`;
+    $('#stat-emailed-detail').className = untracked && !emailed
+      ? 'summary-detail partial'
+      : 'summary-detail';
     $('#stat-downtime').textContent = downtimeMs ? fmtDuration(downtimeMs) : '0s';
 
     $('#timeline-count').textContent =

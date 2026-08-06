@@ -429,3 +429,16 @@ a.help-btn { text-decoration: none; }
   .filter-group, .filter-group select, .filter-group input { min-width: 0; width: 100%; }
   .filter-group { flex: 1 1 140px; }
 }
+
+/* ── Summary tiles ─────────────────────────────────────────────────────────── */
+/* Six tiles here versus the dashboard's five. Left to auto-fit, the sixth
+   orphans onto a row of its own at common widths, so pin an explicit balanced
+   grid: 3x2 through the usual desktop range, 6 across only when there is
+   genuinely room for it. */
+@media (min-width: 781px) {
+  .summary-bar { grid-template-columns: repeat(3, 1fr); }
+}
+
+@media (min-width: 1500px) {
+  .summary-bar { grid-template-columns: repeat(6, 1fr); }
+}
