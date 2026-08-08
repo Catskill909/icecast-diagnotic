@@ -74,6 +74,16 @@
 
     push('Occurred', new Date(e.timestamp).toLocaleString('en-US'));
     if (e.resolvedAt) push('Resolved', new Date(e.resolvedAt).toLocaleString('en-US'));
+    // The verdict that decides whether this event was worth an email.
+    if (d && d.listenerImpact && e.type !== 'up') {
+      const IMPACT = {
+        confirmed: ['Listeners were cut off', 'bad'],
+        none: ['None — mount kept serving', 'good'],
+        unknown: ['Unknown — Icecast unreachable', 'warn'],
+      };
+      const [label, cls] = IMPACT[d.listenerImpact] || [d.listenerImpact, ''];
+      push('Listener impact', label, cls);
+    }
     if (e.durationLabel) push('Duration', esc(e.durationLabel), 'warn');
     if (e.sourceOutage) {
       push('Source reconnected', new Date(e.sourceOutage.reconnectedAt).toLocaleString('en-US'), 'good');
@@ -97,7 +107,13 @@
       if (ice.statusError) ipush('Status error', esc(ice.statusError), 'bad');
       if (ice.serverId) ipush('Server', esc(ice.serverId));
       if (ice.mountPath) ipush('Mount', `<code class="inline">${esc(ice.mountPath)}</code>`);
-      ipush('Mount present', ice.mountPresent ? 'Yes' : 'NO', ice.mountPresent ? 'good' : 'bad');
+      // null means we could not query Icecast, which is not the same claim as
+      // observing the mount gone — never render the two identically.
+      if (ice.mountPresent === null || ice.mountPresent === undefined) {
+        ipush('Mount present', 'Not checked — Icecast unreachable', 'warn');
+      } else {
+        ipush('Mount present', ice.mountPresent ? 'Yes' : 'NO', ice.mountPresent ? 'good' : 'bad');
+      }
       if (ice.mountCount) ipush('Mounts on server', ice.mountCount);
       if (ice.sourceConnectedSince) ipush('Source connected since', new Date(ice.sourceConnectedSince).toLocaleString('en-US'));
       if (ice.listeners != null) ipush('Listeners', ice.listeners);

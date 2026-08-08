@@ -501,11 +501,15 @@
     const shown = sorted.slice(0, 8);
     const hidden = sorted.length - shown.length;
 
-    // Severity is richer than the old down/up split: a 'blip' is a single
-    // failed check that never met the alert threshold. Those used to leave a
-    // red mark on the uptime bar with no corresponding entry here.
+    // Severity is richer than the old down/up split. A failure that never met
+    // the alert threshold is split by whether Icecast proves listeners were
+    // affected: a vanished mount ('brief_outage') cut the audience off, while a
+    // failed probe against a still-serving mount ('probe_error') cost nobody
+    // anything. 'blip' is the retired name for both, kept for stored history.
     const META = {
       outage: { icon: 'error', label: 'Outage', cls: 'down' },
+      brief_outage: { icon: 'bolt', label: 'Brief Outage', cls: 'blip' },
+      probe_error: { icon: 'sensors_off', label: 'Probe Anomaly', cls: 'probe-error' },
       blip: { icon: 'bolt', label: 'Blip', cls: 'blip' },
       dead_air: { icon: 'volume_off', label: 'Dead Air', cls: 'dead-air' },
       recovery: { icon: 'check_circle', label: 'Recovered', cls: 'up' },

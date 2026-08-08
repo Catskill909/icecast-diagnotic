@@ -11,13 +11,24 @@
    Within one episode we record continuously but email at most twice — once
    when it becomes notable, once when it recovers:
 
-     failure #1              → event recorded, severity 'blip'  (silent)
-     failure #FAILURE_THRESHOLD → same event promoted to 'outage' (emails)
+     failure #1              → event recorded, unconfirmed          (silent)
+     failure #FAILURE_THRESHOLD → promoted to 'outage'   (emails, IF listeners hit)
      recovery                → event resolved with true duration (emails, if alerted)
 
-   The exception that closes the real gap: when a blip hits EVERY monitored
-   stream in the same cycle it is server-level by definition, so it emails
-   immediately — as a single consolidated message rather than one per stream.
+   WHAT EARNS AN EMAIL. The bar is listener impact, not probe failure. The
+   monitor watches from outside the network, so a failed probe on its own proves
+   only that OUR connection broke. Icecast is the witness: when it is reachable
+   and still lists the mount, the mount kept serving its audience and nothing
+   worth waking anyone for happened. Four days of production data made the case —
+   of 21 alerts sent under the old rules, 12 were 60-second probe resets in which
+   the mounts never dropped a listener, and they trained the recipients to ignore
+   the alerts that mattered.
+
+   So an outage emails only when the diagnosis carries listenerImpact of
+   'confirmed' (Icecast reachable, mount gone — every connected player dropped)
+   or 'unknown' (Icecast unreachable, so we cannot clear it). An outage proven
+   harmless is recorded in full and stays silent. Dead air always emails: the
+   transport is fine, which is exactly why nobody else would catch it.
    ═══════════════════════════════════════════════════════════════════════════ */
 
 const nodemailer = require('nodemailer');
@@ -52,12 +63,31 @@ const FAILURE_THRESHOLD = parseInt(process.env.FAILURE_THRESHOLD, 10) || 2;
 const SILENCE_PROBE_INTERVAL_MS = parseInt(process.env.SILENCE_PROBE_INTERVAL_MS, 10) || 5000;
 const SILENCE_FAILURE_THRESHOLD = parseInt(process.env.SILENCE_FAILURE_THRESHOLD, 10) || 3;
 const SAVE_INTERVAL = parseInt(process.env.SAVE_INTERVAL_MS, 10) || 60 * 1000;
-// Email an unconfirmed blip when it hits every stream at once (server-level).
-// Tolerant of case and stray whitespace — this gets typed into a hosting-panel
-// text field, where a capitalised value or a pasted tab would otherwise leave
-// alerts silently switched on.
-const ALERT_ON_SERVER_BLIP =
-  String(process.env.ALERT_ON_SERVER_BLIP ?? '').trim().toLowerCase() !== 'false';
+// Escape hatch: alert on every confirmed outage, even ones Icecast proves did
+// not touch a single listener. Off by default — that behaviour is what buried
+// the real alerts in noise. Tolerant of case and stray whitespace, because this
+// gets typed into a hosting-panel text field where a capitalised value or a
+// pasted tab would otherwise leave alerts silently switched on.
+const ALERT_ON_HARMLESS_OUTAGE =
+  String(process.env.ALERT_ON_HARMLESS_OUTAGE ?? '').trim().toLowerCase() === 'true';
+
+// Severity for a failure that has not yet reached FAILURE_THRESHOLD. Split in
+// two because one label cannot honestly cover both: a vanished mount really did
+// cut listeners off mid-song, while a probe reset against a healthy mount cost
+// nobody anything. Calling both a "blip" made the first sound trivial and the
+// second sound alarming.
+const BRIEF_OUTAGE = 'brief_outage';  // real gap, cleared before confirmation
+const PROBE_ERROR = 'probe_error';    // our probe failed; Icecast served on
+
+function unconfirmedSeverity(diagnosisResult) {
+  return diagnosisResult?.listenerImpact === 'none' ? PROBE_ERROR : BRIEF_OUTAGE;
+}
+
+// An outage is worth an email unless Icecast positively cleared it.
+function warrantsAlert(diagnosisResult) {
+  if (ALERT_ON_HARMLESS_OUTAGE) return true;
+  return diagnosisResult?.listenerImpact !== 'none';
+}
 
 // ── State ───────────────────────────────────────────────────────────────────
 let streams = [];
@@ -239,10 +269,14 @@ async function resolveDeadAir(stream, result, timestamp) {
 
   if (episode?.eventId) {
     const durationMs = new Date(timestamp) - new Date(episode.startedAt);
+    // Dead air keeps listeners connected — they are hearing silence rather than
+    // being disconnected — so the audience is still fully exposed to it and the
+    // same listener-minutes unit applies.
     store.updateEvent(episode.eventId, {
       resolvedAt: timestamp,
       durationMs,
       durationLabel: diagnose.fmtDuration(durationMs),
+      audience: store.buildAudienceImpact(stream.id, episode.startedAt, durationMs),
     });
   }
 
@@ -377,38 +411,42 @@ async function runChecks() {
       const episode = episodes[stream.id];
 
       if (!episode) {
-        // First failure of a new episode. Always recorded, even though a
-        // single blip normally stays silent.
-        const serverLevel = allDown && streams.length > 1;
+        // First failure of a new episode. Always recorded — recording is
+        // decoupled from notifying — but never emailed on its own. One failed
+        // check cannot distinguish a stream that is going down from a stream
+        // that hiccuped, and FAILURE_THRESHOLD exists to make that call.
+        const severity = unconfirmedSeverity(dg);
         const event = store.addEvent({
           timestamp,
           streamId: stream.id,
           streamName: stream.name,
           type: 'down',
-          severity: 'blip',
+          severity,
           confirmed: false,
           scope: dg.scope,
           message: `${stream.name} failed a check — ${dg.causeLabel}${result.error ? ` (${result.error})` : ''}`,
           failedChecks: 1,
           diagnosis: dg,
-          email: { attempted: false, sent: null, reason: 'unconfirmed single-check blip' },
+          email: {
+            attempted: false,
+            sent: null,
+            reason: severity === PROBE_ERROR
+              ? 'probe-side failure — Icecast reachable and mount still serving'
+              : 'unconfirmed single failed check',
+          },
         });
 
         episodes[stream.id] = {
           eventId: event.id,
           startedAt: timestamp,
           alerted: false,
-          severity: 'blip',
+          severity,
         };
 
-        console.warn(`[Monitor] ⚠️  BLIP recorded — ${stream.name}: ${dg.causeLabel} (${result.error})`);
-
-        if (serverLevel && ALERT_ON_SERVER_BLIP) {
-          newlyNotable.push({
-            stream, result, diagnosis: dg,
-            eventId: event.id,
-            reason: 'server-level blip',
-          });
+        if (severity === PROBE_ERROR) {
+          console.warn(`[Monitor] ◦ Probe anomaly — ${stream.name}: ${dg.causeLabel} (mount still serving, no listener impact)`);
+        } else {
+          console.warn(`[Monitor] ⚠️  Brief outage recorded — ${stream.name}: ${dg.causeLabel} (${result.error})`);
         }
       } else {
         // Ongoing episode: keep the single event up to date rather than
@@ -419,7 +457,10 @@ async function runChecks() {
           lastCheckAt: timestamp,
         };
 
-        if (failures >= FAILURE_THRESHOLD && episode.severity !== 'outage') {
+        const confirmed = failures >= FAILURE_THRESHOLD;
+        const alertable = confirmed && warrantsAlert(dg);
+
+        if (confirmed && episode.severity !== 'outage') {
           patch.severity = 'outage';
           patch.confirmed = true;
           patch.scope = dg.scope;
@@ -429,14 +470,28 @@ async function runChecks() {
           console.error(`[ALERT] ${stream.name} DOWN confirmed after ${failures} checks — ${dg.causeLabel}`);
         }
 
+        // A confirmed outage that Icecast clears of listener impact is still a
+        // real, fully recorded outage — it just does not email. Say so on the
+        // event itself, so the history can explain its own silence.
+        if (confirmed && !alertable && !episode.alerted) {
+          patch.email = {
+            attempted: false,
+            sent: null,
+            reason: 'suppressed — Icecast reachable and mount still serving listeners',
+          };
+        }
+
         store.updateEvent(episode.eventId, patch);
 
-        if (failures >= FAILURE_THRESHOLD && !episode.alerted) {
+        if (alertable && !episode.alerted) {
           newlyNotable.push({
             stream, result, diagnosis: dg,
             eventId: episode.eventId,
             reason: 'confirmed outage',
           });
+        } else if (confirmed && !alertable && !episode.suppressionLogged) {
+          episode.suppressionLogged = true;
+          console.log(`[Monitor] 🔕 ${stream.name} outage confirmed but NOT emailed — mount still listed by Icecast, no listener impact`);
         }
       }
     } else if (wasDown || episodes[stream.id]) {
@@ -446,18 +501,29 @@ async function runChecks() {
         const dg = diagnose.classify({ stream, result, snapshot: snap, prevSnapshot, cycle });
         const sourceOutage = diagnose.deriveSourceOutage(snap, stream, episode.startedAt);
 
+        // Freeze the audience cost now. Raw samples expire after a week and
+        // Icecast reports no listeners for a mount that no longer exists, so
+        // this figure is unrecoverable once the window closes — but the event
+        // itself is kept forever.
+        const audience = store.buildAudienceImpact(stream.id, episode.startedAt, durationMs);
+
         store.updateEvent(episode.eventId, {
           resolvedAt: timestamp,
           durationMs,
           durationLabel: diagnose.fmtDuration(durationMs),
           sourceOutage,
           selfCleared: !episode.alerted,
+          audience,
         });
+
+        if (audience.listenerMinutesLost) {
+          console.log(`[Monitor] 📉 ${stream.name} — ~${audience.listenersBefore} listener(s) cut off, ${audience.listenerMinutesLost} listener-minutes lost (${audience.confidence})`);
+        }
 
         if (episode.alerted) {
           recoveries.push({ stream, result, diagnosis: dg, episode, durationMs, sourceOutage });
         } else {
-          console.log(`[Monitor] ✓ ${stream.name} self-cleared after ${diagnose.fmtDuration(durationMs)} (blip, no alert sent)`);
+          console.log(`[Monitor] ✓ ${stream.name} self-cleared after ${diagnose.fmtDuration(durationMs)} (no alert was sent)`);
         }
         delete episodes[stream.id];
       }
@@ -953,7 +1019,8 @@ function getConfig() {
     silenceFailureThreshold: SILENCE_FAILURE_THRESHOLD,
     emailConfigured: !!transporter,
     alertRecipients: (process.env.ALERT_EMAILS || '').split(',').map((e) => e.trim()).filter(Boolean).length,
-    alertOnServerBlip: ALERT_ON_SERVER_BLIP,
+    alertPolicy: ALERT_ON_HARMLESS_OUTAGE ? 'all confirmed outages' : 'confirmed outages with listener impact',
+    alertOnHarmlessOutage: ALERT_ON_HARMLESS_OUTAGE,
     sampleRetentionDays: store.SAMPLE_RETENTION_DAYS,
     eventRetention: 'permanent',
     streams: streams.map((s) => ({ id: s.id, name: s.name })),

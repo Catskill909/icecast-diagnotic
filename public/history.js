@@ -18,11 +18,16 @@
   let lastUptime = null;   // last /api/uptime payload, re-read on filter changes
   let lastRangeIsAllTime = false;
 
+  // 'blip' is the retired severity — stored history still carries it, so it has
+  // to keep rendering. New events split it in two, because a vanished mount and
+  // a failed probe against a healthy mount are not the same thing.
   const SEVERITY_META = {
-    outage:   { icon: 'error',        label: 'Outage' },
-    blip:     { icon: 'bolt',         label: 'Blip' },
-    dead_air: { icon: 'volume_off',   label: 'Dead Air' },
-    recovery: { icon: 'check_circle', label: 'Recovered' },
+    outage:       { icon: 'error',        label: 'Outage' },
+    brief_outage: { icon: 'bolt',         label: 'Brief Outage' },
+    probe_error:  { icon: 'sensors_off',  label: 'Probe Anomaly' },
+    blip:         { icon: 'bolt',         label: 'Blip (legacy)' },
+    dead_air:     { icon: 'volume_off',   label: 'Dead Air' },
+    recovery:     { icon: 'check_circle', label: 'Recovered' },
   };
 
   // ── Boot ────────────────────────────────────────────────────────────────
@@ -359,12 +364,13 @@
 
   // ── Summary tiles ───────────────────────────────────────────────────────
   function renderSummary() {
+    const UNCONFIRMED = new Set(['brief_outage', 'probe_error', 'blip']);
     const outages = filtered.filter((e) => e.severity === 'outage').length;
-    const blips = filtered.filter((e) => e.severity === 'blip').length;
+    const blips = filtered.filter((e) => UNCONFIRMED.has(e.severity)).length;
     const deadAir = filtered.filter((e) => e.severity === 'dead_air').length;
 
     // Only events that could plausibly notify count toward the ratio.
-    const notifiable = filtered.filter((e) => e.severity !== 'blip');
+    const notifiable = filtered.filter((e) => !UNCONFIRMED.has(e.severity));
     const emailed = filtered.filter((e) => e.email?.sent === true).length;
     // Backfilled events predate delivery tracking: an alert may well have gone
     // out, we simply have no record of it. Lumping them in with genuine
@@ -471,6 +477,17 @@
       ? '<span class="badge reconstructed" title="Backfilled from raw telemetry — diagnosis inferred, not observed live">Reconstructed</span>'
       : '';
 
+    // A failure that has ended must not keep reading as a live one. Without
+    // this the list showed every historical event with the same red badge it
+    // had at the moment it fired, so a fully recovered week looked like a wall
+    // of unresolved errors.
+    const isFailure = e.type !== 'up';
+    const resolvedChip = !isFailure
+      ? ''
+      : e.resolvedAt
+      ? `<span class="state-chip resolved" title="Recovered ${new Date(e.resolvedAt).toLocaleString('en-US')}"><span class="material-symbols-outlined">check_circle</span>Resolved</span>`
+      : '<span class="state-chip ongoing"><span class="material-symbols-outlined">pending</span>Ongoing</span>';
+
     let mailChip;
     if (e.email?.sent === true) {
       mailChip = '<span class="mail-chip sent"><span class="material-symbols-outlined">mark_email_read</span>Alert sent</span>';
@@ -492,7 +509,7 @@
     }
 
     return `
-      <div class="evt${isOpen ? ' open' : ''}" data-id="${esc(e.id)}">
+      <div class="evt${isOpen ? ' open' : ''}${isFailure && e.resolvedAt ? ' settled' : ''}" data-id="${esc(e.id)}">
         <div class="evt-head row-tip" data-tip="Click for full diagnosis" data-tip-open="Click to collapse">
           <div class="evt-icon ${e.severity}"><span class="material-symbols-outlined">${meta.icon}</span></div>
           <div class="evt-time">${fmtTime(e.timestamp)}</div>
@@ -504,6 +521,7 @@
             ${reconBadge}
             ${scopeBadge}
             <span class="badge ${e.severity}">${meta.label}</span>
+            ${resolvedChip}
             ${mailChip}
           </div>
           <div class="evt-chevron"><span class="material-symbols-outlined">expand_more</span></div>

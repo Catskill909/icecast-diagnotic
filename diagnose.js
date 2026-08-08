@@ -748,13 +748,37 @@ function classify({ stream, result, snapshot, prevSnapshot, cycle = [], deadAir 
   });
 }
 
+/**
+ * Did this failure actually cost us listeners?
+ *
+ * The monitor sits outside the network, so a failed probe proves only that OUR
+ * connection broke — not that the audience lost audio. Icecast itself is the
+ * witness: if the server is reachable and still lists the mount, the mount was
+ * serving listeners the whole time and only our probe fell over. If the server
+ * is reachable and the mount is GONE, the mount could not have served anyone —
+ * every connected player was dropped. If we cannot reach Icecast at all we have
+ * no witness and must not guess in either direction.
+ *
+ *   'confirmed' → listeners were dropped (or are hearing silence)
+ *   'none'      → Icecast and the mount stayed healthy; probe-side failure only
+ *   'unknown'   → no Icecast evidence available
+ */
+function assessListenerImpact({ cause, mount, snapshot }) {
+  if (cause === 'dead_air') return 'confirmed';
+  if (!cause) return 'none';
+  if (!snapshot?.reachable) return 'unknown';
+  return mount ? 'none' : 'confirmed';
+}
+
 function finalize({
   cause, confidence, scope, evidence, mount, mountPath,
   snapshot, timings, errorCode, httpStatus, result, serverRestarted,
 }) {
+  const listenerImpact = assessListenerImpact({ cause, mount, snapshot });
   return {
     cause,
     causeLabel: cause ? CAUSE_LABELS[cause] || CAUSE_LABELS.unknown : 'Healthy',
+    listenerImpact,
     confidence,
     scope,
     evidence,
@@ -773,7 +797,10 @@ function finalize({
       serverStart: snapshot?.serverStart || null,
       serverRestarted: !!serverRestarted,
       mountPath,
-      mountPresent: !!mount,
+      // null, not false, when Icecast is unreachable: we did not observe the
+      // mount missing, we failed to look. Recording `false` here made every
+      // network hiccup read as "the mount vanished" and overstated the fault.
+      mountPresent: snapshot?.reachable ? !!mount : null,
       mountCount: snapshot?.mountCount || 0,
       sourceConnectedSince: mount?.streamStart || null,
       listeners: mount?.listeners ?? null,

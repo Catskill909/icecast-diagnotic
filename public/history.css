@@ -321,7 +321,9 @@ a.help-btn { text-decoration: none; }
 }
 .evt-icon .material-symbols-outlined { font-size: 19px; }
 .evt-icon.outage { background: var(--status-down-surface); color: var(--status-down); }
-.evt-icon.blip { background: rgba(234, 179, 8, 0.1); color: var(--blip); }
+.evt-icon.blip,
+.evt-icon.brief_outage { background: rgba(234, 179, 8, 0.1); color: var(--blip); }
+.evt-icon.probe_error { background: var(--surface-3); color: var(--text-tertiary); }
 .evt-icon.dead_air { background: var(--warn-surface); color: var(--warn); }
 .evt-icon.recovery { background: var(--status-up-surface); color: var(--status-up); }
 
@@ -361,7 +363,11 @@ a.help-btn { text-decoration: none; }
   white-space: nowrap;
 }
 .badge.outage { background: var(--status-down-surface); color: var(--status-down); }
-.badge.blip { background: rgba(234, 179, 8, 0.12); color: var(--blip); }
+.badge.blip,
+.badge.brief_outage { background: rgba(234, 179, 8, 0.12); color: var(--blip); }
+/* Deliberately colourless: Icecast confirmed these cost no listener any audio,
+   so they must not compete for attention with events that did. */
+.badge.probe_error { background: var(--surface-3); color: var(--text-tertiary); }
 .badge.dead_air { background: var(--warn-surface); color: var(--warn); }
 .badge.recovery { background: var(--status-up-surface); color: var(--status-up); }
 .badge.scope-server { background: rgba(239, 68, 68, 0.15); color: #fca5a5; }
@@ -386,6 +392,29 @@ a.help-btn { text-decoration: none; }
 .mail-chip.sent { background: var(--status-up-surface); color: var(--status-up); }
 .mail-chip.failed { background: var(--status-down-surface); color: var(--status-down); }
 .mail-chip.none { background: var(--surface-3); color: var(--text-tertiary); }
+
+/* Whether a failure is over is the first thing you want to know about it. */
+.state-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 0.7rem;
+  padding: 4px 8px;
+  border-radius: 20px;
+  white-space: nowrap;
+}
+.state-chip .material-symbols-outlined { font-size: 14px; }
+.state-chip.resolved { background: var(--status-up-surface); color: var(--status-up); }
+.state-chip.ongoing {
+  background: var(--status-down-surface);
+  color: var(--status-down);
+  font-weight: 600;
+}
+
+/* Settled rows stay legible but stop shouting — only a live failure should. */
+.evt.settled .evt-icon { opacity: 0.62; }
+.evt.settled:hover .evt-icon,
+.evt.settled.open .evt-icon { opacity: 1; }
 
 .evt-chevron {
   /* Matches the dashboard: bright enough at rest to read as interactive. */

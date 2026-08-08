@@ -34,6 +34,12 @@ const HOUR_MS = 60 * 60 * 1000;
 // eventually be a memory problem — at ~35 events/day this is roughly 8 years.
 const MAX_EVENTS = parseInt(process.env.MAX_EVENTS, 10) || 100000;
 
+// Severities for a failure that never reached FAILURE_THRESHOLD. 'blip' is the
+// retired name for both and still sits in stored history, so every count has to
+// keep recognising it — events are permanent and are never rewritten.
+const UNCONFIRMED_SEVERITIES = new Set(['brief_outage', 'probe_error', 'blip']);
+const isUnconfirmedSeverity = (s) => UNCONFIRMED_SEVERITIES.has(s);
+
 // ── State ───────────────────────────────────────────────────────────────────
 let events = [];             // permanent incident record, oldest → newest
 let samples = {};            // { [streamId]: [ sample ] }  raw, rolling window
@@ -306,6 +312,107 @@ function getRollups(streamId) {
   return rollups[streamId] || [];
 }
 
+// ── Audience measurement ────────────────────────────────────────────────────
+/**
+ * Average listeners by hour of day (UTC), built from every retained source.
+ *
+ * Counts ONLY samples where the stream was up. During an outage Icecast reports
+ * zero listeners — not because nobody was listening, but because the mount no
+ * longer exists to have an audience. Averaging those zeros in would let the very
+ * outages we are measuring drag down the baseline we measure them against.
+ */
+function getHourOfDayProfile(streamId) {
+  const sum = new Array(24).fill(0);
+  const count = new Array(24).fill(0);
+
+  for (const s of samples[streamId] || []) {
+    if (s.status !== 'up' || s.listeners == null) continue;
+    const h = new Date(s.timestamp).getUTCHours();
+    sum[h] += s.listeners;
+    count[h]++;
+  }
+
+  for (const r of rollups[streamId] || []) {
+    if (r.avgListeners == null) continue;
+    const h = new Date(`${r.hour}:00:00Z`).getUTCHours();
+    if (!isFinite(h)) continue;
+    const n = r.listenerCount ?? r.up ?? r.checks ?? 1;
+    sum[h] += r.avgListeners * n;
+    count[h] += n;
+  }
+
+  return sum.map((v, h) => (count[h] ? v / count[h] : null));
+}
+
+/**
+ * What the audience looked like immediately before a failure began.
+ *
+ * This is the one measurement that cannot be recovered later: Icecast only
+ * reports listeners while the mount exists, and raw samples are compacted after
+ * SAMPLE_RETENTION_DAYS. So it has to be captured at resolution time and frozen
+ * onto the permanent event record.
+ *
+ *   confidence 'measured' → a real pre-outage sample was found
+ *   confidence 'modelled' → estimated from this stream's hour-of-day profile
+ *   confidence 'unknown'  → no basis at all
+ */
+function getAudienceContext(streamId, atIso, lookbackMs = 60 * 60 * 1000) {
+  const at = new Date(atIso).getTime();
+  if (!isFinite(at)) return { listenersBefore: null, peakBefore: null, confidence: 'unknown', basis: 'invalid timestamp' };
+
+  const arr = samples[streamId] || [];
+  let last = null;
+  let peak = null;
+
+  for (const s of arr) {
+    const t = new Date(s.timestamp).getTime();
+    if (!isFinite(t) || t >= at) continue;
+    if (s.status !== 'up' || s.listeners == null) continue;
+    if (!last || t > new Date(last.timestamp).getTime()) last = s;
+    if (t >= at - lookbackMs) peak = peak == null ? s.listeners : Math.max(peak, s.listeners);
+  }
+
+  if (last) {
+    return {
+      listenersBefore: last.listeners,
+      peakBefore: peak ?? last.listeners,
+      confidence: 'measured',
+      basis: `last healthy check at ${last.timestamp}`,
+    };
+  }
+
+  const profile = getHourOfDayProfile(streamId);
+  const hour = new Date(at).getUTCHours();
+  if (profile[hour] != null) {
+    return {
+      listenersBefore: Math.round(profile[hour]),
+      peakBefore: null,
+      confidence: 'modelled',
+      basis: `hour-of-day average for ${String(hour).padStart(2, '0')}:00 UTC`,
+    };
+  }
+
+  return { listenersBefore: null, peakBefore: null, confidence: 'unknown', basis: 'no audience data retained' };
+}
+
+/**
+ * Freezes the audience cost of one failure onto the event.
+ * Listener-minutes is the honest unit here: it combines how many people were
+ * cut off with how long they stayed cut off, which neither figure conveys alone.
+ */
+function buildAudienceImpact(streamId, startedAtIso, durationMs) {
+  const ctx = getAudienceContext(streamId, startedAtIso);
+  const minutes = (durationMs || 0) / 60000;
+  return {
+    listenersBefore: ctx.listenersBefore,
+    peakBefore: ctx.peakBefore,
+    listenerMinutesLost:
+      ctx.listenersBefore == null ? null : Math.round(ctx.listenersBefore * minutes),
+    confidence: ctx.confidence,
+    basis: ctx.basis,
+  };
+}
+
 /**
  * Compacts raw samples older than the retention window into hourly rollups,
  * preserving uptime accuracy indefinitely at ~1/60th the storage cost.
@@ -346,7 +453,11 @@ function prune() {
           b.minResponse = b.minResponse == null ? s.responseTime : Math.min(b.minResponse, s.responseTime);
           b.maxResponse = b.maxResponse == null ? s.responseTime : Math.max(b.maxResponse, s.responseTime);
         }
-        if (s.listeners != null) {
+        // Only count the audience while the stream was actually up. A down
+        // sample reports zero listeners because the mount is gone, not because
+        // nobody was listening — folding those zeros in would permanently
+        // understate the baseline audience in exactly the hours we care about.
+        if (s.status === 'up' && s.listeners != null) {
           b.listenerSum += s.listeners;
           b.listenerCount++;
           b.listenerPeak = Math.max(b.listenerPeak, s.listeners);
@@ -357,34 +468,47 @@ function prune() {
       for (const [key, b] of buckets) {
         // Merge rather than overwrite, in case a prune already wrote this hour.
         const prevRoll = existing.get(key);
+        // An average can only be merged against the count it was taken over.
+        // Weighting a previous average by total `checks` while dividing by a
+        // sample count skewed every hour that two prunes both touched, so the
+        // counts are now stored alongside the averages and carried forward.
+        // (`?? prevRoll.checks` keeps rollups written before this change usable.)
         const merged = prevRoll
-          ? {
-              hour: key,
-              checks: prevRoll.checks + b.checks,
-              up: prevRoll.up + b.up,
-              down: prevRoll.down + b.down,
-              silent: prevRoll.silent + b.silent,
-              avgResponse: Math.round(
-                ((prevRoll.avgResponse || 0) * prevRoll.checks + b.responseSum) /
-                  Math.max(1, prevRoll.checks + b.responseCount),
-              ),
-              minResponse: Math.min(prevRoll.minResponse ?? Infinity, b.minResponse ?? Infinity),
-              maxResponse: Math.max(prevRoll.maxResponse ?? 0, b.maxResponse ?? 0),
-              avgListeners: Math.round(
-                ((prevRoll.avgListeners || 0) * prevRoll.checks + b.listenerSum) /
-                  Math.max(1, prevRoll.checks + b.listenerCount),
-              ),
-              listenerPeak: Math.max(prevRoll.listenerPeak || 0, b.listenerPeak),
-            }
+          ? (() => {
+              const prevRespN = prevRoll.responseCount ?? prevRoll.checks ?? 0;
+              const prevListN = prevRoll.listenerCount ?? prevRoll.checks ?? 0;
+              const respN = prevRespN + b.responseCount;
+              const listN = prevListN + b.listenerCount;
+              return {
+                hour: key,
+                checks: prevRoll.checks + b.checks,
+                up: prevRoll.up + b.up,
+                down: prevRoll.down + b.down,
+                silent: prevRoll.silent + b.silent,
+                responseCount: respN,
+                avgResponse: respN
+                  ? Math.round(((prevRoll.avgResponse || 0) * prevRespN + b.responseSum) / respN)
+                  : null,
+                minResponse: Math.min(prevRoll.minResponse ?? Infinity, b.minResponse ?? Infinity),
+                maxResponse: Math.max(prevRoll.maxResponse ?? 0, b.maxResponse ?? 0),
+                listenerCount: listN,
+                avgListeners: listN
+                  ? Math.round(((prevRoll.avgListeners || 0) * prevListN + b.listenerSum) / listN)
+                  : null,
+                listenerPeak: Math.max(prevRoll.listenerPeak || 0, b.listenerPeak),
+              };
+            })()
           : {
               hour: key,
               checks: b.checks,
               up: b.up,
               down: b.down,
               silent: b.silent,
+              responseCount: b.responseCount,
               avgResponse: b.responseCount ? Math.round(b.responseSum / b.responseCount) : null,
               minResponse: b.minResponse,
               maxResponse: b.maxResponse,
+              listenerCount: b.listenerCount,
               avgListeners: b.listenerCount ? Math.round(b.listenerSum / b.listenerCount) : null,
               listenerPeak: b.listenerPeak,
             };
@@ -482,7 +606,10 @@ function getSummary(streamIds, windowMs) {
     out[id] = {
       uptime: getUptime(id, windowMs),
       outages: evts.filter((e) => e.severity === 'outage').length,
-      blips: evts.filter((e) => e.severity === 'blip').length,
+      briefOutages: evts.filter((e) => e.severity === 'brief_outage').length,
+      probeErrors: evts.filter((e) => e.severity === 'probe_error').length,
+      // Every unconfirmed failure, whatever it was called when it was written.
+      blips: evts.filter((e) => isUnconfirmedSeverity(e.severity)).length,
       deadAir: evts.filter((e) => e.severity === 'dead_air').length,
       sampleCount: (samples[id] || []).length,
       rollupCount: (rollups[id] || []).length,
@@ -500,13 +627,19 @@ function getDailyBuckets(days) {
     const t = new Date(e.timestamp).getTime();
     if (t < cutoff) continue;
     const day = new Date(e.timestamp).toISOString().slice(0, 10);
-    if (!out.has(day)) out.set(day, { day, outages: 0, blips: 0, deadAir: 0, recoveries: 0, total: 0 });
+    if (!out.has(day)) {
+      out.set(day, { day, outages: 0, blips: 0, briefOutages: 0, probeErrors: 0, deadAir: 0, recoveries: 0, total: 0 });
+    }
     const b = out.get(day);
     b.total++;
     if (e.severity === 'outage') b.outages++;
-    else if (e.severity === 'blip') b.blips++;
     else if (e.severity === 'dead_air') b.deadAir++;
     else if (e.severity === 'recovery') b.recoveries++;
+    else if (isUnconfirmedSeverity(e.severity)) {
+      b.blips++;
+      if (e.severity === 'probe_error') b.probeErrors++;
+      else b.briefOutages++;
+    }
   }
 
   return [...out.values()].sort((a, b) => a.day.localeCompare(b.day));
@@ -592,5 +725,7 @@ module.exports = {
   addSample, getSamples, getAllSamples, getRollups,
   getUptime, getOverallUptime, getCoverageStart, getSummary, getDailyBuckets, getCauseBreakdown,
   getStatusCache, setStatusCache, getStorageInfo,
+  isUnconfirmedSeverity,
+  getAudienceContext, getHourOfDayProfile, buildAudienceImpact,
   SAMPLE_RETENTION_DAYS,
 };
