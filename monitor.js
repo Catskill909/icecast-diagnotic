@@ -89,6 +89,14 @@ function warrantsAlert(diagnosisResult) {
   return diagnosisResult?.listenerImpact !== 'none';
 }
 
+// Worst verdict seen across an episode. An episode is judged by its most severe
+// moment: one check that caught the mount missing means listeners were dropped,
+// regardless of what the checks either side of it saw.
+const IMPACT_RANK = { confirmed: 2, unknown: 1, none: 0 };
+function worstImpact(a, b) {
+  return (IMPACT_RANK[b] ?? 0) > (IMPACT_RANK[a] ?? 0) ? b : (a ?? 'none');
+}
+
 // ── State ───────────────────────────────────────────────────────────────────
 let streams = [];
 let streamStatus = {};
@@ -441,6 +449,10 @@ async function runChecks() {
           startedAt: timestamp,
           alerted: false,
           severity,
+          // Judged from the FAILURE, not from the recovery that ends the
+          // episode — by then the stream is healthy and every verdict reads
+          // 'none'. See the resolution branch.
+          listenerImpact: dg.listenerImpact,
         };
 
         if (severity === PROBE_ERROR) {
@@ -459,6 +471,7 @@ async function runChecks() {
 
         const confirmed = failures >= FAILURE_THRESHOLD;
         const alertable = confirmed && warrantsAlert(dg);
+        episode.listenerImpact = worstImpact(episode.listenerImpact, dg.listenerImpact);
 
         if (confirmed && episode.severity !== 'outage') {
           patch.severity = 'outage';
@@ -505,7 +518,13 @@ async function runChecks() {
         // Icecast reports no listeners for a mount that no longer exists, so
         // this figure is unrecoverable once the window closes — but the event
         // itself is kept forever.
-        const audience = store.buildAudienceImpact(stream.id, episode.startedAt, durationMs, dg.listenerImpact);
+        // `dg` here describes the RECOVERY — the stream is up, so its verdict is
+        // always 'none'. Using it charged every resolved outage zero listener
+        // loss. The episode's own worst verdict, recorded while it was failing,
+        // is the only correct input.
+        const audience = store.buildAudienceImpact(
+          stream.id, episode.startedAt, durationMs, episode.listenerImpact,
+        );
 
         store.updateEvent(episode.eventId, {
           resolvedAt: timestamp,
