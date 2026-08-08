@@ -565,10 +565,31 @@
     return Math.ceil(v / (mag / 2)) * (mag / 2);
   }
 
+  /**
+   * Ticks on natural boundaries — midnight, or the top of the hour — rather
+   * than on even divisions of the span.
+   *
+   * Dividing the range into six equal parts puts ticks at arbitrary instants,
+   * so a four-day span produced labels like "Aug 4 | Aug 5 | 8:00 PM | Aug 6",
+   * mixing two label formats and repeating a time. Snapping to real boundaries
+   * gives one label per day, which is what a reader is looking for anyway.
+   */
   function timeTicks(t0, t1, want) {
-    const step = (t1 - t0) / want;
+    const MIN = 60000, HOUR = 60 * MIN, DAY = 24 * HOUR;
+    const span = t1 - t0;
+    const steps = [
+      15 * MIN, 30 * MIN, HOUR, 2 * HOUR, 3 * HOUR, 6 * HOUR, 12 * HOUR,
+      DAY, 2 * DAY, 7 * DAY, 14 * DAY, 28 * DAY, 91 * DAY, 182 * DAY, 365 * DAY,
+    ];
+    const target = span / want;
+    const step = steps.find((s) => s >= target) || steps[steps.length - 1];
+
+    // Align to the step so ticks land on round times, not on t0 + n·step.
     const out = [];
-    for (let i = 0; i <= want; i++) out.push(t0 + step * i);
+    for (let t = Math.ceil(t0 / step) * step; t <= t1; t += step) out.push(t);
+
+    // A span shorter than one step can leave nothing to label.
+    if (out.length < 2) return [t0, t1];
     return out;
   }
 
