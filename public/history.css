@@ -460,16 +460,23 @@ a.help-btn { text-decoration: none; }
 }
 
 /* ── Summary tiles ─────────────────────────────────────────────────────────── */
-/* Six tiles here versus the dashboard's five. Left to auto-fit, the sixth
-   orphans onto a row of its own at common widths, so pin an explicit balanced
-   grid: 3x2 through the usual desktop range, 6 across only when there is
-   genuinely room for it. */
+/* SEVEN tiles here versus the dashboard's five. Left to auto-fit they reflow
+   into whatever fits, which strands the last one alone on a third row — the
+   count and the column choice have to be kept in step, so update this if a tile
+   is ever added or removed.
+
+   Four columns divides seven into 4 + 3: two rows, nothing orphaned, and cards
+   stay ~285px wide inside the 1200px container. A wider breakpoint would not
+   help — .app caps at 1200px, so more columns only makes each tile narrower. */
 @media (min-width: 781px) {
-  .summary-bar { grid-template-columns: repeat(3, 1fr); }
+  .summary-bar { grid-template-columns: repeat(4, 1fr); }
 }
 
-@media (min-width: 1500px) {
-  .summary-bar { grid-template-columns: repeat(6, 1fr); }
+/* The tiles are scanned, not read. Trimming the padding and the gap keeps all
+   seven above the fold without touching the type scale. */
+@media (min-width: 781px) {
+  .summary-bar { gap: 12px; margin-bottom: 24px; }
+  .summary-bar .summary-card { padding: 16px 18px; }
 }
 
 /* ── Overview period control ───────────────────────────────────────────────── */
