@@ -276,7 +276,7 @@ async function resolveDeadAir(stream, result, timestamp) {
       resolvedAt: timestamp,
       durationMs,
       durationLabel: diagnose.fmtDuration(durationMs),
-      audience: store.buildAudienceImpact(stream.id, episode.startedAt, durationMs),
+      audience: store.buildAudienceImpact(stream.id, episode.startedAt, durationMs, 'confirmed'),
     });
   }
 
@@ -505,7 +505,7 @@ async function runChecks() {
         // Icecast reports no listeners for a mount that no longer exists, so
         // this figure is unrecoverable once the window closes — but the event
         // itself is kept forever.
-        const audience = store.buildAudienceImpact(stream.id, episode.startedAt, durationMs);
+        const audience = store.buildAudienceImpact(stream.id, episode.startedAt, durationMs, dg.listenerImpact);
 
         store.updateEvent(episode.eventId, {
           resolvedAt: timestamp,
@@ -1003,6 +1003,50 @@ function getIncidents() {
 function getEvents(opts) { return store.getEvents(opts); }
 function getSamples(streamId, sinceMs) { return store.getSamples(streamId, sinceMs); }
 function getRollups(streamId) { return store.getRollups(streamId); }
+
+/**
+ * Audience over time for every stream, plus the outage windows to draw over it.
+ * Both come from one call so a chart can never render a series and its overlay
+ * from two different moments in time.
+ */
+function getListeners(windowMs, bucketMs) {
+  const ids = streams.map((s) => s.id);
+  const cutoff = Date.now() - windowMs;
+
+  const series = {};
+  for (const s of streams) series[s.id] = store.getListenerSeries(s.id, windowMs, bucketMs);
+
+  const outages = store
+    .getEvents({ limit: Number.MAX_SAFE_INTEGER })
+    .events.filter((e) => {
+      if (e.type === 'up' || !e.durationMs) return false;
+      return new Date(e.timestamp).getTime() > cutoff;
+    })
+    .map((e) => ({
+      id: e.id,
+      streamId: e.streamId,
+      streamName: e.streamName,
+      severity: e.severity,
+      start: e.timestamp,
+      end: e.resolvedAt || null,
+      durationMs: e.durationMs,
+      durationLabel: e.durationLabel,
+      cause: e.diagnosis?.cause || null,
+      causeLabel: e.diagnosis?.causeLabel || null,
+      listenerImpact: e.diagnosis?.listenerImpact || null,
+      audience: e.audience || null,
+    }));
+
+  return {
+    windowMs,
+    bucketMs: bucketMs || store.chooseBucketMs(windowMs),
+    streams: streams.map((s) => ({ id: s.id, name: s.name })),
+    series,
+    outages,
+    summary: store.getAudienceSummary(ids, windowMs),
+    generatedAt: new Date().toISOString(),
+  };
+}
 function getSummary(windowMs) { return store.getSummary(streams.map((s) => s.id), windowMs); }
 function getOverallUptime(windowMs) { return store.getOverallUptime(streams.map((s) => s.id), windowMs); }
 function getCoverageStart() { return store.getCoverageStart(streams.map((s) => s.id)); }
@@ -1050,7 +1094,7 @@ async function sendTestAlert(toEmail) {
     <div class="diag-box" style="background-color:#101a2e; border:1px solid #1e3a5f; border-radius:8px; padding:16px; margin-top:16px;">
       <p class="diag-title" style="font-weight:600; color:#7dd3fc !important; margin:0 0 8px 0; font-size:14px;"><span class="diag-title" style="color:#7dd3fc !important;">📚 Incident history</span></p>
       <ul style="margin:0; padding-left:20px; font-size:13px; line-height:1.8;">
-        <li style="color:#e2e8f0 !important;"><span style="color:#e2e8f0 !important;">Every failed check is recorded permanently — including brief blips that do not trigger an email</span></li>
+        <li style="color:#e2e8f0 !important;"><span style="color:#e2e8f0 !important;">Every failed check is recorded permanently — including brief ones that do not trigger an email</span></li>
         <li style="color:#e2e8f0 !important;"><span style="color:#e2e8f0 !important;">${storage.eventCount} event(s) currently on record${storage.oldestEvent ? `, back to ${new Date(storage.oldestEvent).toLocaleDateString('en-US')}` : ''}</span></li>
         <li style="color:#e2e8f0 !important;"><span style="color:#e2e8f0 !important;">Per-minute telemetry kept ${storage.sampleRetentionDays} days, then compacted to hourly summaries kept forever</span></li>
       </ul>
@@ -1074,6 +1118,6 @@ async function sendTestAlert(toEmail) {
 
 module.exports = {
   start, stop, getStreams, getStatus, getHistory, getIncidents, getConfig, sendTestAlert,
-  getEvents, getSamples, getRollups, getSummary, getOverallUptime, getCoverageStart,
+  getEvents, getSamples, getRollups, getListeners, getSummary, getOverallUptime, getCoverageStart,
   getDailyBuckets, getCauseBreakdown, getStorageInfo, getSnapshot,
 };

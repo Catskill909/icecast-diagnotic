@@ -77,11 +77,19 @@ These are deliberately decoupled. **Every** failed check is recorded permanently
 
 | Point in an episode | Recorded | Emails |
 |---|---|---|
-| Failure #1 | severity `blip` | no — unless it hits every stream at once |
-| Failure #`FAILURE_THRESHOLD` | promoted to `outage` | yes |
+| Failure #1 | `brief_outage` or `probe_error` | no |
+| Failure #`FAILURE_THRESHOLD` | promoted to `outage` | only if listeners were affected |
 | Recovery | resolved with true duration | yes, if an alert was sent |
 
-Set `ALERT_ON_SERVER_BLIP=false` to suppress even the server-wide blip alert. Blips remain fully recorded either way — the aggregate trend is the actionable signal, not the individual event.
+The gate is the diagnosis's `listenerImpact` verdict. `confirmed` (Icecast reachable, mount gone)
+and `unknown` (Icecast unreachable, so it cannot be cleared) both email. `none` — Icecast reachable
+and still serving the mount — does not, because nobody lost a second of audio. The observation in
+§6 above is exactly why: a server-side reset leaves established listeners untouched, and the
+listener counts prove it.
+
+Set `ALERT_ON_HARMLESS_OUTAGE=true` to email confirmed outages regardless of impact. Everything is
+recorded permanently either way — the aggregate trend is the actionable signal, not the individual
+event.
 
 Every event stores its delivery outcome in `email`: `sent`, `attempted` with the SMTP error, or an explicit `reason` for why no alert was warranted. A failed send is visible rather than silent.
 

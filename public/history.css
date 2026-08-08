@@ -481,3 +481,79 @@ a.help-btn { text-decoration: none; }
   .section-title .range-pills { margin-left: 0; width: 100%; justify-content: space-between; }
   .section-title { flex-wrap: wrap; }
 }
+
+/* ── Listener audience chart ────────────────────────────────────────────────
+   Small multiples: one row per stream, each with its own vertical scale, all
+   sharing a single time axis so a server-wide event lines up across rows.
+   ─────────────────────────────────────────────────────────────────────────── */
+.audience-panel { padding: 18px 18px 14px; }
+
+.audience-chart svg {
+  display: block;
+  width: 100%;
+  height: auto;
+  overflow: visible;
+}
+
+.aud-rowbg { fill: var(--surface-2); }
+.aud-grid { stroke: var(--border); stroke-width: 1; }
+.aud-axis { stroke: var(--border); stroke-width: 1; }
+
+.aud-area { fill: var(--primary); opacity: 0.18; }
+.aud-line { fill: none; stroke: var(--primary); stroke-width: 1.8; stroke-linejoin: round; }
+.aud-peak {
+  fill: none;
+  stroke: var(--primary-light, var(--primary));
+  stroke-width: 1;
+  stroke-dasharray: 3 3;
+  opacity: 0.55;
+}
+
+/* Bands sit beneath the series — context for the data, not a rival to it. */
+.aud-band.impact { fill: var(--status-down); opacity: 0.20; }
+.aud-band.harmless { fill: var(--text-tertiary); opacity: 0.13; }
+.aud-band:hover { opacity: 0.34; }
+
+.aud-rowlabel {
+  fill: var(--text-primary);
+  font-size: 11.5px;
+  font-weight: 600;
+}
+.aud-rowmeta,
+.aud-ytick,
+.aud-xtick {
+  fill: var(--text-tertiary);
+  font-size: 9.5px;
+  font-variant-numeric: tabular-nums;
+}
+
+.audience-empty {
+  padding: 28px 8px;
+  text-align: center;
+  color: var(--text-tertiary);
+  font-size: 0.88rem;
+}
+
+.audience-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 20px;
+  padding-top: 14px;
+  margin-top: 12px;
+  border-top: 1px solid var(--border);
+  font-size: 0.76rem;
+  color: var(--text-tertiary);
+}
+.audience-legend .alg { display: inline-flex; align-items: center; gap: 7px; }
+.audience-legend .swatch {
+  width: 11px;
+  height: 11px;
+  border-radius: 2px;
+  flex: none;
+}
+.audience-legend .swatch.listeners { background: var(--primary); opacity: 0.55; }
+.audience-legend .swatch.peak {
+  background: repeating-linear-gradient(90deg, var(--primary-light, var(--primary)) 0 3px, transparent 3px 6px);
+}
+.audience-legend .swatch.outage { background: var(--status-down); opacity: 0.45; }
+.audience-legend .swatch.probe { background: var(--text-tertiary); opacity: 0.35; }

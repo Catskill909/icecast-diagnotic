@@ -87,9 +87,9 @@
         <div class="summary-detail" id="stat-outages-detail">in range</div>
       </div>
       <div class="summary-card">
-        <div class="summary-label">Blips (unconfirmed)</div>
+        <div class="summary-label">Unconfirmed</div>
         <div class="summary-value" id="stat-blips" style="color: var(--warn);">—</div>
-        <div class="summary-detail">single failed checks</div>
+        <div class="summary-detail">brief outages &amp; probe anomalies</div>
       </div>
       <div class="summary-card">
         <div class="summary-label">Dead Air</div>
@@ -105,6 +105,28 @@
         <div class="summary-label">Total Downtime</div>
         <div class="summary-value neutral" id="stat-downtime">—</div>
         <div class="summary-detail">across all streams</div>
+      </div>
+      <div class="summary-card">
+        <div class="summary-label">Listening Lost</div>
+        <div class="summary-value down" id="stat-listener-loss">—</div>
+        <div class="summary-detail" id="stat-listener-loss-detail">audience × downtime</div>
+      </div>
+    </div>
+
+    <!-- Audience over time, with the outages that interrupted it -->
+    <div class="section-title">
+      <span class="material-symbols-outlined">group</span>
+      Listener Audience
+      <span class="section-hint" id="audience-hint"></span>
+    </div>
+
+    <div class="panel audience-panel fade-in" id="audience-panel">
+      <div class="audience-chart" id="audience-chart"></div>
+      <div class="audience-legend">
+        <span class="alg"><i class="swatch listeners"></i>Listeners online</span>
+        <span class="alg"><i class="swatch peak"></i>Peak in bucket</span>
+        <span class="alg"><i class="swatch outage"></i>Outage — listeners cut off</span>
+        <span class="alg"><i class="swatch probe"></i>Probe anomaly — no listener impact</span>
       </div>
     </div>
 

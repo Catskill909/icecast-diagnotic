@@ -17,6 +17,7 @@
   let dayFilter = null;    // set by clicking a heatmap cell
   let lastUptime = null;   // last /api/uptime payload, re-read on filter changes
   let lastRangeIsAllTime = false;
+  let lastListeners = null;
 
   // 'blip' is the retired severity — stored history still carries it, so it has
   // to keep rendering. New events split it in two, because a vanished mount and
@@ -71,11 +72,18 @@
     lastUptime = uptimeRes;
     lastRangeIsAllTime = isAllTime;
 
+    // Same defensive contract as /api/uptime: audience is supplementary, and a
+    // monitor mid-deploy may serve this page from a process without the route.
+    lastListeners = await fetch(`/api/listeners?days=${days}`)
+      .then((r) => (r.ok ? r.json() : null))
+      .catch(() => null);
+
     populateStreamFilter();
     populateCauseFilter();
     renderStorage();
     syncRangePills();
     renderOverviewRange();
+    renderAudience();
     renderHeatmap();
     renderCauses();
     applyFilters();
@@ -362,6 +370,186 @@
     };
   }
 
+  // ── Listener audience ───────────────────────────────────────────────────
+  /**
+   * Small multiples, one row per stream, sharing a single time axis.
+   *
+   * A shared Y axis was the obvious first idea and the wrong one: Main peaks
+   * around 200 concurrent listeners while HD2 and HD3 sit under 15, so one
+   * scale flattens two of the three streams into a line along the floor. Giving
+   * each row its own scale keeps every stream's shape readable, and the shared
+   * X axis still lets a server-wide event be read at a glance — its outage
+   * bands line up vertically across all three rows.
+   */
+  function renderAudience() {
+    const host = $('#audience-chart');
+    const hint = $('#audience-hint');
+    const panel = $('#audience-panel');
+    // A browser holding a cached copy of the previous HTML will not have these
+    // nodes. Bailing quietly beats throwing and taking the whole page with it.
+    if (!host || !panel) return;
+
+    const data = lastListeners;
+    if (!data || !data.series || !data.streams?.length) {
+      panel.style.display = 'none';
+      return;
+    }
+    panel.style.display = '';
+
+    const rows = data.streams.filter((s) => (data.series[s.id] || []).length);
+    if (!rows.length) {
+      host.innerHTML = '<div class="audience-empty">No audience data in this range yet.</div>';
+      return;
+    }
+
+    // Geometry — a fixed viewBox scaled by CSS keeps text and strokes in
+    // proportion at any container width.
+    const W = 1000;
+    const PAD_L = 54;
+    const PAD_R = 12;
+    const ROW_H = 92;
+    const ROW_GAP = 14;
+    const AXIS_H = 26;
+    const H = rows.length * (ROW_H + ROW_GAP) - ROW_GAP + AXIS_H;
+    const plotW = W - PAD_L - PAD_R;
+
+    const times = rows.flatMap((s) => data.series[s.id].map((p) => new Date(p.t).getTime()));
+    let t0 = Math.min(...times);
+    let t1 = Math.max(...times) + (data.bucketMs || 0);
+    if (!(t1 > t0)) t1 = t0 + 1;
+    const x = (t) => PAD_L + ((t - t0) / (t1 - t0)) * plotW;
+
+    const parts = [];
+
+    rows.forEach((stream, i) => {
+      const series = data.series[stream.id];
+      const top = i * (ROW_H + ROW_GAP);
+      const base = top + ROW_H;
+
+      // Own scale per row. Headroom keeps the peak off the ceiling.
+      const maxVal = Math.max(1, ...series.map((p) => Math.max(p.peak ?? 0, p.avg ?? 0)));
+      const yMax = niceCeil(maxVal);
+      const y = (v) => base - (Math.max(0, v) / yMax) * (ROW_H - 8);
+
+      parts.push(`<rect class="aud-rowbg" x="${PAD_L}" y="${top}" width="${plotW}" height="${ROW_H}"/>`);
+
+      // Gridlines at 0 / mid / max, labelled only at the extremes.
+      [0, yMax / 2, yMax].forEach((v) => {
+        parts.push(`<line class="aud-grid" x1="${PAD_L}" y1="${y(v).toFixed(1)}" x2="${W - PAD_R}" y2="${y(v).toFixed(1)}"/>`);
+      });
+      parts.push(`<text class="aud-ytick" x="${PAD_L - 8}" y="${(y(yMax) + 4).toFixed(1)}" text-anchor="end">${yMax}</text>`);
+      parts.push(`<text class="aud-ytick" x="${PAD_L - 8}" y="${(base + 4).toFixed(1)}" text-anchor="end">0</text>`);
+
+      // Outage bands sit UNDER the data: they are context, not the subject.
+      (data.outages || []).forEach((o) => {
+        if (o.streamId !== stream.id) return;
+        const s = new Date(o.start).getTime();
+        const e = o.end ? new Date(o.end).getTime() : t1;
+        if (e < t0 || s > t1) return;
+        const bx = x(Math.max(s, t0));
+        const bw = Math.max(1.5, x(Math.min(e, t1)) - bx);
+        const harmless = (o.audience?.listenerImpact ?? o.listenerImpact) === 'none';
+        const lost = o.audience?.listenerMinutesLost;
+        const tip =
+          `${o.streamName} — ${o.causeLabel || o.severity}\n${fmtTime(o.start)} · lasted ${o.durationLabel || '—'}` +
+          (harmless
+            ? '\nNo listener impact — mount kept serving'
+            : lost != null
+            ? `\n~${o.audience.listenersBefore} listener(s) cut off · ${lost} listener-minutes lost`
+            : '');
+        parts.push(
+          `<rect class="aud-band ${harmless ? 'harmless' : 'impact'}" x="${bx.toFixed(1)}" y="${top}" ` +
+          `width="${bw.toFixed(1)}" height="${ROW_H}"><title>${esc(tip)}</title></rect>`,
+        );
+      });
+
+      // Area + line. Nulls break the path rather than being drawn as zero — a
+      // gap in the data is not an audience of nobody.
+      const segs = [];
+      let cur = [];
+      series.forEach((p) => {
+        if (p.avg == null) {
+          if (cur.length) segs.push(cur);
+          cur = [];
+        } else {
+          cur.push(p);
+        }
+      });
+      if (cur.length) segs.push(cur);
+
+      segs.forEach((seg) => {
+        const pts = seg.map((p) => `${x(new Date(p.t).getTime()).toFixed(1)},${y(p.avg).toFixed(1)}`);
+        const first = x(new Date(seg[0].t).getTime()).toFixed(1);
+        const last = x(new Date(seg[seg.length - 1].t).getTime()).toFixed(1);
+        parts.push(`<path class="aud-area" d="M${first},${base.toFixed(1)} L${pts.join(' L')} L${last},${base.toFixed(1)} Z"/>`);
+        parts.push(`<polyline class="aud-line" points="${pts.join(' ')}"/>`);
+
+        if (seg.some((p) => p.peak != null && p.peak > p.avg)) {
+          const pk = seg.map((p) => `${x(new Date(p.t).getTime()).toFixed(1)},${y(p.peak ?? p.avg).toFixed(1)}`);
+          parts.push(`<polyline class="aud-peak" points="${pk.join(' ')}"/>`);
+        }
+      });
+
+      const sum = data.summary?.perStream?.[stream.id];
+      const lostMin = sum?.listenerMinutesLost || 0;
+      parts.push(
+        `<text class="aud-rowlabel" x="${PAD_L + 8}" y="${top + 15}">${esc(stream.name)}</text>` +
+        `<text class="aud-rowmeta" x="${W - PAD_R - 6}" y="${top + 15}" text-anchor="end">` +
+        `avg ${sum?.avgListeners ?? '—'} · peak ${sum?.peakListeners ?? '—'}` +
+        (lostMin ? ` · ${lostMin} listener-min lost` : '') +
+        `</text>`,
+      );
+    });
+
+    // Shared time axis.
+    const axisY = rows.length * (ROW_H + ROW_GAP) - ROW_GAP;
+    parts.push(`<line class="aud-axis" x1="${PAD_L}" y1="${axisY}" x2="${W - PAD_R}" y2="${axisY}"/>`);
+    timeTicks(t0, t1, 6).forEach((t) => {
+      const tx = x(t);
+      if (tx < PAD_L - 1 || tx > W - PAD_R + 1) return;
+      parts.push(`<line class="aud-grid" x1="${tx.toFixed(1)}" y1="${axisY}" x2="${tx.toFixed(1)}" y2="${axisY + 5}"/>`);
+      parts.push(`<text class="aud-xtick" x="${tx.toFixed(1)}" y="${axisY + 18}" text-anchor="middle">${fmtAxis(t, t1 - t0)}</text>`);
+    });
+
+    host.innerHTML =
+      `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Listeners over time per stream, with outage periods marked">${parts.join('')}</svg>`;
+
+    const sm = data.summary;
+    if (hint) {
+      hint.textContent = sm
+        ? `${sm.listenerHoursLost} listener-hours lost` +
+          (sm.eventsMissingAudience ? ` · ${sm.eventsMissingAudience} event(s) not yet measured` : '')
+        : '';
+    }
+  }
+
+  /** Rounds an axis maximum up to something a person would choose. */
+  function niceCeil(v) {
+    if (v <= 5) return 5;
+    if (v <= 10) return 10;
+    const mag = Math.pow(10, Math.floor(Math.log10(v)));
+    return Math.ceil(v / (mag / 2)) * (mag / 2);
+  }
+
+  function timeTicks(t0, t1, want) {
+    const step = (t1 - t0) / want;
+    const out = [];
+    for (let i = 0; i <= want; i++) out.push(t0 + step * i);
+    return out;
+  }
+
+  function fmtAxis(t, span) {
+    const d = new Date(t);
+    const DAY = 86400000;
+    if (span <= 2 * DAY) {
+      return d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
+    }
+    if (span <= 200 * DAY) {
+      return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+    }
+    return d.toLocaleDateString('en-US', { month: 'short', year: '2-digit' });
+  }
+
   // ── Summary tiles ───────────────────────────────────────────────────────
   function renderSummary() {
     const UNCONFIRMED = new Set(['brief_outage', 'probe_error', 'blip']);
@@ -388,6 +576,21 @@
 
     $('#stat-outages').textContent = outages;
     $('#stat-outages-detail').textContent = `${filtered.length} events in view`;
+
+    // Audience cost is range-wide, not filter-wide: it comes from the events'
+    // frozen audience blocks via the API, so it deliberately ignores the
+    // timeline filters rather than silently reporting a subtotal as a total.
+    const lossEl = $('#stat-listener-loss');
+    const lossDetailEl = $('#stat-listener-loss-detail');
+    if (lossEl && lossDetailEl) {
+      const aud = lastListeners?.summary;
+      lossEl.textContent = aud ? `${aud.listenerHoursLost}h` : '—';
+      lossDetailEl.textContent = !aud
+        ? 'audience × downtime'
+        : aud.eventsMissingAudience
+        ? `${aud.listenerMinutesLost} listener-min · ${aud.eventsMissingAudience} unmeasured`
+        : `${aud.listenerMinutesLost} listener-minutes`;
+    }
     $('#stat-blips').textContent = blips;
     $('#stat-deadair').textContent = deadAir;
     $('#stat-emailed').textContent = emailed;

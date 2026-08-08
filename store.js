@@ -3,7 +3,7 @@
    ───────────────────────────────────────────────────────────────────────────
    Two independent files, on purpose:
 
-     data/events.json   Every outage, blip, recovery and dead-air event.
+     data/events.json   Every outage, recovery and dead-air event.
                         RETAINED FOREVER. Small (~400 bytes each) — a decade of
                         incidents is a few megabytes.
 
@@ -334,7 +334,7 @@ function getHourOfDayProfile(streamId) {
 
   for (const r of rollups[streamId] || []) {
     if (r.avgListeners == null) continue;
-    const h = new Date(`${r.hour}:00:00Z`).getUTCHours();
+    const h = new Date(r.hour).getUTCHours();
     if (!isFinite(h)) continue;
     const n = r.listenerCount ?? r.up ?? r.checks ?? 1;
     sum[h] += r.avgListeners * n;
@@ -397,20 +397,54 @@ function getAudienceContext(streamId, atIso, lookbackMs = 60 * 60 * 1000) {
 
 /**
  * Freezes the audience cost of one failure onto the event.
- * Listener-minutes is the honest unit here: it combines how many people were
- * cut off with how long they stayed cut off, which neither figure conveys alone.
+ *
+ * Listener-minutes is the honest unit: it combines how many people were cut off
+ * with how long they stayed cut off, which neither figure conveys alone.
+ *
+ * Crucially it is gated on `listenerImpact`. A probe anomaly — Icecast reachable,
+ * mount still listed — cost nobody a second of audio, and multiplying the
+ * audience by its duration would invent losses that never happened. Those events
+ * still record what the audience WAS, for context, but their loss is zero.
  */
-function buildAudienceImpact(streamId, startedAtIso, durationMs) {
+function buildAudienceImpact(streamId, startedAtIso, durationMs, listenerImpact) {
   const ctx = getAudienceContext(streamId, startedAtIso);
   const minutes = (durationMs || 0) / 60000;
+  const harmless = listenerImpact === 'none';
+
   return {
     listenersBefore: ctx.listenersBefore,
     peakBefore: ctx.peakBefore,
-    listenerMinutesLost:
-      ctx.listenersBefore == null ? null : Math.round(ctx.listenersBefore * minutes),
+    listenerMinutesLost: harmless
+      ? 0
+      : ctx.listenersBefore == null
+      ? null
+      : Math.round(ctx.listenersBefore * minutes),
+    listenerImpact: listenerImpact ?? null,
     confidence: ctx.confidence,
-    basis: ctx.basis,
+    basis: harmless
+      ? 'no loss charged — Icecast reachable and mount still serving'
+      : ctx.basis,
   };
+}
+
+/**
+ * Recovers the listener-impact verdict from a stored event.
+ *
+ * Events written before the verdict existed still carry the Icecast evidence it
+ * was derived from, so it can be reconstructed rather than guessed. Mirrors
+ * diagnose.assessListenerImpact() — note that `mountPresent` was recorded as
+ * `false` by older builds when Icecast was simply unreachable, so reachability
+ * is checked first.
+ */
+function deriveListenerImpact(event) {
+  const d = event?.diagnosis;
+  if (!d) return 'unknown';
+  if (d.listenerImpact) return d.listenerImpact;
+  if (d.cause === 'dead_air') return 'confirmed';
+  if (!d.cause) return 'none';
+  const ice = d.icecast || {};
+  if (!ice.reachable) return 'unknown';
+  return ice.mountPresent ? 'none' : 'confirmed';
 }
 
 /**
@@ -521,6 +555,161 @@ function prune() {
       dirtySamples = true;
     }
   }
+}
+
+// ── Listener analytics ──────────────────────────────────────────────────────
+/**
+ * Picks a bucket size that keeps a chart readable without lying about
+ * resolution. Raw samples are per-minute and rollups are hourly, so anything
+ * reaching past the raw-retention window is bucketed at an hour or coarser —
+ * there is no finer truth to draw back there.
+ */
+function chooseBucketMs(windowMs) {
+  const H = HOUR_MS;
+  if (windowMs <= 6 * H) return 5 * 60 * 1000;
+  if (windowMs <= 48 * H) return 15 * 60 * 1000;
+  if (windowMs <= 7 * 24 * H) return H;
+  if (windowMs <= 60 * 24 * H) return 6 * H;
+  return 24 * H;
+}
+
+/**
+ * Audience over time for one stream, stitching raw samples and hourly rollups
+ * exactly the way getUptime() does — so a long range spans both storage tiers
+ * without the caller knowing which is which.
+ *
+ * `avg` counts only checks where the stream was up, for the same reason the
+ * rollups do: a zero reported during an outage means the mount was gone, not
+ * that the audience left, and averaging it in would flatten the very dips the
+ * chart exists to show. `down` is reported alongside so the gap stays visible.
+ */
+function getListenerSeries(streamId, windowMs, bucketMs) {
+  const bucket = bucketMs || chooseBucketMs(windowMs);
+  const cutoff = Date.now() - windowMs;
+  const out = new Map();
+
+  const slot = (t) => {
+    const key = Math.floor(t / bucket) * bucket;
+    if (!out.has(key)) {
+      out.set(key, { t: key, sum: 0, count: 0, peak: null, up: 0, down: 0, checks: 0 });
+    }
+    return out.get(key);
+  };
+
+  for (const s of samples[streamId] || []) {
+    const t = new Date(s.timestamp).getTime();
+    if (!isFinite(t) || t <= cutoff) continue;
+    const b = slot(t);
+    b.checks++;
+    if (s.status === 'up') {
+      b.up++;
+      if (s.listeners != null) {
+        b.sum += s.listeners;
+        b.count++;
+        b.peak = b.peak == null ? s.listeners : Math.max(b.peak, s.listeners);
+      }
+    } else if (s.status === 'down') {
+      b.down++;
+    }
+  }
+
+  for (const r of rollups[streamId] || []) {
+    const t = new Date(r.hour).getTime();
+    if (!isFinite(t) || t + HOUR_MS <= cutoff) continue;
+    const b = slot(t);
+    b.checks += r.checks || 0;
+    b.up += r.up || 0;
+    b.down += r.down || 0;
+    const n = r.listenerCount ?? r.up ?? 0;
+    if (r.avgListeners != null && n > 0) {
+      b.sum += r.avgListeners * n;
+      b.count += n;
+    }
+    if (r.listenerPeak != null) {
+      b.peak = b.peak == null ? r.listenerPeak : Math.max(b.peak, r.listenerPeak);
+    }
+  }
+
+  return [...out.values()]
+    .sort((a, b) => a.t - b.t)
+    .map((b) => ({
+      t: new Date(b.t).toISOString(),
+      avg: b.count ? Math.round((b.sum / b.count) * 10) / 10 : null,
+      peak: b.peak,
+      up: b.up,
+      down: b.down,
+      checks: b.checks,
+    }));
+}
+
+/**
+ * Audience headline figures for a window, including the cost of every failure
+ * in it. Listener-minutes come from the `audience` block frozen onto each event
+ * at resolution time — they cannot be recomputed here once raw samples expire.
+ */
+function getAudienceSummary(streamIds, windowMs) {
+  const cutoff = Date.now() - windowMs;
+  const perStream = {};
+  let lost = 0;
+  let lostMeasured = 0;
+  let eventsWithAudience = 0;
+  let eventsMissingAudience = 0;
+
+  for (const id of streamIds) {
+    let sum = 0;
+    let count = 0;
+    let peak = null;
+
+    for (const s of samples[id] || []) {
+      const t = new Date(s.timestamp).getTime();
+      if (!isFinite(t) || t <= cutoff) continue;
+      if (s.status !== 'up' || s.listeners == null) continue;
+      sum += s.listeners;
+      count++;
+      peak = peak == null ? s.listeners : Math.max(peak, s.listeners);
+    }
+    for (const r of rollups[id] || []) {
+      const t = new Date(r.hour).getTime();
+      if (!isFinite(t) || t + HOUR_MS <= cutoff) continue;
+      const n = r.listenerCount ?? r.up ?? 0;
+      if (r.avgListeners != null && n > 0) { sum += r.avgListeners * n; count += n; }
+      if (r.listenerPeak != null) peak = peak == null ? r.listenerPeak : Math.max(peak, r.listenerPeak);
+    }
+
+    perStream[id] = {
+      avgListeners: count ? Math.round((sum / count) * 10) / 10 : null,
+      peakListeners: peak,
+      listenerMinutesLost: 0,
+    };
+  }
+
+  for (const e of events) {
+    if (e.type === 'up') continue;
+    const t = new Date(e.timestamp).getTime();
+    if (!isFinite(t) || t <= cutoff) continue;
+    if (!perStream[e.streamId]) continue;
+
+    const a = e.audience;
+    if (!a || a.listenerMinutesLost == null) {
+      if (e.durationMs) eventsMissingAudience++;
+      continue;
+    }
+    eventsWithAudience++;
+    lost += a.listenerMinutesLost;
+    if (a.confidence === 'measured') lostMeasured += a.listenerMinutesLost;
+    perStream[e.streamId].listenerMinutesLost += a.listenerMinutesLost;
+  }
+
+  return {
+    perStream,
+    listenerMinutesLost: lost,
+    listenerHoursLost: Math.round((lost / 60) * 10) / 10,
+    listenerMinutesLostMeasured: lostMeasured,
+    eventsWithAudience,
+    // Surfaced rather than hidden: a non-zero count here means the figure above
+    // is an undercount, and that the backfill has not been run.
+    eventsMissingAudience,
+  };
 }
 
 // ── Aggregate Stats ─────────────────────────────────────────────────────────
@@ -726,6 +915,7 @@ module.exports = {
   getUptime, getOverallUptime, getCoverageStart, getSummary, getDailyBuckets, getCauseBreakdown,
   getStatusCache, setStatusCache, getStorageInfo,
   isUnconfirmedSeverity,
-  getAudienceContext, getHourOfDayProfile, buildAudienceImpact,
+  getAudienceContext, getHourOfDayProfile, buildAudienceImpact, deriveListenerImpact,
+  getListenerSeries, getAudienceSummary, chooseBucketMs,
   SAMPLE_RETENTION_DAYS,
 };

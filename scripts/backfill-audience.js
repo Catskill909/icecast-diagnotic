@@ -47,7 +47,11 @@ function main() {
       continue;
     }
 
-    const audience = store.buildAudienceImpact(e.streamId, e.timestamp, e.durationMs);
+    // Older events predate the listener-impact verdict, so reconstruct it from
+    // the Icecast evidence they still carry. Without it a probe anomaly would be
+    // charged for listeners it never cost.
+    const impact = store.deriveListenerImpact(e);
+    const audience = store.buildAudienceImpact(e.streamId, e.timestamp, e.durationMs, impact);
     if (audience.confidence === 'unknown') {
       skipped++;
       continue;
@@ -58,10 +62,12 @@ function main() {
     if (audience.listenerMinutesLost) totalLost += audience.listenerMinutesLost;
 
     const tag = audience.confidence === 'measured' ? 'MEASURED' : 'modelled';
+    const impactTag = impact === 'none' ? ' no listener impact' : '';
     console.log(
-      `  ${e.timestamp}  ${String(e.streamName).padEnd(10)} ${String(e.durationLabel).padEnd(7)}` +
-      `  ~${String(audience.listenersBefore).padStart(4)} listeners` +
-      `  ${String(audience.listenerMinutesLost).padStart(5)} listener-min  [${tag}]`,
+      `  ${e.timestamp}  ${String(e.streamName).padEnd(10)} ${String(e.severity).padEnd(13)}` +
+      `${String(e.durationLabel).padEnd(7)}` +
+      `  ${String(audience.listenersBefore).padStart(4)} listeners` +
+      `  ${String(audience.listenerMinutesLost).padStart(5)} listener-min  [${tag}]${impactTag}`,
     );
 
     if (APPLY) store.updateEvent(e.id, { audience });

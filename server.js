@@ -131,6 +131,20 @@ app.get('/api/samples/:streamId', (req, res) => {
   });
 });
 
+// ── Listener Analytics ──────────────────────────────────────────────────────
+// Audience over time with the outage windows that interrupted it, served
+// together so the chart and its overlay always describe the same instant.
+app.get('/api/listeners', (req, res) => {
+  const days = Math.min(Math.max(parseFloat(req.query.days) || 1, 0.04), 3650);
+  const bucketMinutes = parseInt(req.query.bucketMinutes, 10);
+  res.json(
+    monitor.getListeners(
+      days * 24 * 60 * 60 * 1000,
+      Number.isFinite(bucketMinutes) && bucketMinutes > 0 ? bucketMinutes * 60 * 1000 : undefined,
+    ),
+  );
+});
+
 // ── Live Icecast Server Diagnostics ─────────────────────────────────────────
 // Exposes the raw mount inventory the diagnosis engine correlates against —
 // including other stations on the same host, which is how a KPFT-only fault is

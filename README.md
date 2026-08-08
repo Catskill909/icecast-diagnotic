@@ -46,7 +46,7 @@ Observed on 2026-08-04/05: a Barix dropout took KPFT Main from 66 listeners to 1
                 │                 every other stream in the cycle      │
                 │                          │                           │
                 │  monitor.js  ── episode state machine                │
-                │                 blip → confirmed outage → recovery   │
+                │                 brief → confirmed outage → recovery  │
                 │                 decides what is worth emailing       │
                 │                          │                           │
                 │  store.js    ── events.json   (permanent, forever)   │
@@ -79,7 +79,8 @@ If you are an AI assistant or developer picking up this project, here is the ess
 - **`diagnose.js`**: Root-cause diagnosis engine. Instrumented stream probe (DNS/TCP/TLS/TTFB timings), Icecast mount-inventory snapshot, and the classifier that turns a transport error into an actionable cause.
 - **`store.js`**: Persistence. Splits the permanent event record from rolling telemetry; handles atomic writes, hourly compaction, and legacy migration.
 - **`public/index.html` / `app.js`**: Live dashboard.
-- **`public/history.html` / `history.js` / `history.css`**: Permanent incident history — heatmap, filters, per-event drill-down.
+- **`public/history.html` / `history.js` / `history.css`**: Permanent incident history — heatmap, listener-audience chart, filters, per-event drill-down.
+- **`scripts/backfill-audience.js`**: One-off backfill of the `audience` block onto events recorded before it existed. Dry-run by default; `--apply` writes. Safe to re-run — it never overwrites a measured figure. **Time-sensitive:** it can only read raw samples, so an outage older than `SAMPLE_RETENTION_DAYS` can never have its listener cost recovered.
 - **`public/style.css`**: Dark Material Design 3 theme system using CSS variables.
 - **`Dockerfile`**: Production build on `node:20-alpine` with `curl` for Coolify health probes.
 
@@ -91,11 +92,28 @@ An *episode* runs from a stream's first failed check to its recovery. Within one
 
 | Point | Recorded | Emails |
 |---|---|---|
-| Failure #1 | event, severity `blip` | no — unless it hits *every* stream at once (server-level) |
-| Failure #`FAILURE_THRESHOLD` | same event promoted to `outage` | yes |
+| Failure #1 | event, severity `brief_outage` or `probe_error` | no |
+| Failure #`FAILURE_THRESHOLD` | same event promoted to `outage` | **only if listeners were affected** |
 | Recovery | event resolved with true duration | yes, if an alert was sent |
 
-This fixes the prior behaviour where an isolated failed check painted a red segment on the uptime bar but produced no incident and no email. Those now appear as `blip` events carrying an explicit reason why no alert was sent.
+**The bar for an email is listener impact, not probe failure.** The monitor watches from
+outside Pacifica's network, so a failed probe alone proves only that *our* connection broke.
+Icecast is the witness: if it is reachable and still lists the mount, the mount kept serving
+its audience. Each diagnosis therefore carries a `listenerImpact` verdict:
+
+| Verdict | Meaning | Emails |
+|---|---|---|
+| `confirmed` | Icecast reachable, mount **gone** — every connected player dropped | yes |
+| `unknown` | Icecast unreachable — cannot be cleared, so treated as real | yes |
+| `none` | Icecast reachable, mount still serving — nobody lost audio | **no** |
+
+This replaced an earlier rule that emailed any single failure hitting all streams at once. Four
+days of production data showed 12 of 21 alerts were 60-second probe resets in which no mount ever
+dropped a listener — noise that trains recipients to ignore the alerts that matter.
+
+An unconfirmed failure is split by the same verdict: `brief_outage` when the mount really did
+vanish (a real gap, just short) and `probe_error` when Icecast stayed healthy throughout. The
+retired name for both was `blip`; stored events still carry it and every counter recognises it.
 
 ### Diagnosis
 
@@ -141,10 +159,10 @@ SILENCE_PROBE_INTERVAL_MS=5000   # Rapid probe interval during silence evaluatio
 SILENCE_FAILURE_THRESHOLD=3      # Consecutive silent probes before confirming Dead Air (default: 3)
 
 # ── Alert Noise Control ──────────────────────────────
-# Email immediately when ONE failed check hits every stream at once — such a
-# failure is server-level by definition. Set false to email only on confirmed
-# outages (2+ consecutive failures). Blips are recorded either way.
-ALERT_ON_SERVER_BLIP=false
+# Escape hatch: email EVERY confirmed outage, including ones Icecast proves did
+# not cost a single listener any audio. Off by default — that behaviour is what
+# buried the real alerts in noise. Everything is recorded either way.
+ALERT_ON_HARMLESS_OUTAGE=false
 
 # ── Retention ────────────────────────────────────────
 # Events are ALWAYS permanent. This controls only the per-check telemetry
@@ -164,7 +182,9 @@ SIBLING_MOUNTS=/live_128,/live_64,/HD3,/HD3_128,/HD3_64,/classic_country
 
 **Uptime and the event log come from different sources.** Uptime percentages and the 24h bars are computed from per-check *samples*; the incident timeline comes from *events*. They are stored separately, so it is possible to restore one without the other and see a reassuring 100% on a day that contained real outages. If uptime looks implausibly clean, check `sampleCount` in `/api/stats`.
 
-**Blips are not noise, they are just not urgent.** A single failed check that self-clears is recorded permanently but does not email — by the time anyone reads an alert it is already over. The value is in the aggregate: if *Connection reset by server* climbs week over week in the Root Causes panel, that is evidence worth taking to Pacifica, and far more persuasive than an anecdote.
+**Unconfirmed failures are not noise, they are just not urgent.** A single failed check that self-clears is recorded permanently but never emails — by the time anyone reads an alert it is already over. The value is in the aggregate: if *Connection reset by server* climbs week over week in the Root Causes panel, that is evidence worth taking to Pacifica, and far more persuasive than an anecdote. Note the split: a `probe_error` says more about the path between the monitor and Pacifica than about KPFT's streams, so do not cite it as station downtime.
+
+**Listener-minutes are the honest unit of harm.** `9 outages` and `35 minutes down` both understate a midday failure and overstate a 4am one. Each resolved event freezes an `audience` block — the listener count Icecast reported immediately before the mount vanished, multiplied by the outage length. It is captured at resolution time because it cannot be recovered later: Icecast only reports an audience while the mount exists, and raw samples compact after `SAMPLE_RETENTION_DAYS`. Events proven to have no listener impact are charged **zero**, never their audience.
 
 **Listener counts during an outage.** When a mount vanishes, listeners correctly read **0** — the mount cannot serve anyone because it no longer exists. Earlier builds carried the last known count forward, which made outages appear to retain their full audience and hid the real loss. Counts are only carried forward when Icecast itself is unreachable and the true figure is genuinely unknown.
 
@@ -185,7 +205,7 @@ Returns the rolling 24-hour check history per stream plus the last 24h of events
 ### `GET /api/events`
 The **permanent** event log, never pruned by age. Each event carries its root-cause diagnosis, connection timings, Icecast state at the time of failure, resolution duration, and the email delivery outcome.
 
-Query params: `days`, `since`, `until`, `streamId`, `type`, `severity` (`outage`/`blip`/`dead_air`/`recovery`), `cause`, `scope` (`stream`/`station`/`server`), `emailed` (`true`/`false`), `limit`, `offset`, `order`.
+Query params: `days`, `since`, `until`, `streamId`, `type`, `severity` (`outage`/`brief_outage`/`probe_error`/`dead_air`/`recovery`, plus legacy `blip`), `cause`, `scope` (`stream`/`station`/`server`), `emailed` (`true`/`false`), `limit`, `offset`, `order`.
 
 ```bash
 # Every event that never generated an alert email
@@ -203,6 +223,24 @@ Aggregates for the history view: per-stream uptime and counts, daily buckets for
 
 ### `GET /api/samples/:streamId?hours=24`
 Raw per-check telemetry plus hourly rollups for one stream.
+
+> ⚠️ **`hours` defaults to 24, not to everything retained.** Deriving an audience
+> baseline from that default and applying it to older incidents overstated listener
+> loss threefold once. Pass `?hours=168` when you want the full raw window.
+
+### `GET /api/listeners?days=1&bucketMinutes=`
+Audience over time for every stream, the outage windows that interrupted it, and the
+summary — all in one payload, so a chart can never draw a series and its overlay from
+two different moments.
+
+Raw samples and hourly rollups are stitched transparently, so a long range spans both
+storage tiers. `bucketMs` auto-scales with the window (5 min → 6 h) and is reported back;
+override it with `bucketMinutes`. Averages count only checks where the stream was **up** —
+a zero reported during an outage means the mount was gone, not that the audience left.
+
+`summary.eventsMissingAudience` is the count of resolved failures with no frozen `audience`
+block. Non-zero means the totals are an undercount and `scripts/backfill-audience.js` has
+not been run.
 
 ### `GET /api/diagnostics`
 Live Icecast server state — the full mount inventory including other Pacifica stations, which is what the classifier correlates against.
