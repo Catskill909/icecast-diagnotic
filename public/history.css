@@ -509,10 +509,18 @@ a.help-btn { text-decoration: none; }
   opacity: 0.55;
 }
 
-/* Bands sit beneath the series — context for the data, not a rival to it. */
-.aud-band.impact { fill: var(--status-down); opacity: 0.20; }
-.aud-band.harmless { fill: var(--text-tertiary); opacity: 0.13; }
-.aud-band:hover { opacity: 0.34; }
+/* Bands sit beneath the series — context for the data, not a rival to it.
+   Three weights, because they are three different claims: a confirmed outage,
+   a brief one that cleared before confirmation, and a probe anomaly that cost
+   no listener any audio. */
+.aud-band.confirmed { fill: var(--status-down); opacity: 0.42; }
+.aud-band.brief { fill: var(--status-down); opacity: 0.16; }
+.aud-band.harmless { fill: var(--text-tertiary); opacity: 0.12; }
+.aud-band:hover { opacity: 0.6; }
+
+/* Minutes-long outages are sub-pixel across a multi-day span. This marker has a
+   fixed width, so the confirmed outages stay countable at any zoom. */
+.aud-tick { fill: var(--status-down); }
 
 .aud-rowlabel {
   fill: var(--text-primary);
@@ -555,5 +563,22 @@ a.help-btn { text-decoration: none; }
 .audience-legend .swatch.peak {
   background: repeating-linear-gradient(90deg, var(--primary-light, var(--primary)) 0 3px, transparent 3px 6px);
 }
-.audience-legend .swatch.outage { background: var(--status-down); opacity: 0.45; }
-.audience-legend .swatch.probe { background: var(--text-tertiary); opacity: 0.35; }
+.audience-legend .swatch.outage { background: var(--status-down); opacity: 0.85; }
+.audience-legend .swatch.brief { background: var(--status-down); opacity: 0.3; }
+.audience-legend .swatch.probe { background: var(--text-tertiary); opacity: 0.3; }
+.audience-legend .swatch.tick {
+  background: none;
+  border-left: 5px solid transparent;
+  border-right: 5px solid transparent;
+  border-top: 7px solid var(--status-down);
+  width: 0;
+  height: 0;
+  border-radius: 0;
+}
+
+.audience-legend .alg-note {
+  flex-basis: 100%;
+  color: var(--text-tertiary);
+  opacity: 0.8;
+  font-style: italic;
+}

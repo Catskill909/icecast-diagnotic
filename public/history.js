@@ -441,27 +441,48 @@
       parts.push(`<text class="aud-ytick" x="${PAD_L - 8}" y="${(base + 4).toFixed(1)}" text-anchor="end">0</text>`);
 
       // Outage bands sit UNDER the data: they are context, not the subject.
+      //
+      // Three classes, not two. An outage lasting minutes is far narrower than
+      // one pixel across a multi-day span — every one of the nine confirmed
+      // outages measures under 1.2px at the 30-day zoom — so without a distinct
+      // treatment they are indistinguishable from the far more numerous brief
+      // ones, and adjacent events merge into a single mark that cannot be
+      // counted. Confirmed outages therefore also get a fixed-width marker tick
+      // above the row, which stays countable at any zoom.
+      const ticks = [];
       (data.outages || []).forEach((o) => {
         if (o.streamId !== stream.id) return;
         const s = new Date(o.start).getTime();
         const e = o.end ? new Date(o.end).getTime() : t1;
         if (e < t0 || s > t1) return;
         const bx = x(Math.max(s, t0));
-        const bw = Math.max(1.5, x(Math.min(e, t1)) - bx);
         const harmless = (o.audience?.listenerImpact ?? o.listenerImpact) === 'none';
+        const confirmed = o.severity === 'outage' || o.severity === 'dead_air';
+        const cls = harmless ? 'harmless' : confirmed ? 'confirmed' : 'brief';
+        const bw = Math.max(confirmed ? 2.5 : 1.5, x(Math.min(e, t1)) - bx);
         const lost = o.audience?.listenerMinutesLost;
         const tip =
-          `${o.streamName} — ${o.causeLabel || o.severity}\n${fmtTime(o.start)} · lasted ${o.durationLabel || '—'}` +
+          `${o.streamName} — ${o.causeLabel || o.severity}\n` +
+          `${confirmed ? 'Confirmed outage' : harmless ? 'Probe anomaly' : 'Brief outage'}\n` +
+          `${fmtTime(o.start)} · lasted ${o.durationLabel || '—'}` +
           (harmless
             ? '\nNo listener impact — mount kept serving'
             : lost != null
             ? `\n~${o.audience.listenersBefore} listener(s) cut off · ${lost} listener-minutes lost`
             : '');
         parts.push(
-          `<rect class="aud-band ${harmless ? 'harmless' : 'impact'}" x="${bx.toFixed(1)}" y="${top}" ` +
+          `<rect class="aud-band ${cls}" x="${bx.toFixed(1)}" y="${top}" ` +
           `width="${bw.toFixed(1)}" height="${ROW_H}"><title>${esc(tip)}</title></rect>`,
         );
+        if (confirmed) {
+          ticks.push(
+            `<path class="aud-tick" d="M${(bx + bw / 2 - 4).toFixed(1)},${top - 1} L${(bx + bw / 2 + 4).toFixed(1)},${top - 1} ` +
+            `L${(bx + bw / 2).toFixed(1)},${top + 5} Z"><title>${esc(tip)}</title></path>`,
+          );
+        }
       });
+      // Drawn after the bands so a tick is never hidden behind a neighbour.
+      parts.push(...ticks);
 
       // Area + line. Nulls break the path rather than being drawn as zero — a
       // gap in the data is not an audience of nobody.
@@ -504,11 +525,24 @@
     // Shared time axis.
     const axisY = rows.length * (ROW_H + ROW_GAP) - ROW_GAP;
     parts.push(`<line class="aud-axis" x1="${PAD_L}" y1="${axisY}" x2="${W - PAD_R}" y2="${axisY}"/>`);
-    timeTicks(t0, t1, 6).forEach((t) => {
+    // Six evenly-spaced ticks across four days land two per day, so date-only
+    // labels repeat ("Aug 5 | Aug 5") and read as a rendering fault. Where a
+    // label would duplicate its predecessor, show the time instead — that is
+    // the part which actually differs.
+    const tickTimes = timeTicks(t0, t1, 6);
+    const span = t1 - t0;
+    let prevLabel = null;
+    tickTimes.forEach((t) => {
       const tx = x(t);
       if (tx < PAD_L - 1 || tx > W - PAD_R + 1) return;
+      let label = fmtAxis(t, span);
+      if (label === prevLabel) {
+        label = new Date(t).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
+      } else {
+        prevLabel = label;
+      }
       parts.push(`<line class="aud-grid" x1="${tx.toFixed(1)}" y1="${axisY}" x2="${tx.toFixed(1)}" y2="${axisY + 5}"/>`);
-      parts.push(`<text class="aud-xtick" x="${tx.toFixed(1)}" y="${axisY + 18}" text-anchor="middle">${fmtAxis(t, t1 - t0)}</text>`);
+      parts.push(`<text class="aud-xtick" x="${tx.toFixed(1)}" y="${axisY + 18}" text-anchor="middle">${esc(label)}</text>`);
     });
 
     host.innerHTML =
@@ -557,8 +591,13 @@
     const blips = filtered.filter((e) => UNCONFIRMED.has(e.severity)).length;
     const deadAir = filtered.filter((e) => e.severity === 'dead_air').length;
 
-    // Only events that could plausibly notify count toward the ratio.
-    const notifiable = filtered.filter((e) => !UNCONFIRMED.has(e.severity));
+    // Events that could plausibly notify. An event that DID email always
+    // counts, whatever its severity — the retired server-blip rule emailed
+    // unconfirmed events, and excluding them produced a denominator smaller
+    // than its own numerator ("54 of 36 notifiable").
+    const notifiable = filtered.filter(
+      (e) => !UNCONFIRMED.has(e.severity) || e.email?.sent === true,
+    );
     const emailed = filtered.filter((e) => e.email?.sent === true).length;
     // Backfilled events predate delivery tracking: an alert may well have gone
     // out, we simply have no record of it. Lumping them in with genuine
