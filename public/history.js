@@ -443,13 +443,10 @@
       // Outage bands sit UNDER the data: they are context, not the subject.
       //
       // Three classes, not two. An outage lasting minutes is far narrower than
-      // one pixel across a multi-day span — every one of the nine confirmed
-      // outages measures under 1.2px at the 30-day zoom — so without a distinct
-      // treatment they are indistinguishable from the far more numerous brief
-      // ones, and adjacent events merge into a single mark that cannot be
-      // counted. Confirmed outages therefore also get a fixed-width marker tick
-      // above the row, which stays countable at any zoom.
-      const ticks = [];
+      // one pixel across a multi-day span, so without a distinct treatment the
+      // confirmed ones are indistinguishable from the far more numerous brief
+      // ones. Confirmed outages therefore also get a fixed-width marker tick.
+      const confirmedMarks = [];
       (data.outages || []).forEach((o) => {
         if (o.streamId !== stream.id) return;
         const s = new Date(o.start).getTime();
@@ -474,15 +471,44 @@
           `<rect class="aud-band ${cls}" x="${bx.toFixed(1)}" y="${top}" ` +
           `width="${bw.toFixed(1)}" height="${ROW_H}"><title>${esc(tip)}</title></rect>`,
         );
-        if (confirmed) {
-          ticks.push(
-            `<path class="aud-tick" d="M${(bx + bw / 2 - 4).toFixed(1)},${top - 1} L${(bx + bw / 2 + 4).toFixed(1)},${top - 1} ` +
-            `L${(bx + bw / 2).toFixed(1)},${top + 5} Z"><title>${esc(tip)}</title></path>`,
+        if (confirmed) confirmedMarks.push({ cx: bx + bw / 2, tip, start: o.start });
+      });
+
+      // A fixed-width tick is still not countable when outages arrive in a
+      // burst: three on Main within fourteen minutes land 2px apart at the
+      // 30-day zoom, and three on HD2 within six minutes land 0.8px apart, so
+      // nine outages drew as five marks. Ticks closer together than their own
+      // width are therefore merged into one marker carrying a count, which
+      // stays truthful at every zoom instead of quietly under-reporting.
+      confirmedMarks.sort((a, b) => a.cx - b.cx);
+      const TICK_W = 9;
+      const clusters = [];
+      confirmedMarks.forEach((m) => {
+        const last = clusters[clusters.length - 1];
+        if (last && m.cx - last.cx < TICK_W) {
+          last.items.push(m);
+          last.cx = m.cx;
+        } else {
+          clusters.push({ cx: m.cx, items: [m] });
+        }
+      });
+
+      clusters.forEach((c) => {
+        const n = c.items.length;
+        const tip = n === 1
+          ? c.items[0].tip
+          : `${n} confirmed outages in this period\n\n${c.items.map((i) => i.tip).join('\n\n')}`;
+        parts.push(
+          `<path class="aud-tick" d="M${(c.cx - 4).toFixed(1)},${top - 1} L${(c.cx + 4).toFixed(1)},${top - 1} ` +
+          `L${c.cx.toFixed(1)},${top + 5} Z"><title>${esc(tip)}</title></path>`,
+        );
+        if (n > 1) {
+          // <title> must be a CHILD of the element it describes, not a sibling.
+          parts.push(
+            `<text class="aud-tick-count" x="${(c.cx + 6).toFixed(1)}" y="${top + 5}">${n}<title>${esc(tip)}</title></text>`,
           );
         }
       });
-      // Drawn after the bands so a tick is never hidden behind a neighbour.
-      parts.push(...ticks);
 
       // Area + line. Nulls break the path rather than being drawn as zero — a
       // gap in the data is not an audience of nobody.
@@ -513,9 +539,13 @@
 
       const sum = data.summary?.perStream?.[stream.id];
       const lostMin = sum?.listenerMinutesLost || 0;
+      // State the outage count in words as well as marks. However the ticks
+      // cluster, the number itself is never in doubt.
+      const nOutages = confirmedMarks.length;
       parts.push(
         `<text class="aud-rowlabel" x="${PAD_L + 8}" y="${top + 15}">${esc(stream.name)}</text>` +
         `<text class="aud-rowmeta" x="${W - PAD_R - 6}" y="${top + 15}" text-anchor="end">` +
+        (nOutages ? `${nOutages} outage${nOutages === 1 ? '' : 's'} · ` : '') +
         `avg ${sum?.avgListeners ?? '—'} · peak ${sum?.peakListeners ?? '—'}` +
         (lostMin ? ` · ${lostMin} listener-min lost` : '') +
         `</text>`,

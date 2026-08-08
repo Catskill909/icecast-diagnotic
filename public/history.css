@@ -589,3 +589,12 @@ a.help-btn { text-decoration: none; }
   opacity: 0.8;
   font-style: italic;
 }
+
+/* Count beside a merged tick — the honest alternative to silently drawing one
+   mark where several outages occurred. */
+.aud-tick-count {
+  fill: var(--status-down);
+  font-size: 9.5px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
