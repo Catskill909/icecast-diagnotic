@@ -150,7 +150,50 @@ function load(streamIds) {
   }
 
   applySeed();
+  // Must run BEFORE prune(): compaction destroys the raw samples this reads.
+  backfillAudience();
   prune();
+}
+
+/**
+ * Fills the `audience` block on any resolved failure that predates it.
+ *
+ * Runs automatically at every startup rather than as a manual step, because the
+ * data it needs is perishable: it can only be reconstructed from raw samples,
+ * and those compact into hourly rollups after SAMPLE_RETENTION_DAYS. A backfill
+ * that depends on someone remembering to open a terminal would silently miss
+ * its window on any container that redeploys without one.
+ *
+ * Safe to run on every boot: events that already carry a measured figure are
+ * skipped before any sample lookup, so a fully-populated history costs one
+ * cheap property check per event and nothing more.
+ */
+function backfillAudience() {
+  let filled = 0;
+  let lost = 0;
+
+  for (const e of events) {
+    if (e.type === 'up' || !e.durationMs) continue;
+    if (e.audience && e.audience.confidence === 'measured') continue;
+
+    const audience = buildAudienceImpact(
+      e.streamId, e.timestamp, e.durationMs, deriveListenerImpact(e),
+    );
+    if (audience.confidence === 'unknown') continue;
+
+    e.audience = audience;
+    filled++;
+    lost += audience.listenerMinutesLost || 0;
+    dirtyEvents = true;
+  }
+
+  if (filled) {
+    console.log(
+      `[Store] Backfilled audience impact onto ${filled} event(s) — ` +
+      `${lost.toLocaleString()} listener-minutes (${(lost / 60).toFixed(1)} listener-hours)`,
+    );
+    saveEvents();
+  }
 }
 
 /**
@@ -360,16 +403,30 @@ function getAudienceContext(streamId, atIso, lookbackMs = 60 * 60 * 1000) {
   const at = new Date(atIso).getTime();
   if (!isFinite(at)) return { listenersBefore: null, peakBefore: null, confidence: 'unknown', basis: 'invalid timestamp' };
 
+  // Samples are appended in chronological order, so walk backwards from the
+  // failure instead of scanning the whole array. The answer is almost always
+  // the immediately preceding check, which makes this O(1) in practice — and
+  // that matters because the startup backfill calls this once per unmeasured
+  // event, and a full scan per event would be quadratic on a long history.
   const arr = samples[streamId] || [];
+  let idx = arr.length - 1;
+  while (idx >= 0 && new Date(arr[idx].timestamp).getTime() >= at) idx--;
+
   let last = null;
   let peak = null;
+  const peakFloor = at - lookbackMs;
 
-  for (const s of arr) {
+  for (let i = idx; i >= 0; i--) {
+    const s = arr[i];
     const t = new Date(s.timestamp).getTime();
-    if (!isFinite(t) || t >= at) continue;
-    if (s.status !== 'up' || s.listeners == null) continue;
-    if (!last || t > new Date(last.timestamp).getTime()) last = s;
-    if (t >= at - lookbackMs) peak = peak == null ? s.listeners : Math.max(peak, s.listeners);
+    if (!isFinite(t)) continue;
+    if (s.status === 'up' && s.listeners != null) {
+      if (!last) last = s;
+      if (t >= peakFloor) peak = peak == null ? s.listeners : Math.max(peak, s.listeners);
+    }
+    // Once we are past the peak window AND have the preceding reading, there is
+    // nothing further back that can change the answer.
+    if (t < peakFloor && last) break;
   }
 
   if (last) {

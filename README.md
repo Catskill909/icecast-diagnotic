@@ -80,7 +80,7 @@ If you are an AI assistant or developer picking up this project, here is the ess
 - **`store.js`**: Persistence. Splits the permanent event record from rolling telemetry; handles atomic writes, hourly compaction, and legacy migration.
 - **`public/index.html` / `app.js`**: Live dashboard.
 - **`public/history.html` / `history.js` / `history.css`**: Permanent incident history — heatmap, listener-audience chart, filters, per-event drill-down.
-- **`scripts/backfill-audience.js`**: One-off backfill of the `audience` block onto events recorded before it existed. Dry-run by default; `--apply` writes. Safe to re-run — it never overwrites a measured figure. **Time-sensitive:** it can only read raw samples, so an outage older than `SAMPLE_RETENTION_DAYS` can never have its listener cost recovered.
+- **`scripts/backfill-audience.js`**: Reporting/repair tool for the `audience` block. **Not normally needed** — `store.load()` backfills automatically at every startup, before `prune()` runs. Use this to preview the numbers (dry-run by default) or to repair after a manual data edit. Safe to re-run; it never overwrites a measured figure.
 - **`public/style.css`**: Dark Material Design 3 theme system using CSS variables.
 - **`Dockerfile`**: Production build on `node:20-alpine` with `curl` for Coolify health probes.
 
@@ -239,8 +239,9 @@ override it with `bucketMinutes`. Averages count only checks where the stream wa
 a zero reported during an outage means the mount was gone, not that the audience left.
 
 `summary.eventsMissingAudience` is the count of resolved failures with no frozen `audience`
-block. Non-zero means the totals are an undercount and `scripts/backfill-audience.js` has
-not been run.
+block. It should be zero: the store backfills automatically at startup. A non-zero value means
+those events were already past the raw-sample retention window when first seen, so their
+listener cost is gone for good — the totals are a floor.
 
 ### `GET /api/diagnostics`
 Live Icecast server state — the full mount inventory including other Pacifica stations, which is what the classifier correlates against.
