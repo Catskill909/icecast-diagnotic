@@ -172,25 +172,46 @@ function backfillAudience() {
   let filled = 0;
   let lost = 0;
 
+  let corrected = 0;
+  let relabelled = 0;
+
   for (const e of events) {
     if (e.type === 'up' || !e.durationMs) continue;
-    if (e.audience && e.audience.confidence === 'measured') continue;
 
-    const audience = buildAudienceImpact(
-      e.streamId, e.timestamp, e.durationMs, deriveListenerImpact(e),
-    );
+    const impact = deriveListenerImpact(e);
+
+    // Skip only when the stored figure was measured AND still agrees with the
+    // current verdict. Checking the verdict too lets a corrected rule repair
+    // events written under the old one — a stored number that is wrong is worse
+    // than a missing one, because it looks authoritative.
+    const stored = e.audience;
+    if (stored && stored.confidence === 'measured' && stored.listenerImpact === impact) continue;
+
+    const audience = buildAudienceImpact(e.streamId, e.timestamp, e.durationMs, impact);
     if (audience.confidence === 'unknown') continue;
 
+    if (stored) corrected++; else filled++;
     e.audience = audience;
-    filled++;
     lost += audience.listenerMinutesLost || 0;
+
+    // A brief outage that recovery has since cleared of listener impact is a
+    // probe anomaly, and should say so. The severity was assigned mid-failure
+    // on incomplete evidence; leaving it overstates a fault that cost nobody
+    // anything. Legacy 'blip' events keep their retired label — rewriting the
+    // name they were recorded under would be revisionist rather than corrective.
+    if (e.severity === 'brief_outage' && impact === 'none') {
+      e.severity = 'probe_error';
+      relabelled++;
+    }
+
     dirtyEvents = true;
   }
 
-  if (filled) {
+  if (filled || corrected) {
     console.log(
-      `[Store] Backfilled audience impact onto ${filled} event(s) — ` +
-      `${lost.toLocaleString()} listener-minutes (${(lost / 60).toFixed(1)} listener-hours)`,
+      `[Store] Audience impact: ${filled} filled, ${corrected} corrected` +
+      (relabelled ? `, ${relabelled} relabelled as probe anomalies` : '') +
+      ` — ${lost.toLocaleString()} listener-minutes touched`,
     );
     saveEvents();
   }
@@ -496,12 +517,29 @@ function buildAudienceImpact(streamId, startedAtIso, durationMs, listenerImpact)
 function deriveListenerImpact(event) {
   const d = event?.diagnosis;
   if (!d) return 'unknown';
-  if (d.listenerImpact) return d.listenerImpact;
+
   if (d.cause === 'dead_air') return 'confirmed';
   if (!d.cause) return 'none';
+
   const ice = d.icecast || {};
-  if (!ice.reachable) return 'unknown';
-  return ice.mountPresent ? 'none' : 'confirmed';
+
+  // Direct observation first. When Icecast answered, its own mount inventory is
+  // the last word — present means the audience kept listening, absent means the
+  // mount could not serve anyone. Older builds recorded mountPresent as `false`
+  // when they simply failed to reach Icecast, so reachability is checked first.
+  if (ice.reachable) return ice.mountPresent ? 'none' : 'confirmed';
+
+  // Icecast was unreachable, so the failure itself proves nothing either way —
+  // but the recovery can settle it. `sourceOutage` is written only when Icecast
+  // reports the source reconnecting DURING the episode. A resolved failure
+  // without one means the source stayed connected throughout: the mount never
+  // vanished and nobody lost audio. Our probe broke, not the stream.
+  //
+  // Without this, three 60-second probe resets were charged 55 listener-minutes
+  // against an audience whose count never dipped.
+  if (event.resolvedAt) return event.sourceOutage ? 'confirmed' : 'none';
+
+  return 'unknown';
 }
 
 /**

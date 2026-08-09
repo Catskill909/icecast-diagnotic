@@ -514,26 +514,54 @@ async function runChecks() {
         const dg = diagnose.classify({ stream, result, snapshot: snap, prevSnapshot, cycle });
         const sourceOutage = diagnose.deriveSourceOutage(snap, stream, episode.startedAt);
 
+        // Recovery settles what the failure could not.
+        //
+        // While a stream is failing and Icecast is unreachable, the verdict is
+        // 'unknown' — we cannot see whether the mount survived. But once the
+        // stream is back, Icecast tells us exactly when its source connected. If
+        // that moment predates the episode, the source was live throughout: the
+        // mount never went away, and nobody lost audio. Our probe broke, not the
+        // stream.
+        //
+        // Without this, three 60-second probe resets overnight were charged 55
+        // listener-minutes against an audience whose listener count never even
+        // dipped (14 → 13 → 12 across the whole window, where a genuine source
+        // drop took Main from 66 to 10).
+        const mountNow = diagnose.findMount(snap, stream);
+        const sourceHeldThroughout =
+          !!mountNow?.streamStart &&
+          new Date(mountNow.streamStart).getTime() <= new Date(episode.startedAt).getTime();
+
+        const settledImpact = sourceHeldThroughout ? 'none' : episode.listenerImpact;
+
         // Freeze the audience cost now. Raw samples expire after a week and
         // Icecast reports no listeners for a mount that no longer exists, so
         // this figure is unrecoverable once the window closes — but the event
         // itself is kept forever.
-        // `dg` here describes the RECOVERY — the stream is up, so its verdict is
-        // always 'none'. Using it charged every resolved outage zero listener
-        // loss. The episode's own worst verdict, recorded while it was failing,
-        // is the only correct input.
         const audience = store.buildAudienceImpact(
-          stream.id, episode.startedAt, durationMs, episode.listenerImpact,
+          stream.id, episode.startedAt, durationMs, settledImpact,
         );
 
-        store.updateEvent(episode.eventId, {
+        const patch = {
           resolvedAt: timestamp,
           durationMs,
           durationLabel: diagnose.fmtDuration(durationMs),
           sourceOutage,
           selfCleared: !episode.alerted,
           audience,
-        });
+        };
+
+        // An unconfirmed failure recorded as a brief outage on suspicion is a
+        // probe anomaly once the source is shown to have held. Relabel it —
+        // leaving it as "Brief Outage" overstates a fault that cost nobody
+        // anything. Confirmed outages keep their severity: the stream really was
+        // unreachable for two checks, it simply cost no listeners.
+        if (sourceHeldThroughout && episode.severity === BRIEF_OUTAGE) {
+          patch.severity = PROBE_ERROR;
+          patch.message = `${stream.name} probe failed — Icecast kept serving the mount throughout`;
+        }
+
+        store.updateEvent(episode.eventId, patch);
 
         if (audience.listenerMinutesLost) {
           console.log(`[Monitor] 📉 ${stream.name} — ~${audience.listenersBefore} listener(s) cut off, ${audience.listenerMinutesLost} listener-minutes lost (${audience.confidence})`);
