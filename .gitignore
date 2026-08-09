@@ -4,3 +4,6 @@ data/
 *.log
 .DS_Store
 incidents-backup.json
+
+# Private planning/discussion notes — never committed
+WORKING-NOTES.md
