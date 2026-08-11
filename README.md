@@ -125,11 +125,84 @@ on a phone at 3am, and it is what separates "get up now" from "look at it in the
 | Down / dead air | **listeners at risk** — the audience at the moment it started | the loss is still accruing and cannot be totalled yet |
 | Recovery | **listeners cut off** and **listening lost** | the outage length is finally known, so reach × duration is real |
 
-`listening lost` is listener-minutes: the audience multiplied by how long they were cut off.
+`listening lost` is listener-minutes — how much actual listening the failure cost.
 Neither number conveys it alone — 5 listeners for an hour and 300 listeners for a minute are
 not the same event, and the raw outage duration calls them equal. Each figure is labelled
 `measured` (from listener counts recorded just before the failure) or `modelled` (from that
 hour's typical audience, when no live count survived), and the email says which.
+
+#### How listener-minutes are calculated
+
+The audience is **measured** immediately before the failure. How it is carried across the
+outage depends on how long the outage ran — `audience.model` on every event records which
+rule was applied:
+
+| `model` | When | Rule |
+|---|---|---|
+| `flat` | outage ≤ 1 hour | audience × duration |
+| `hour-of-day` | outage > 1 hour | the stream's own hour-of-day audience profile, rescaled to pass through the measured starting point, integrated across the outage |
+| `none` | no listener impact | zero — Icecast kept serving the mount |
+
+**Why the curve exists.** A flat multiplier assumes whoever was listening when it broke would
+have kept listening, at that exact headcount, for every minute it stayed broken. Over four
+minutes that is fine. Over a 3h35m outage beginning at 8:12pm it charges a primetime audience
+for the small hours. On the production record, two long events carried 88% of all reported
+loss, so this assumption — not the measurement — was the dominant source of error.
+
+**It moves in both directions.** An outage starting at peak and running overnight is revised
+*down*; one starting in a quiet hour and running into the next day's peak is revised *up*,
+because the audience it kept out was larger than the headcount at the moment it began. Events
+re-costed this way keep `flatEquivalent` so the older figure is always recoverable.
+
+The curve is used only when the profile has at least 12 populated hours, and the rescaling
+factor is clamped to 0.2×–5× so one freak reading at the moment of failure cannot multiply a
+long extrapolation. Failing either guard, the flat figure stands.
+
+#### Time off air vs. stream-hours
+
+Two different questions, and only one of them is what "how long were we down" means:
+
+| Figure | Field | Meaning |
+|---|---|---|
+| **Time off air** | `downtime.wallClockMs` | elapsed time with *at least one* stream down; concurrent outages merged and counted once |
+| Stream-hours | `downtime.streamMs` | per-stream durations added together — the figure that reconciles with the uptime percentage |
+
+On the production record these read 19h 52m and 1d 4h for the same period. The gap is one
+Icecast fault that took two streams down together: 3h35m off air, but 7h10m of stream-hours.
+Reporting the sum as though it were elapsed time overstated the outage by nearly half, so the
+tile leads with wall-clock and names the summed figure beside it.
+
+Both **exclude failures that cost the audience nothing** — Icecast was reachable and still
+serving the mount, so counting them as downtime would contradict the verdict already reached
+about them.
+
+#### Which impact verdict counts
+
+Every event carries two, and they routinely disagree:
+
+| Field | Written | Says |
+|---|---|---|
+| `diagnosis.listenerImpact` | while the stream was still failing | often `unknown` — Icecast was unreachable, so nothing could be confirmed |
+| `audience.listenerImpact` | at recovery | the **settled** verdict, once Icecast could be asked whether the mount had really gone |
+
+**The settled verdict wins** (`store.settledImpact()`). Reading the failure-time guess instead
+counted 49 harmless probe resets as downtime on the production record. `unknown` always groups
+*with* `confirmed`: an outage that could not be cleared is treated as real, never written off.
+
+#### Audio uptime
+
+`uptime` is the share of monitored time the streams were **actually serving audio** — failures
+where Icecast kept serving the mount are not charged to the station. The older sample-based
+figure, in which every failed probe is a down sample, remains available as `probeUptime`.
+
+On the first production week these read 94.77% and 94.35%. The gap is the monitor's own
+network hiccups, which a station's uptime figure has no business reporting as its own downtime.
+Both `/api/uptime` and `/api/rollup` return both numbers, and the live dashboard and the
+history page read the same one, so the two pages cannot disagree.
+
+`audience.lostSharePercent` puts the loss against everything actually delivered
+(`listenerHoursDelivered`, integrated from real listener samples). "214 listener-hours lost"
+means little alone; "2.2% of all listening" is a number a station manager can act on.
 
 A probe anomaly is charged **zero** loss even though it recorded a failure: Icecast was
 reachable and the mount kept serving, so nobody lost a second of audio.

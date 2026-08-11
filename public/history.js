@@ -85,6 +85,7 @@
     renderStorage();
     syncRangePills();
     renderOverviewRange();
+    renderImpactHero();
     renderRoundup();
     renderAudience();
     renderHeatmap();
@@ -126,6 +127,34 @@
     }
 
     el.textContent = startText ? `${label} · ${startText} – ${fmt(end)}` : label;
+  }
+
+  /**
+   * The headline: what the audience lost.
+   *
+   * Period-scoped rather than filter-scoped, like the Listening Lost tile it
+   * summarises — the figures come from each event's frozen audience block, and
+   * quietly restating a subtotal under the same words would make it a different
+   * number wearing the same label.
+   */
+  function renderImpactHero() {
+    const hero = $('#impact-hero');
+    if (!hero) return;
+
+    const a = lastRollup?.audience;
+    const hours = lastListeners?.summary?.listenerHoursLost ?? a?.listenerHoursLost;
+    if (hours == null) { hero.style.display = 'none'; return; }
+    hero.style.display = 'flex';
+
+    const clean = !hours;
+    hero.classList.toggle('clean', clean);
+
+    $('#ih-value').textContent = clean ? 'None' : `${hours} listener-hours`;
+    $('#ih-sub').textContent = clean
+      ? 'No listener lost audio in this period.'
+      : 'Audio that real people — on radios, phones, apps and smart speakers — did not get to hear.';
+    $('#ih-listeners').textContent = a?.listenersCutOff ? `≈${a.listenersCutOff.toLocaleString()}` : '0';
+    $('#ih-share').textContent = a?.lostSharePercent != null ? `${a.lostSharePercent}%` : '—';
   }
 
   // ── Period roundup ──────────────────────────────────────────────────────
@@ -203,8 +232,11 @@
     if (!valueEl || !detailEl) return;
 
     const streamId = $('#f-stream').value;
-    const perStream = streamId ? stats?.summary?.[streamId] : null;
-    const percent = streamId ? perStream?.uptime : lastUptime?.uptime;
+    // Audio uptime — probe-only failures are not charged to the station. The
+    // rollup carries it per stream, so a stream filter narrows it without
+    // falling back to the sample-based figure and silently changing meaning.
+    const perStream = streamId ? lastRollup?.perStream?.find((s) => s.id === streamId) : null;
+    const percent = streamId ? perStream?.uptime : lastRollup?.uptime ?? lastUptime?.uptime;
     const scope = streamId
       ? (streams.find((s) => s.id === streamId)?.name || streamId)
       : 'across all streams';
@@ -226,11 +258,14 @@
     // stream, so the shortfall warning applies either way.
     const partial = !lastRangeIsAllTime && lastUptime
       && lastUptime.coverageDays < lastUptime.days * 0.95;
+    // Say that this excludes probe-only failures, otherwise it reads as the
+    // same number the dashboard used to show and quietly means something else.
+    const basis = `${scope} · excludes probe-only failures`;
     if (partial) {
-      detailEl.textContent = `${scope} · partial, only ${coverageLabel(lastUptime.coverageDays)} collected`;
+      detailEl.textContent = `${basis} · partial, only ${coverageLabel(lastUptime.coverageDays)} collected`;
       detailEl.className = 'summary-detail partial';
     } else {
-      detailEl.textContent = scope;
+      detailEl.textContent = basis;
       detailEl.className = 'summary-detail';
     }
   }
@@ -696,10 +731,33 @@
   }
 
   // ── Summary tiles ───────────────────────────────────────────────────────
+  /**
+   * Did this failure actually cost the audience audio?
+   *
+   * Mirrors store.settledImpact. Every event carries two verdicts: what we
+   * believed while it was still failing (`diagnosis.listenerImpact`, usually
+   * 'unknown' because Icecast was unreachable at the time) and what recovery
+   * settled it to once Icecast could be asked (`audience.listenerImpact`). The
+   * settled one wins. 'unknown' counts as impact — an outage we could not clear
+   * is never quietly written off.
+   */
+  function costListeners(e) {
+    return (e.audience?.listenerImpact ?? e.diagnosis?.listenerImpact ?? 'unknown') !== 'none';
+  }
+
   function renderSummary() {
     const UNCONFIRMED = new Set(['brief_outage', 'probe_error', 'blip']);
-    const outages = filtered.filter((e) => e.severity === 'outage').length;
-    const blips = filtered.filter((e) => UNCONFIRMED.has(e.severity)).length;
+    // Headline counts group by what the AUDIENCE experienced, not by whether a
+    // failure lasted long enough to pass our confirmation threshold. Those two
+    // groupings disagree in both directions — short failures that really did
+    // drop the mount, and confirmed outages Icecast proved were harmless — so
+    // counting by severity put real outages under a heading the station reads
+    // as "ignore me".
+    const failures = filtered.filter((e) => e.type !== 'up');
+    const felt = failures.filter(costListeners);
+    const unfelt = failures.filter((e) => !costListeners(e));
+    const outages = felt.length;
+    const blips = unfelt.length;
     const deadAir = filtered.filter((e) => e.severity === 'dead_air').length;
 
     // Events that could plausibly notify. An event that DID email always
@@ -726,12 +784,36 @@
       (e) => e.email?.sent === true && e.email?.deliveryReconstructed,
     ).length;
 
-    const downtimeMs = filtered
-      .filter((e) => e.type !== 'up' && e.durationMs)
-      .reduce((a, e) => a + e.durationMs, 0);
+    // Downtime, two ways — because they answer different questions and only one
+    // of them is what "how long were we down" means.
+    //
+    // Failures the stream survived are excluded outright: Icecast was reachable
+    // and still serving the mount, so counting them as downtime contradicts a
+    // verdict we already reached about them.
+    //
+    // Computed here from the FILTERED events rather than read from the rollup,
+    // so the tile still answers for whatever the timeline is showing. The store
+    // runs the same merge for the roundup email.
+    const downEvents = felt.filter((e) => e.durationMs);
+    const streamDowntimeMs = downEvents.reduce((a, e) => a + e.durationMs, 0);
+    const downtimeMs = mergeIntervals(downEvents);
 
     $('#stat-outages').textContent = outages;
-    $('#stat-outages-detail').textContent = `${filtered.length} events in view`;
+    // Say how many streams it touched, not how many rows are in the table —
+    // "177 events in view" invited reading the whole log as damage.
+    const streamsHit = new Set(felt.map((e) => e.streamId)).size;
+    $('#stat-outages-detail').textContent = outages
+      ? `cut the audience off · ${streamsHit} stream${streamsHit === 1 ? '' : 's'} affected`
+      : 'nothing reached a listener';
+
+    const blipsDetail = $('#stat-blips-detail');
+    if (blipsDetail) {
+      // Name the reason these cost nothing. "Probe anomaly" means nothing to a
+      // programme director; "Icecast kept serving" does.
+      blipsDetail.textContent = blips
+        ? `Icecast kept serving throughout · ${fmtDuration(unfelt.reduce((a, e) => a + (e.durationMs || 0), 0))} total`
+        : 'stream kept playing throughout';
+    }
 
     // Audience cost is range-wide, not filter-wide: it comes from the events'
     // frozen audience blocks via the API, so it deliberately ignores the
@@ -740,12 +822,20 @@
     const lossDetailEl = $('#stat-listener-loss-detail');
     if (lossEl && lossDetailEl) {
       const aud = lastListeners?.summary;
-      lossEl.textContent = aud ? `${aud.listenerHoursLost}h` : '—';
-      lossDetailEl.textContent = !aud
-        ? 'audience × downtime'
-        : aud.eventsMissingAudience
-        ? `${aud.listenerMinutesLost} listener-min · ${aud.eventsMissingAudience} unmeasured`
-        : `${aud.listenerMinutesLost} listener-minutes`;
+      const share = lastRollup?.audience;
+      // No "h" suffix: this is a volume (people × time) and the tile beside it
+      // is a duration. Two adjacent numbers both ending in "h", meaning
+      // different things, is what made this one unreadable.
+      lossEl.textContent = aud ? `${aud.listenerHoursLost}` : '—';
+      if (!aud) {
+        lossDetailEl.textContent = 'listening the audience actually lost';
+      } else {
+        const parts = ['listener-hours'];
+        // The denominator is what gives the figure meaning.
+        if (share?.lostSharePercent != null) parts.push(`${share.lostSharePercent}% of all listening`);
+        if (aud.eventsMissingAudience) parts.push(`${aud.eventsMissingAudience} unmeasured`);
+        lossDetailEl.textContent = parts.join(' · ');
+      }
     }
     $('#stat-blips').textContent = blips;
     $('#stat-deadair').textContent = deadAir;
@@ -768,6 +858,20 @@
       ? 'summary-detail partial'
       : 'summary-detail';
     $('#stat-downtime').textContent = downtimeMs ? fmtDuration(downtimeMs) : '0s';
+    const dtDetail = $('#stat-downtime-detail');
+    if (dtDetail) {
+      // Say what is down. Narrowed to one stream, "at least one stream" is a
+      // strange way to describe the only stream in view.
+      const selId = $('#f-stream').value;
+      const subject = selId
+        ? `${streams.find((s) => s.id === selId)?.name || 'this stream'} down`
+        : 'at least one stream down';
+      // Name the difference rather than hiding it. One server fault that took
+      // two streams down for 3h35m each is 3h35m off air, not 7h10m.
+      dtDetail.textContent = streamDowntimeMs > downtimeMs
+        ? `${subject} · ${fmtDuration(streamDowntimeMs)} summed across streams`
+        : subject;
+    }
 
     $('#timeline-count').textContent =
       `${filtered.length} event${filtered.length === 1 ? '' : 's'}`;
@@ -994,6 +1098,34 @@
 
   function fmtTime(iso) {
     return new Date(iso).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', second: '2-digit', hour12: true });
+  }
+
+  /**
+   * Elapsed time covered by a set of events, with concurrent ones merged.
+   *
+   * Mirrors store.mergedDowntimeMs — deliberately duplicated rather than fetched,
+   * because this tile has to answer for the CURRENT filter selection and the
+   * server figure describes the whole period.
+   */
+  function mergeIntervals(list) {
+    const iv = list
+      .map((e) => {
+        const s = new Date(e.timestamp).getTime();
+        return [s, s + e.durationMs];
+      })
+      .filter(([s]) => isFinite(s))
+      .sort((a, b) => a[0] - b[0]);
+
+    let total = 0;
+    let start = null;
+    let end = null;
+    iv.forEach(([s, e]) => {
+      if (start === null) { start = s; end = e; }
+      else if (s <= end) { end = Math.max(end, e); }
+      else { total += end - start; start = s; end = e; }
+    });
+    if (start !== null) total += end - start;
+    return total;
   }
 
   function fmtDuration(ms) {

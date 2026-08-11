@@ -115,7 +115,11 @@ app.get('/api/uptime', (req, res) => {
 
   res.json({
     days,
-    uptime: monitor.getOverallUptime(windowMs),
+    // Uptime as the audience experienced it: failures where Icecast kept
+    // serving the mount are not counted against the station. `probeUptime` is
+    // the older sample-based figure, kept for comparison.
+    uptime: monitor.getAudioUptime(windowMs),
+    probeUptime: monitor.getOverallUptime(windowMs),
     coverageStart,
     coverageDays,
   });

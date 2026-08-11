@@ -74,42 +74,73 @@
       </div>
     </div>
 
+    <!-- The one number the station is actually asking about: what the audience
+         lost. Everything below it explains this; nothing below it outranks it. -->
+    <div class="impact-hero fade-in" id="impact-hero">
+      <div class="ih-main">
+        <div class="ih-label">Listening lost to outages</div>
+        <div class="ih-value" id="ih-value">—</div>
+        <div class="ih-sub" id="ih-sub">people on radios, phones and smart speakers who lost audio</div>
+      </div>
+      <div class="ih-side">
+        <div class="ih-stat">
+          <div class="ih-stat-value" id="ih-listeners">—</div>
+          <div class="ih-stat-label">listeners cut off</div>
+        </div>
+        <div class="ih-stat">
+          <div class="ih-stat-value" id="ih-share">—</div>
+          <div class="ih-stat-label">of all listening</div>
+        </div>
+      </div>
+    </div>
+
     <!-- Summary tiles -->
     <div class="summary-bar fade-in">
       <div class="summary-card">
-        <div class="summary-label">Uptime</div>
+        <div class="summary-label">Audio Uptime</div>
         <div class="summary-value neutral" id="stat-uptime">—</div>
         <div class="summary-detail" id="stat-uptime-detail">across all streams</div>
       </div>
       <div class="summary-card">
-        <div class="summary-label">Confirmed Outages</div>
+        <div class="summary-label">Outages Listeners Felt</div>
         <div class="summary-value down" id="stat-outages">—</div>
         <div class="summary-detail" id="stat-outages-detail">in range</div>
       </div>
       <div class="summary-card">
-        <div class="summary-label">Unconfirmed</div>
-        <div class="summary-value" id="stat-blips" style="color: var(--warn);">—</div>
-        <div class="summary-detail">brief outages &amp; probe anomalies</div>
+        <div class="summary-label">Time Off Air</div>
+        <div class="summary-value neutral" id="stat-downtime">—</div>
+        <div class="summary-detail" id="stat-downtime-detail">at least one stream down</div>
+      </div>
+      <div class="summary-card">
+        <div class="summary-label">Listening Lost</div>
+        <div class="summary-value down" id="stat-listener-loss">—</div>
+        <div class="summary-detail" id="stat-listener-loss-detail">listening the audience actually lost</div>
+      </div>
+    </div>
+
+    <!-- Second tier: monitoring detail. These describe the health of the
+         MONITOR as much as the streams, and putting them alongside the numbers
+         above let a run of harmless probe resets read as a bad week on air. -->
+    <div class="section-subhead">
+      <span class="material-symbols-outlined">troubleshoot</span>
+      Monitoring detail
+      <span class="section-subhead-note">recorded in full — none of this reached a listener unless noted</span>
+    </div>
+    <div class="summary-bar summary-bar-minor fade-in">
+      <div class="summary-card">
+        <div class="summary-label">No Listener Impact</div>
+        <div class="summary-value neutral" id="stat-blips">—</div>
+        <div class="summary-detail" id="stat-blips-detail">stream kept playing throughout</div>
       </div>
       <div class="summary-card">
         <div class="summary-label">Dead Air</div>
         <div class="summary-value" id="stat-deadair" style="color: #f59e0b;">—</div>
-        <div class="summary-detail">silence events</div>
+        <div class="summary-detail">connected but silent</div>
       </div>
       <div class="summary-card">
         <div class="summary-label">Alerts Emailed</div>
         <div class="summary-value neutral" id="stat-emailed" style="color: var(--primary-light);">—</div>
         <div class="summary-detail" id="stat-emailed-detail">of notifiable events</div>
-      </div>
-      <div class="summary-card">
-        <div class="summary-label">Total Downtime</div>
-        <div class="summary-value neutral" id="stat-downtime">—</div>
-        <div class="summary-detail">across all streams</div>
-      </div>
-      <div class="summary-card">
-        <div class="summary-label">Listening Lost</div>
-        <div class="summary-value down" id="stat-listener-loss">—</div>
-        <div class="summary-detail" id="stat-listener-loss-detail">audience × downtime</div>
       </div>
     </div>
 

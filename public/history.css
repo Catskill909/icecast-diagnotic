@@ -43,6 +43,125 @@ a.help-btn { text-decoration: none; }
   text-transform: none;
 }
 
+/* ── Listener-impact hero ──────────────────────────────────────────────────── */
+/* The station's actual question — how much listening did we lose — answered
+   before anything else on the page. Every other number here is diagnostic:
+   useful for finding the cause, secondary to the cost. */
+.impact-hero {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 24px;
+  background: linear-gradient(135deg, rgba(239, 68, 68, 0.10), rgba(124, 106, 239, 0.06));
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: 22px 26px;
+  margin-bottom: 20px;
+  box-shadow: var(--shadow-sm);
+}
+.impact-hero.clean {
+  background: linear-gradient(135deg, rgba(34, 197, 94, 0.10), rgba(124, 106, 239, 0.05));
+}
+
+.ih-main { flex: 1 1 300px; min-width: 0; }
+
+.ih-label {
+  font-size: 0.75rem;
+  font-weight: 600;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--text-secondary);
+  margin-bottom: 6px;
+}
+
+.ih-value {
+  font-size: 2.6rem;
+  font-weight: 700;
+  line-height: 1.05;
+  letter-spacing: -0.02em;
+  color: var(--status-down);
+}
+.impact-hero.clean .ih-value { color: var(--status-up); }
+
+.ih-sub {
+  margin-top: 8px;
+  font-size: 0.84rem;
+  line-height: 1.5;
+  color: var(--text-secondary);
+}
+
+.ih-side {
+  display: flex;
+  gap: 28px;
+  padding-left: 24px;
+  border-left: 1px solid var(--border);
+}
+
+.ih-stat-value {
+  font-size: 1.5rem;
+  font-weight: 700;
+  color: var(--text-primary);
+  line-height: 1.2;
+}
+
+.ih-stat-label {
+  margin-top: 3px;
+  font-size: 0.72rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-tertiary);
+}
+
+@media (max-width: 700px) {
+  .impact-hero { padding: 18px; gap: 16px; }
+  .ih-value { font-size: 2rem; }
+  .ih-side { padding-left: 0; border-left: none; gap: 22px; }
+}
+
+/* ── Second-tier stats ─────────────────────────────────────────────────────── */
+/* Monitoring detail, deliberately quieter than the listener-facing tiles above.
+   These numbers describe the health of the monitor as much as the streams, and
+   given equal weight a run of harmless probe resets reads as a bad week on air. */
+.section-subhead {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 4px 0 12px;
+  font-size: 0.78rem;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-tertiary);
+}
+.section-subhead .material-symbols-outlined { font-size: 17px; }
+
+.section-subhead-note {
+  margin-left: auto;
+  font-size: 0.72rem;
+  font-weight: 400;
+  letter-spacing: 0;
+  text-transform: none;
+  color: var(--text-tertiary);
+}
+
+.summary-bar-minor {
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  margin-bottom: 24px;
+}
+.summary-bar-minor .summary-card {
+  background: transparent;
+  border-style: dashed;
+  padding: 14px 16px;
+}
+.summary-bar-minor .summary-value {
+  font-size: 1.5rem;
+  color: var(--text-secondary);
+}
+
+@media (max-width: 640px) {
+  .section-subhead-note { display: none; }
+}
+
 /* ── Period roundup ────────────────────────────────────────────────────────── */
 /* Sits BELOW the tiles and reads them back as a sentence.
    Styled as a note, not an alarm. It describes a window that has already

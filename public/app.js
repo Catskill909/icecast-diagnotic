@@ -197,11 +197,10 @@
   async function refreshUptimeTile() {
     const rangeLabel = UPTIME_RANGE_LABELS[uptimeRangeDays] || `last ${uptimeRangeDays} days`;
 
-    if (uptimeRangeDays === 1) {
-      applyUptimeValue(calculate24hUptime(), { detail: `across all streams · ${rangeLabel}` });
-      return;
-    }
-
+    // Every range, including 24h, now comes from /api/uptime. The old local
+    // shortcut counted raw check samples, so a run of probe resets that never
+    // interrupted a listener dragged the headline figure down — and it
+    // disagreed with the same number on the history page.
     const token = ++uptimeFetchToken;
     try {
       const res = await fetch(`/api/uptime?days=${uptimeRangeDays}`).then((r) => r.json());
@@ -216,10 +215,15 @@
           detail: `Partial — only ${coverageLabel(res.coverageDays)} of history collected so far`,
         });
       } else {
-        applyUptimeValue(res.uptime, { detail: `across all streams · ${rangeLabel}` });
+        applyUptimeValue(res.uptime, { detail: `audio delivered · ${rangeLabel}` });
       }
     } catch (err) {
       console.error('Uptime range fetch failed:', err);
+      // Fall back to the local sample-based figure rather than showing nothing:
+      // a slightly pessimistic number beats an empty tile on the live dashboard.
+      if (uptimeRangeDays === 1) {
+        applyUptimeValue(calculate24hUptime(), { detail: `across all streams · ${rangeLabel}` });
+      }
     }
   }
 

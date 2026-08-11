@@ -177,6 +177,9 @@ function backfillAudience() {
   let corrected = 0;
   let relabelled = 0;
 
+  let recosted = 0;
+  let recostDelta = 0;
+
   for (const e of events) {
     if (e.type === 'up' || !e.durationMs) continue;
 
@@ -187,7 +190,23 @@ function backfillAudience() {
     // events written under the old one — a stored number that is wrong is worse
     // than a missing one, because it looks authoritative.
     const stored = e.audience;
-    if (stored && stored.confidence === 'measured' && stored.listenerImpact === impact) continue;
+    if (stored && stored.confidence === 'measured' && stored.listenerImpact === impact) {
+      // …with one exception: a block written before the loss model existed
+      // carries no `model` field, and a long outage costed flat is overstated.
+      // Re-cost it from the STORED context rather than a fresh one — the raw
+      // samples behind its measured headcount may have been compacted away by
+      // now, and re-deriving would downgrade a real measurement to an estimate.
+      if (stored.model === undefined && e.durationMs > LONG_OUTAGE_MS) {
+        const was = stored.listenerMinutesLost;
+        e.audience = applyLossModel(stored, e.streamId, e.timestamp, e.durationMs, impact);
+        if (e.audience.listenerMinutesLost !== was) {
+          recosted++;
+          recostDelta += e.audience.listenerMinutesLost - was;
+        }
+        dirtyEvents = true;
+      }
+      continue;
+    }
 
     const audience = buildAudienceImpact(e.streamId, e.timestamp, e.durationMs, impact);
     if (audience.confidence === 'unknown') continue;
@@ -209,11 +228,15 @@ function backfillAudience() {
     dirtyEvents = true;
   }
 
-  if (filled || corrected) {
+  if (filled || corrected || recosted) {
     console.log(
       `[Store] Audience impact: ${filled} filled, ${corrected} corrected` +
+      (recosted
+        ? `, ${recosted} long outage(s) re-costed along the audience curve (${
+          recostDelta > 0 ? '+' : ''}${recostDelta.toLocaleString()} listener-minutes)`
+        : '') +
       (relabelled ? `, ${relabelled} relabelled as probe anomalies` : '') +
-      ` — ${lost.toLocaleString()} listener-minutes touched`,
+      ` — ${lost.toLocaleString()} listener-minutes newly measured`,
     );
     saveEvents();
   }
@@ -475,6 +498,69 @@ function getAudienceContext(streamId, atIso, lookbackMs = 60 * 60 * 1000) {
   return { listenersBefore: null, peakBefore: null, confidence: 'unknown', basis: 'no audience data retained' };
 }
 
+// Below this, a flat multiplier and a modelled curve differ by noise, so the
+// simpler calculation wins. Above it, holding the audience constant for hours
+// is the dominant source of error in the headline figure.
+const LONG_OUTAGE_MS = 60 * 60 * 1000;
+// A profile built from a handful of hours has no usable shape — extrapolating
+// along it would be inventing a daypart curve rather than following one.
+const PROFILE_MIN_HOURS = 12;
+// The anchor rescales the whole curve, so one freak reading at the moment of
+// failure must not be allowed to multiply an 18-hour extrapolation.
+const ANCHOR_MIN = 0.2;
+const ANCHOR_MAX = 5;
+
+/**
+ * Listener-minutes for a long outage, following the audience curve instead of a
+ * flat line.
+ *
+ * A flat multiplier says: whoever was listening when it broke would have kept
+ * listening, at that exact headcount, for every minute it stayed broken. Over
+ * four minutes that is fine. Over the 3h35m server outage that began at 8:12pm
+ * — or the 18h24m HD2 dropout spanning a whole day and night — it charges a
+ * primetime audience for the small hours, and those two events alone carried
+ * 88% of the reported loss.
+ *
+ * So the shape comes from the stream's own hour-of-day profile and the LEVEL
+ * comes from the measurement taken just before the failure: the profile is
+ * rescaled so it passes exactly through the observed starting point, then
+ * integrated across the outage. A real 32-listener start stays 32 at the start
+ * and follows that stream's normal overnight decline from there.
+ *
+ * Returns null when there is not enough profile to trust, leaving the caller to
+ * fall back to the flat figure rather than guess.
+ */
+function modelledListenerMinutes(streamId, startMs, durationMs, listenersBefore) {
+  const profile = getHourOfDayProfile(streamId);
+  if (profile.filter((v) => v != null && v > 0).length < PROFILE_MIN_HOURS) return null;
+
+  const anchor = profile[new Date(startMs).getUTCHours()];
+  if (!anchor || anchor <= 0) return null;
+
+  const scale = Math.min(ANCHOR_MAX, Math.max(ANCHOR_MIN, listenersBefore / anchor));
+
+  let minutes = 0;
+  let t = startMs;
+  const end = startMs + durationMs;
+
+  while (t < end) {
+    const d = new Date(t);
+    // Advance to the top of the next UTC hour, so each segment sits in exactly
+    // one profile bucket and partial hours at both ends are handled correctly.
+    const nextHour = Date.UTC(
+      d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate(), d.getUTCHours() + 1,
+    );
+    const segEnd = Math.min(nextHour, end);
+    const level = profile[d.getUTCHours()];
+    // An unpopulated hour falls back to the observed level rather than to zero:
+    // no data about an hour is not evidence that nobody was listening in it.
+    minutes += ((segEnd - t) / 60000) * (level != null ? level * scale : listenersBefore);
+    t = segEnd;
+  }
+
+  return Math.round(minutes);
+}
+
 /**
  * Freezes the audience cost of one failure onto the event.
  *
@@ -488,21 +574,54 @@ function getAudienceContext(streamId, atIso, lookbackMs = 60 * 60 * 1000) {
  */
 function buildAudienceImpact(streamId, startedAtIso, durationMs, listenerImpact) {
   const ctx = getAudienceContext(streamId, startedAtIso);
-  const minutes = (durationMs || 0) / 60000;
+  return applyLossModel(ctx, streamId, startedAtIso, durationMs, listenerImpact);
+}
+
+/**
+ * Turns an audience context into the frozen impact block, choosing the loss
+ * model that fits the outage length.
+ *
+ * Split out from buildAudienceImpact so the startup backfill can re-cost a
+ * stored event under a corrected model WITHOUT re-deriving its context — the
+ * raw samples behind a measured `listenersBefore` expire after a week, so
+ * re-deriving would silently downgrade a real measurement to an estimate.
+ */
+function applyLossModel(ctx, streamId, startedAtIso, durationMs, listenerImpact) {
   const harmless = listenerImpact === 'none';
+  const startMs = new Date(startedAtIso).getTime();
+  const minutes = (durationMs || 0) / 60000;
+  const flat = ctx.listenersBefore == null ? null : Math.round(ctx.listenersBefore * minutes);
+
+  let lost = flat;
+  let model = 'flat';
+
+  if (harmless) {
+    lost = 0;
+    model = 'none';
+  } else if (ctx.listenersBefore != null && durationMs > LONG_OUTAGE_MS && isFinite(startMs)) {
+    const curved = modelledListenerMinutes(streamId, startMs, durationMs, ctx.listenersBefore);
+    if (curved != null) {
+      lost = curved;
+      model = 'hour-of-day';
+    }
+  }
 
   return {
     listenersBefore: ctx.listenersBefore,
     peakBefore: ctx.peakBefore,
-    listenerMinutesLost: harmless
-      ? 0
-      : ctx.listenersBefore == null
-      ? null
-      : Math.round(ctx.listenersBefore * minutes),
+    listenerMinutesLost: lost,
     listenerImpact: listenerImpact ?? null,
     confidence: ctx.confidence,
+    // Which model produced the figure, and — when it was not the naive one —
+    // what the naive one would have said. Anyone comparing this month's total
+    // against an older screenshot can see exactly where the difference came
+    // from instead of assuming the data changed underneath them.
+    model,
+    flatEquivalent: model === 'hour-of-day' ? flat : undefined,
     basis: harmless
       ? 'no loss charged — Icecast reachable and mount still serving'
+      : model === 'hour-of-day'
+      ? `${ctx.basis}, projected along this stream's hour-of-day audience curve`
       : ctx.basis,
   };
 }
@@ -862,6 +981,49 @@ function getOverallUptime(streamIds, windowMs) {
 }
 
 /**
+ * Uptime as the AUDIENCE experienced it: the share of monitored time the
+ * streams were actually serving audio.
+ *
+ * The sample-based figure counts every failed probe as downtime, which charges
+ * the station for the monitor's own network hiccups — 86 events across the
+ * first production week, none of which cost a listener a second of audio. A
+ * station's uptime should describe its transmission, not our connectivity.
+ *
+ * Derived from events rather than samples, because only an event carries the
+ * settled listener-impact verdict that decides whether a failure counted.
+ * Returns null when there is no coverage to divide by.
+ */
+function getAudioUptime(streamIds, windowMs) {
+  const now = Date.now();
+  const cutoff = now - windowMs;
+  let coveredMs = 0;
+  let downMs = 0;
+
+  for (const id of streamIds) {
+    const start = getCoverageStart([id]);
+    if (!start) continue;
+    // A stream only counts for the part of the window we were actually watching.
+    const covered = Math.min(windowMs, now - new Date(start).getTime());
+    if (covered <= 0) continue;
+    coveredMs += covered;
+
+    for (const e of events) {
+      if (e.streamId !== id || e.type === 'up' || !e.durationMs) continue;
+      const t = new Date(e.timestamp).getTime();
+      if (!isFinite(t) || t + e.durationMs <= cutoff) continue;
+      if (!costListeners(e)) continue;
+      // Clip to the window so an outage that began before it does not borrow
+      // downtime from a period this figure does not cover.
+      downMs += Math.min(t + e.durationMs, now) - Math.max(t, cutoff);
+    }
+  }
+
+  if (coveredMs <= 0) return null;
+  const pct = 100 - (downMs / coveredMs) * 100;
+  return Math.round(Math.min(100, Math.max(0, pct)) * 100) / 100;
+}
+
+/**
  * Earliest telemetry timestamp across the given streams — how far back
  * uptime figures can actually reach. Lets the UI tell a real 30-day figure
  * apart from one padded out by a monitor that only started a few days ago.
@@ -945,6 +1107,110 @@ function getCauseBreakdown(windowMs) {
 }
 
 /**
+ * Wall-clock time covered by a set of failures, with overlaps merged.
+ *
+ * Summing per-event durations answers "how many stream-hours were lost", which
+ * is the right input to an uptime percentage but the wrong answer to "how long
+ * were we down". When one server fault took Main and HD3 out together for
+ * 3h35m, the sum reported 7h10m — nobody experienced seven hours. This merges
+ * concurrent failures so the figure is elapsed time a listener could have
+ * noticed something wrong.
+ */
+function mergedDowntimeMs(list) {
+  const iv = list
+    .filter((e) => e.durationMs > 0)
+    .map((e) => {
+      const s = new Date(e.timestamp).getTime();
+      return [s, s + e.durationMs];
+    })
+    .filter(([s]) => isFinite(s))
+    .sort((a, b) => a[0] - b[0]);
+
+  let total = 0;
+  let curStart = null;
+  let curEnd = null;
+  for (const [s, e] of iv) {
+    if (curStart === null) { curStart = s; curEnd = e; }
+    else if (s <= curEnd) { curEnd = Math.max(curEnd, e); }
+    else { total += curEnd - curStart; curStart = s; curEnd = e; }
+  }
+  if (curStart !== null) total += curEnd - curStart;
+  return total;
+}
+
+/**
+ * Listening actually delivered in a window, in listener-minutes.
+ *
+ * The denominator that makes a loss figure mean something: "214 listener-hours
+ * lost" is unreadable on its own, but "214 lost out of 9,000 delivered — 2.3%"
+ * is a number a station manager can act on.
+ *
+ * Sample spacing is derived rather than assumed, because CHECK_INTERVAL_MS is
+ * configurable and a hard-coded one-minute assumption would silently mis-scale
+ * the whole figure if it were ever changed.
+ */
+function getListeningDelivered(streamIds, windowMs) {
+  const cutoff = Date.now() - windowMs;
+  let listenerMinutes = 0;
+
+  for (const id of streamIds) {
+    const arr = (samples[id] || []).filter((s) => {
+      const t = new Date(s.timestamp).getTime();
+      return isFinite(t) && t > cutoff && s.status === 'up' && s.listeners != null;
+    });
+
+    if (arr.length > 1) {
+      const gaps = [];
+      for (let i = 1; i < arr.length; i++) {
+        const g = new Date(arr[i].timestamp) - new Date(arr[i - 1].timestamp);
+        if (g > 0) gaps.push(g);
+      }
+      gaps.sort((a, b) => a - b);
+      // Median, not mean: a restart gap of several hours would otherwise inflate
+      // every sample's weight across the whole window.
+      const median = gaps.length ? gaps[Math.floor(gaps.length / 2)] : 60000;
+      const perSampleMin = Math.min(15, Math.max(0.25, median / 60000));
+      listenerMinutes += arr.reduce((a, s) => a + s.listeners, 0) * perSampleMin;
+    } else if (arr.length === 1) {
+      listenerMinutes += arr[0].listeners;
+    }
+
+    for (const r of rollups[id] || []) {
+      const t = new Date(r.hour).getTime();
+      if (!isFinite(t) || t + HOUR_MS <= cutoff || r.avgListeners == null) continue;
+      listenerMinutes += r.avgListeners * 60;
+    }
+  }
+
+  return Math.round(listenerMinutes);
+}
+
+/**
+ * The authoritative listener-impact verdict for a stored event.
+ *
+ * There are two on every event and they routinely disagree. `diagnosis.
+ * listenerImpact` is what we believed while the stream was still failing, taken
+ * when Icecast was often unreachable and the honest answer was 'unknown'.
+ * `audience.listenerImpact` is what recovery SETTLED it to, once Icecast could
+ * be asked whether the mount had actually gone away.
+ *
+ * The settled one wins. Reading the failure-time guess instead counted 49
+ * harmless probe resets as downtime on the production record, which is the
+ * whole reason the recovery-settling logic exists.
+ *
+ * 'unknown' deliberately groups with 'confirmed' at every call site: an outage
+ * we could not clear is treated as real, never quietly written off.
+ */
+function settledImpact(e) {
+  return e?.audience?.listenerImpact ?? e?.diagnosis?.listenerImpact ?? 'unknown';
+}
+
+/** Did this failure actually cost the audience audio? */
+function costListeners(e) {
+  return settledImpact(e) !== 'none';
+}
+
+/**
  * An event the monitor deliberately chose not to email, because Icecast proved
  * the mount kept serving. Distinct from an event with no delivery record: this
  * one has a known, intended outcome.
@@ -981,27 +1247,39 @@ function narrate(r) {
 
   const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;
 
+  // Lead with what the audience lost. A period in which nothing reached a
+  // listener is a good period, however many times our probe tripped over its
+  // own feet, and the sentence should say so first.
   let headline;
-  if (c.outages === 0 && c.deadAir === 0) {
-    headline = c.unconfirmed
-      ? `No confirmed outages — every stream held. ${c.unconfirmed} brief ${c.unconfirmed === 1 ? 'anomaly was' : 'anomalies were'} recorded, none of which cost a listener.`
+  if (c.listenerAffecting === 0) {
+    headline = c.noListenerImpact
+      ? `No listener heard a break. ${c.noListenerImpact} monitoring ${c.noListenerImpact === 1 ? 'anomaly was' : 'anomalies were'} recorded, none of which interrupted the stream.`
       : 'No outages at all — every stream held for the whole period.';
   } else {
-    const faults = [];
-    if (c.outages) faults.push(plural(c.outages, 'confirmed outage'));
-    if (c.deadAir) faults.push(`${c.deadAir} dead-air event${c.deadAir === 1 ? '' : 's'}`);
     const across = c.streamsAffected > 1 ? ` across ${c.streamsAffected} streams` : '';
-    const cost = a.listenerMinutesLost > 0
-      ? `, cutting off ≈${a.listenersCutOff.toLocaleString()} listener${a.listenersCutOff === 1 ? '' : 's'} and costing ${a.listenerHoursLost} listener-hours of listening`
+    const deadAirNote = c.deadAir
+      ? ` ${c.deadAir} of them ${c.deadAir === 1 ? 'was' : 'were'} dead air — connected but silent.`
       : '';
-    headline = `${faults.join(' and ')}${across}${cost}.`;
+    const cost = a.listenerMinutesLost > 0
+      ? `, cutting off ≈${a.listenersCutOff.toLocaleString()} listener${a.listenersCutOff === 1 ? '' : 's'} and costing ${a.listenerHoursLost} listener-hours of listening${
+        a.lostSharePercent != null ? ` — ${a.lostSharePercent}% of everything the audience could have heard` : ''}`
+      : '';
+    headline = `${plural(c.listenerAffecting, 'outage')} interrupted the audience${across}${cost}.${deadAirNote}`;
   }
 
   const bits = [];
   if (r.uptime != null) bits.push(`${r.uptime}% uptime`);
-  if (r.downtimeMs) bits.push(`${fmtMs(r.downtimeMs)} total downtime`);
-  if (c.unconfirmed && (c.outages || c.deadAir)) {
-    bits.push(`${c.unconfirmed} unconfirmed blip${c.unconfirmed === 1 ? '' : 's'}`);
+  if (r.downtimeMs) {
+    // Say WHICH downtime this is. "Total downtime" invited reading a summed
+    // per-stream figure as elapsed time, which overstated it by nearly half.
+    bits.push(`${fmtMs(r.downtimeMs)} with at least one stream down`
+      + (r.downtime.streamMs > r.downtimeMs
+        ? ` (${fmtMs(r.downtime.streamMs)} summed across streams)` : ''));
+  }
+  // Stated as what it is — a monitoring artefact — rather than as "unconfirmed
+  // blips", which sounds like outages we failed to pin down.
+  if (c.noListenerImpact && c.listenerAffecting) {
+    bits.push(`${c.noListenerImpact} anomal${c.noListenerImpact === 1 ? 'y' : 'ies'} with no listener impact`);
   }
   // Messages, not events — one consolidated email can cover three streams.
   bits.push(r.alerts.messages
@@ -1069,10 +1347,33 @@ function getPeriodRollup(streamIds, windowMs) {
     alerted.map((e) => e.email.messageId || `${e.email.subject}|${e.email.sentAt || e.timestamp}`),
   );
 
-  const downtimeMs = failures.reduce((a, e) => a + (e.durationMs || 0), 0);
+  // The split that actually matters to a station: did the audience lose audio?
+  //
+  // NOT severity. Severity records whether a failure lasted long enough to pass
+  // our confirmation threshold, which is a fact about the monitor, not about
+  // listeners. On the production record those two groupings disagree badly — of
+  // 36 events severity called "confirmed outages", 10 cost nobody anything;
+  // while 19 events filed under "unconfirmed" really did drop every listener.
+  // Leading with severity therefore alarms the station about probe resets and
+  // buries real outages in a bucket whose name invites ignoring them.
+  const harmless = failures.filter((e) => !costListeners(e));
+  const impactful = failures.filter(costListeners);
+
+  const wallClockMs = mergedDowntimeMs(impactful);
+  const streamMs = impactful.reduce((a, e) => a + (e.durationMs || 0), 0);
   const ongoing = failures.filter((e) => !e.resolvedAt).length;
 
+  // Which stream carried it. One mount's long dropout can be two thirds of the
+  // total, and a single combined figure hides that completely.
+  const worstStream = streamIds
+    .map((id) => ({
+      id,
+      ms: impactful.filter((e) => e.streamId === id).reduce((a, e) => a + (e.durationMs || 0), 0),
+    }))
+    .sort((a, b) => b.ms - a.ms)[0] || null;
+
   const audience = getAudienceSummary(streamIds, windowMs);
+  const delivered = getListeningDelivered(streamIds, windowMs);
 
   let listenersCutOff = 0;
   let worstIncident = null;
@@ -1093,11 +1394,19 @@ function getPeriodRollup(streamIds, windowMs) {
     const aud = audience.perStream[id] || {};
     return {
       id,
-      uptime: getUptime(id, windowMs),
+      uptime: getAudioUptime([id], windowMs),
+      probeUptime: getUptime(id, windowMs),
+      listenerAffecting: mine.filter(costListeners).length,
+      noListenerImpact: mine.filter((e) => !costListeners(e)).length,
       outages: mine.filter((e) => e.severity === 'outage').length,
       deadAir: mine.filter((e) => e.severity === 'dead_air').length,
       unconfirmed: mine.filter((e) => isUnconfirmedSeverity(e.severity)).length,
-      downtimeMs: mine.reduce((a, e) => a + (e.durationMs || 0), 0),
+      // Same exclusion as the totals — otherwise these columns would not add up
+      // to the figure they sit beneath. No merge needed: one stream cannot be
+      // down concurrently with itself.
+      downtimeMs: impactful
+        .filter((e) => e.streamId === id)
+        .reduce((a, e) => a + (e.durationMs || 0), 0),
       listenerMinutesLost: aud.listenerMinutesLost || 0,
       listenersCutOff: mine.reduce(
         (a, e) => a + (e.audience?.listenerMinutesLost ? e.audience.listenersBefore || 0 : 0), 0,
@@ -1128,13 +1437,22 @@ function getPeriodRollup(streamIds, windowMs) {
     days: Math.round((windowMs / 86400000) * 100) / 100,
     since: new Date(since).toISOString(),
     until: new Date(until).toISOString(),
-    uptime: getOverallUptime(streamIds, windowMs),
+    // What the audience experienced. Leads everywhere it is shown.
+    uptime: getAudioUptime(streamIds, windowMs),
+    // The probe-level figure, kept so the two can be compared and so nothing
+    // that reported it before silently changes meaning.
+    probeUptime: getOverallUptime(streamIds, windowMs),
     coverageStart,
     // A monitor that has only been running two days cannot speak for a week.
     coverageMs: coverageStart ? Math.min(windowMs, until - new Date(coverageStart).getTime()) : 0,
     counts: {
       total: inWindow.length,
       failures: failures.length,
+      // Grouped by what the audience experienced — the headline figures.
+      listenerAffecting: impactful.length,
+      noListenerImpact: harmless.length,
+      // Grouped by confirmation threshold — a monitoring detail, kept for the
+      // timeline filters and for continuity, not for the headline.
       outages: outages.length,
       deadAir: deadAir.length,
       unconfirmed: unconfirmed.length,
@@ -1142,7 +1460,17 @@ function getPeriodRollup(streamIds, windowMs) {
       ongoing,
       streamsAffected: new Set(failures.map((e) => e.streamId)).size,
     },
-    downtimeMs,
+    // Elapsed time at least one stream was down — what a person means by "how
+    // long were we down". The summed figure is kept alongside it because that
+    // is the one that reconciles with the uptime percentage.
+    downtimeMs: wallClockMs,
+    downtime: {
+      wallClockMs,
+      streamMs,
+      excludedMs: harmless.reduce((a, e) => a + (e.durationMs || 0), 0),
+      excludedEvents: harmless.length,
+      worstStream,
+    },
     alerts: {
       messages: messages.size,
       eventsAlerted: alerted.length,
@@ -1161,6 +1489,13 @@ function getPeriodRollup(streamIds, windowMs) {
       listenersCutOff,
       listenerMinutesLost: audience.listenerMinutesLost,
       listenerHoursLost: audience.listenerHoursLost,
+      listenerMinutesDelivered: delivered,
+      listenerHoursDelivered: Math.round(delivered / 60),
+      // Share of everything that could have been listened to. Null rather than
+      // zero when nothing was delivered — no listening is not "0% lost".
+      lostSharePercent: delivered + audience.listenerMinutesLost > 0
+        ? Math.round((audience.listenerMinutesLost / (delivered + audience.listenerMinutesLost)) * 1000) / 10
+        : null,
       listenerMinutesLostMeasured: audience.listenerMinutesLostMeasured,
       eventsMissingAudience: audience.eventsMissingAudience,
     },
@@ -1255,10 +1590,10 @@ module.exports = {
   load, save, saveEvents, saveSamples, prune,
   addEvent, updateEvent, getEvents, findOpenOutage,
   addSample, getSamples, getAllSamples, getRollups,
-  getUptime, getOverallUptime, getCoverageStart, getSummary, getDailyBuckets, getCauseBreakdown,
+  getUptime, getOverallUptime, getAudioUptime, getCoverageStart, getSummary, getDailyBuckets, getCauseBreakdown,
   getPeriodRollup,
   getStatusCache, setStatusCache, getStorageInfo, getMeta, setMeta,
-  isUnconfirmedSeverity,
+  isUnconfirmedSeverity, settledImpact, costListeners,
   getAudienceContext, getHourOfDayProfile, buildAudienceImpact, deriveListenerImpact,
   getListenerSeries, getAudienceSummary, chooseBucketMs,
   SAMPLE_RETENTION_DAYS,

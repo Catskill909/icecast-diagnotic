@@ -911,7 +911,10 @@ function renderAudienceRows(audience, durationMs) {
     rows.push(row('Listening Lost',
       lost > 0
         ? `<span class="val-col" style="color:#f87171 !important; font-weight:700;">${fmtListenerHours(lost)}</span>` +
-          `<br><span class="label-col" style="color:#94a3b8 !important; font-size:11px;">${lost.toLocaleString()} listener-minutes — audience × outage length</span>`
+          `<br><span class="label-col" style="color:#94a3b8 !important; font-size:11px;">${lost.toLocaleString()} listener-minutes${
+            audience.model === 'hour-of-day'
+              ? ' — projected along this stream’s normal audience curve'
+              : ' — audience × outage length'}</span>`
         : `<span class="val-col" style="color:#4ade80 !important; font-weight:600;">None</span>` +
           `<br><span class="label-col" style="color:#94a3b8 !important; font-size:11px;">${esc(audience.basis || 'no listener impact')}</span>`,
     ));
@@ -1272,11 +1275,19 @@ function getPeriodRollup(windowMs) {
   return {
     ...rollup,
     perStream: rollup.perStream.map((s) => ({ ...s, name: nameOf(s.id) })),
+    downtime: {
+      ...rollup.downtime,
+      worstStream: rollup.downtime.worstStream
+        ? { ...rollup.downtime.worstStream, name: nameOf(rollup.downtime.worstStream.id) }
+        : null,
+    },
   };
 }
 
 function getSummary(windowMs) { return store.getSummary(streams.map((s) => s.id), windowMs); }
 function getOverallUptime(windowMs) { return store.getOverallUptime(streams.map((s) => s.id), windowMs); }
+/** Uptime as the audience experienced it — probe-only failures excluded. */
+function getAudioUptime(windowMs) { return store.getAudioUptime(streams.map((s) => s.id), windowMs); }
 function getCoverageStart() { return store.getCoverageStart(streams.map((s) => s.id)); }
 function getDailyBuckets(days) { return store.getDailyBuckets(days); }
 function getCauseBreakdown(windowMs) { return store.getCauseBreakdown(windowMs); }
@@ -1394,32 +1405,52 @@ function fmtStationDate(iso, opts = {}) {
 function buildWeeklyRoundup(rollup) {
   const { counts: c, audience: a, alerts, narrative } = rollup;
   const rangeLabel = `${fmtStationDate(rollup.since)} – ${fmtStationDate(rollup.until, { year: 'numeric' })}`;
-  const clean = c.outages === 0 && c.deadAir === 0;
+  // "Clean" means no listener heard a break — not that our probe never tripped.
+  const clean = c.listenerAffecting === 0;
 
   // The subject has to identify itself as a periodic report at a glance, and
   // never be mistaken for an outage alert — hence the leading label and the
   // deliberately un-alarming emoji, even in a bad week.
+  // Audience cost leads the subject line too — it is the part read on a phone
+  // without opening anything.
   const subjectFacts = [
-    rollup.uptime != null ? `${rollup.uptime}% uptime` : null,
-    clean ? 'no outages' : `${c.outages + c.deadAir} outage${c.outages + c.deadAir === 1 ? '' : 's'}`,
-    a.listenerMinutesLost > 0 ? `${a.listenerHoursLost} listener-hours lost` : null,
+    a.listenerMinutesLost > 0
+      ? `${a.listenerHoursLost} listener-hours lost`
+      : 'no listening lost',
+    clean ? 'no outages' : `${c.listenerAffecting} outage${c.listenerAffecting === 1 ? '' : 's'}`,
+    rollup.uptime != null ? `${rollup.uptime}% audio uptime` : null,
   ].filter(Boolean);
   const subject = `📊 KPFT Weekly Stream Report — ${rangeLabel}: ${subjectFacts.join(', ')}`;
 
   const uptimeColor = rollup.uptime == null ? '#94a3b8'
     : rollup.uptime >= 99.5 ? '#4ade80' : rollup.uptime >= 98 ? '#fbbf24' : '#f87171';
 
+  // Ordered by what the station actually needs to know, not by what is easiest
+  // to measure: the audience cost first, the technical detail underneath it.
   const cells = [
-    statCell('Uptime', rollup.uptime != null ? `${rollup.uptime}%` : '—', uptimeColor, 'all streams combined'),
-    statCell('Confirmed Outages', String(c.outages), c.outages ? '#f87171' : '#4ade80',
-      c.deadAir ? `plus ${c.deadAir} dead-air event(s)` : 'failures that passed confirmation'),
+    // A volume, not a duration — so it is NOT shown with an "h" suffix beside a
+    // downtime tile that is one. The share is what makes it legible: "214" means
+    // nothing on its own, "2.2% of all listening" is actionable.
+    statCell('Listening Lost',
+      a.listenerMinutesLost ? `${a.listenerHoursLost} listener-hours` : 'None',
+      a.listenerMinutesLost ? '#f87171' : '#4ade80',
+      a.listenerMinutesLost
+        ? `${a.lostSharePercent != null ? `${a.lostSharePercent}% of all listening · ` : ''}${a.listenerHoursDelivered.toLocaleString()} listener-hours delivered`
+        : 'no listener lost audio'),
     statCell('Listeners Cut Off', a.listenersCutOff ? `≈ ${a.listenersCutOff.toLocaleString()}` : '0',
       a.listenersCutOff ? '#fbbf24' : '#4ade80', 'summed per incident — repeats count twice'),
-    statCell('Listening Lost', a.listenerMinutesLost ? `${a.listenerHoursLost}h` : '0',
-      a.listenerMinutesLost ? '#f87171' : '#4ade80',
-      a.listenerMinutesLost ? `${a.listenerMinutesLost.toLocaleString()} listener-minutes` : 'no audience interrupted'),
-    statCell('Total Downtime', diagnose.fmtDuration(rollup.downtimeMs || 0), rollup.downtimeMs ? '#fbbf24' : '#4ade80',
-      `${c.unconfirmed} unconfirmed blip(s) also recorded`),
+    statCell('Outages Listeners Felt', String(c.listenerAffecting),
+      c.listenerAffecting ? '#f87171' : '#4ade80',
+      c.deadAir
+        ? `including ${c.deadAir} dead-air event(s)`
+        : `${c.noListenerImpact} further anomal${c.noListenerImpact === 1 ? 'y' : 'ies'} cost nothing`),
+    statCell('Time Off Air', diagnose.fmtDuration(rollup.downtime.wallClockMs || 0),
+      rollup.downtime.wallClockMs ? '#fbbf24' : '#4ade80',
+      rollup.downtime.streamMs > rollup.downtime.wallClockMs
+        ? `at least one stream down · ${diagnose.fmtDuration(rollup.downtime.streamMs)} summed across streams`
+        : 'at least one stream down'),
+    statCell('Audio Uptime', rollup.uptime != null ? `${rollup.uptime}%` : '—', uptimeColor,
+      'time the streams were serving audio'),
     statCell('Alert Emails Sent', String(alerts.messages), '#a78bfa',
       alerts.eventsAlerted > alerts.messages
         ? `covering ${alerts.eventsAlerted} events`
@@ -1502,7 +1533,7 @@ function buildWeeklyRoundup(rollup) {
       <ul style="margin:0; padding-left:18px; font-size:13px; line-height:1.6;">${notable}</ul>
     </div>` : ''}
 
-    <p class="label-col" style="margin:20px 0 0 0; font-size:11px; line-height:1.6; color:#94a3b8 !important;"><span class="label-col" style="color:#94a3b8 !important;">This is a scheduled weekly summary, not an alert — it arrives whether or not anything went wrong. "Listening lost" is the audience at the moment of failure multiplied by how long the failure lasted.</span></p>`;
+    <p class="label-col" style="margin:20px 0 0 0; font-size:11px; line-height:1.6; color:#94a3b8 !important;"><span class="label-col" style="color:#94a3b8 !important;">This is a scheduled weekly summary, not an alert — it arrives whether or not anything went wrong.<br><br>“Time off air” is elapsed time with at least one stream down; concurrent outages are counted once, so it is smaller than the per-stream figures added together. Failures where Icecast kept serving the mount are not counted as downtime at all.<br><br>“Listening lost” is a volume, not a duration: the audience measured just before a failure, held across short outages and projected along this stream’s normal hour-by-hour audience curve for ones lasting over an hour.</span></p>`;
 
   const html = buildEmailHtml({
     title: '📊 KPFT Weekly Stream Report',
@@ -1626,6 +1657,6 @@ function checkWeeklyRoundup() {
 module.exports = {
   start, stop, getStreams, getStatus, getHistory, getIncidents, getConfig, sendTestAlert,
   getPeriodRollup, sendWeeklyRoundup, previewWeeklyRoundup, previewAlertForEvent,
-  getEvents, getSamples, getRollups, getListeners, getSummary, getOverallUptime, getCoverageStart,
+  getEvents, getSamples, getRollups, getListeners, getSummary, getOverallUptime, getAudioUptime, getCoverageStart,
   getDailyBuckets, getCauseBreakdown, getStorageInfo, getSnapshot,
 };
