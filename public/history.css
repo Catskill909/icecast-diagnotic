@@ -43,6 +43,72 @@ a.help-btn { text-decoration: none; }
   text-transform: none;
 }
 
+/* ── Period roundup ────────────────────────────────────────────────────────── */
+/* Sits above the tiles and states the same thing in words. Deliberately quieter
+   than the numbers it introduces — a lead paragraph, not a seventh tile. */
+.overview-summary {
+  display: flex;
+  gap: 14px;
+  align-items: flex-start;
+  background: var(--surface-1);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--status-down);
+  border-radius: var(--radius-md);
+  padding: 16px 18px;
+  margin-bottom: 16px;
+  box-shadow: var(--shadow-sm);
+}
+.overview-summary.clean { border-left-color: var(--status-up); }
+
+.os-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  border-radius: var(--radius-sm);
+  background: var(--status-down-surface);
+  color: var(--status-down);
+  flex-shrink: 0;
+}
+.overview-summary.clean .os-icon {
+  background: var(--status-up-surface);
+  color: var(--status-up);
+}
+.os-icon .material-symbols-outlined { font-size: 20px; }
+
+.os-body { min-width: 0; }
+
+.os-headline {
+  font-size: 0.95rem;
+  line-height: 1.5;
+  color: var(--text-primary);
+  font-weight: 500;
+}
+
+.os-detail {
+  margin-top: 5px;
+  font-size: 0.8rem;
+  line-height: 1.55;
+  color: var(--text-secondary);
+}
+
+.os-scope {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
+  font-size: 0.78rem;
+  line-height: 1.5;
+  color: var(--primary-light);
+}
+
+@media (max-width: 640px) {
+  .overview-summary { padding: 14px; gap: 11px; }
+  .os-icon { width: 28px; height: 28px; }
+  .os-icon .material-symbols-outlined { font-size: 17px; }
+  .os-headline { font-size: 0.88rem; }
+}
+
 /* ── Generic panel ─────────────────────────────────────────────────────────── */
 .panel {
   background: var(--surface-1);

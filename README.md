@@ -115,6 +115,25 @@ An unconfirmed failure is split by the same verdict: `brief_outage` when the mou
 vanish (a real gap, just short) and `probe_error` when Icecast stayed healthy throughout. The
 retired name for both was `blip`; stored events still carry it and every counter recognises it.
 
+### What an email says about the audience
+
+Every alert states the human cost, in the subject as well as the body — that is the part read
+on a phone at 3am, and it is what separates "get up now" from "look at it in the morning".
+
+| Alert | Audience figure | Why that one |
+|---|---|---|
+| Down / dead air | **listeners at risk** — the audience at the moment it started | the loss is still accruing and cannot be totalled yet |
+| Recovery | **listeners cut off** and **listening lost** | the outage length is finally known, so reach × duration is real |
+
+`listening lost` is listener-minutes: the audience multiplied by how long they were cut off.
+Neither number conveys it alone — 5 listeners for an hour and 300 listeners for a minute are
+not the same event, and the raw outage duration calls them equal. Each figure is labelled
+`measured` (from listener counts recorded just before the failure) or `modelled` (from that
+hour's typical audience, when no live count survived), and the email says which.
+
+A probe anomaly is charged **zero** loss even though it recorded a failure: Icecast was
+reachable and the mount kept serving, so nobody lost a second of audio.
+
 ### Diagnosis
 
 The classifier correlates three independent signals: connection-layer timings, the Icecast `/status-json.xsl` mount inventory, and cross-stream correlation within the same cycle.
@@ -163,6 +182,17 @@ SILENCE_FAILURE_THRESHOLD=3      # Consecutive silent probes before confirming D
 # not cost a single listener any audio. Off by default — that behaviour is what
 # buried the real alerts in noise. Everything is recorded either way.
 ALERT_ON_HARMLESS_OUTAGE=false
+
+# ── Weekly Roundup ───────────────────────────────────
+# A scheduled 7-day summary — uptime, outages, listeners cut off, listening
+# lost — sent whether or not anything went wrong. It is the only message that
+# arrives during a quiet week, which is what tells a quiet week apart from a
+# monitor that has silently stopped running.
+WEEKLY_ROUNDUP=true             # false disables it entirely
+WEEKLY_ROUNDUP_DAY=1            # 0=Sun … 6=Sat (default: 1, Monday)
+WEEKLY_ROUNDUP_HOUR=9           # 24h clock, in STATION_TZ (default: 9)
+WEEKLY_ROUNDUP_EMAILS=          # falls back to ALERT_EMAILS when empty
+STATION_TZ=America/Chicago      # timezone for all email timestamps + schedule
 
 # ── Retention ────────────────────────────────────────
 # Events are ALWAYS permanent. This controls only the per-check telemetry
@@ -243,6 +273,46 @@ block. It should be zero: the store backfills automatically at startup. A non-ze
 those events were already past the raw-sample retention window when first seen, so their
 listener cost is gone for good — the totals are a floor.
 
+### `GET /api/rollup?days=7`
+Period totals in numbers **and in one English sentence** — outage counts, downtime, alert
+delivery, listeners cut off, listening lost, per-stream breakdown, top causes and the two
+most notable incidents.
+
+The sentence in `narrative` is composed server-side and used **verbatim** by both the
+history page's Overview line and the weekly roundup email, so the dashboard and the inbox
+cannot describe the same week differently.
+
+Two counts are deliberately kept apart and must not be conflated:
+
+| Field | Counts |
+|---|---|
+| `alerts.messages` | emails actually sent — one consolidated message can cover three streams |
+| `alerts.eventsAlerted` | events that were covered by an alert |
+| `audience.listenersCutOff` | audience summed **per incident** — someone cut off three times counts three times |
+| `audience.listenerMinutesLost` | reach × duration; the figure to lead with |
+
+`coverageMs` is how much of the window the monitor actually watched. When it falls below
+95% of the window, both the page and the email say so rather than quoting a partial period
+as a whole one.
+
+### `GET /api/weekly-roundup`
+| Query | Effect |
+|---|---|
+| `?preview=1` | renders the email in the browser **without sending it** — works with no SMTP configured |
+| `?to=user@example.com` | sends it to one address instead of the configured recipients |
+| `?days=7` | window to report on (default 7) |
+
+The scheduled job sends this on its own; this route exists so the message can be checked
+without waiting a week. Last-sent state is persisted in `events.json` under `meta`, keyed by
+station-local date — so a container that redeploys six times on a Monday still sends one
+roundup, and a monitor that was down at 9am sends it when it returns later that day rather
+than skipping the week.
+
+### `GET /api/events/:id/email-preview`
+Re-renders the alert email for a stored event, from that event's own diagnosis and frozen
+audience figures. An email template that can only be seen during an outage is one nobody
+ever checks.
+
 ### `GET /api/diagnostics`
 Live Icecast server state — the full mount inventory including other Pacifica stations, which is what the classifier correlates against.
 
@@ -271,6 +341,16 @@ curl http://localhost:3000/api/status
 
 # 4. Trigger a test email locally
 curl "http://localhost:3000/api/test-alert?to=your-email@example.com"
+
+# 5. Look at the weekly roundup without sending it (no SMTP needed)
+open "http://localhost:3000/api/weekly-roundup?preview=1&days=7"
+
+# 6. Send this week's roundup to yourself right now
+curl "http://localhost:3000/api/weekly-roundup?to=your-email@example.com"
+
+# 7. See the alert email a past incident produced
+curl -s 'http://localhost:3000/api/events?severity=outage&limit=1' | jq -r '.events[0].id' \
+  | xargs -I{} open "http://localhost:3000/api/events/{}/email-preview"
 ```
 
 ---

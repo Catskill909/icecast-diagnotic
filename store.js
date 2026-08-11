@@ -46,6 +46,7 @@ let samples = {};            // { [streamId]: [ sample ] }  raw, rolling window
 let rollups = {};            // { [streamId]: [ hourlyRollup ] }  permanent
 let streamStatusCache = {};  // last known status, for warm restarts
 let appliedSeeds = [];       // seedIds already backfilled — guards against re-import
+let meta = {};               // small persisted scalars (e.g. last weekly roundup sent)
 let dirtyEvents = false;
 let dirtySamples = false;
 
@@ -96,6 +97,7 @@ function load(streamIds) {
     events = Array.isArray(ev.events) ? ev.events : [];
     streamStatusCache = ev.streamStatus || {};
     appliedSeeds = Array.isArray(ev.appliedSeeds) ? ev.appliedSeeds : [];
+    meta = ev.meta && typeof ev.meta === 'object' ? ev.meta : {};
     console.log(`[Store] Loaded ${events.length} permanent event(s)`);
   }
 
@@ -942,9 +944,254 @@ function getCauseBreakdown(windowMs) {
   return Object.values(counts).sort((a, b) => b.count - a.count);
 }
 
+/**
+ * An event the monitor deliberately chose not to email, because Icecast proved
+ * the mount kept serving. Distinct from an event with no delivery record: this
+ * one has a known, intended outcome.
+ */
+function isSuppressed(e) {
+  return typeof e.email?.reason === 'string' && e.email.reason.startsWith('suppressed');
+}
+
+/** Compact duration for narrative text — "41m", "2h 5m", "3d 4h". */
+function fmtMs(ms) {
+  if (!ms || ms < 1000) return '0s';
+  const s = Math.round(ms / 1000);
+  const d = Math.floor(s / 86400);
+  const h = Math.floor((s % 86400) / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  if (d) return `${d}d ${h}h`;
+  if (h) return `${h}h ${m}m`;
+  if (m) return `${m}m`;
+  return `${s}s`;
+}
+
+const PERIOD_LABELS = { 1: 'Last 24 hours', 7: 'Last 7 days', 30: 'Last 30 days', 90: 'Last 90 days', 365: 'Last year' };
+
+/**
+ * The rollup stated as English, built HERE so the history page and the weekly
+ * email say the same thing in the same words. Composing this sentence twice —
+ * once in browser JS, once in the mailer — is how the dashboard and the inbox
+ * end up quietly disagreeing about the same week.
+ */
+function narrate(r) {
+  const c = r.counts;
+  const a = r.audience;
+  const period = PERIOD_LABELS[Math.round(r.days)] || `Last ${Math.round(r.days)} days`;
+
+  const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;
+
+  let headline;
+  if (c.outages === 0 && c.deadAir === 0) {
+    headline = c.unconfirmed
+      ? `No confirmed outages — every stream held. ${c.unconfirmed} brief ${c.unconfirmed === 1 ? 'anomaly was' : 'anomalies were'} recorded, none of which cost a listener.`
+      : 'No outages at all — every stream held for the whole period.';
+  } else {
+    const faults = [];
+    if (c.outages) faults.push(plural(c.outages, 'confirmed outage'));
+    if (c.deadAir) faults.push(`${c.deadAir} dead-air event${c.deadAir === 1 ? '' : 's'}`);
+    const across = c.streamsAffected > 1 ? ` across ${c.streamsAffected} streams` : '';
+    const cost = a.listenerMinutesLost > 0
+      ? `, cutting off ≈${a.listenersCutOff.toLocaleString()} listener${a.listenersCutOff === 1 ? '' : 's'} and costing ${a.listenerHoursLost} listener-hours of listening`
+      : '';
+    headline = `${faults.join(' and ')}${across}${cost}.`;
+  }
+
+  const bits = [];
+  if (r.uptime != null) bits.push(`${r.uptime}% uptime`);
+  if (r.downtimeMs) bits.push(`${fmtMs(r.downtimeMs)} total downtime`);
+  if (c.unconfirmed && (c.outages || c.deadAir)) {
+    bits.push(`${c.unconfirmed} unconfirmed blip${c.unconfirmed === 1 ? '' : 's'}`);
+  }
+  // Messages, not events — one consolidated email can cover three streams.
+  bits.push(r.alerts.messages
+    ? `${plural(r.alerts.messages, 'alert email')} sent${
+      r.alerts.eventsAlerted > r.alerts.messages ? ` (covering ${r.alerts.eventsAlerted} events)` : ''}`
+    : 'no alert emails sent');
+  if (r.alerts.failed) bits.push(`${plural(r.alerts.failed, 'alert')} FAILED to send`);
+  if (r.alerts.suppressed) bits.push(`${r.alerts.suppressed} suppressed as harmless`);
+  if (c.ongoing) bits.push(`${plural(c.ongoing, 'incident')} still open`);
+  if (a.eventsMissingAudience) bits.push(`${a.eventsMissingAudience} event(s) not yet measured — the loss figure is a floor`);
+  // A period the monitor only watched part of must not be quoted as a whole one.
+  if (r.coverageMs < r.windowMs * 0.95) {
+    bits.push(`monitoring covered only ${fmtMs(r.coverageMs)} of this period`);
+  }
+
+  return { period, headline, detail: `${bits.join(' · ')}.` };
+}
+
+/**
+ * Everything needed to state "what happened over this period" in one sentence.
+ *
+ * ONE function, deliberately, because three places have to agree: the Overview
+ * line on the history page, the weekly roundup email, and anything added later.
+ * Two implementations of "how many outages last week" is two answers, and the
+ * one in the inbox is the one nobody can check against the dashboard.
+ *
+ * Two counting subtleties are surfaced rather than smoothed over:
+ *
+ *  · `alerts.messages` counts EMAILS, `alerts.eventsAlerted` counts events. One
+ *    server-wide failure consolidates three streams into a single message, so
+ *    these legitimately differ and calling either "alerts sent" alone is wrong.
+ *
+ *  · `listenersCutOff` sums each incident's audience. Someone cut off by three
+ *    separate outages is counted three times — it is a count of interruptions
+ *    suffered, not of distinct people, and the label must say so wherever it is
+ *    shown. `listenerMinutesLost` is the figure that combines reach with
+ *    duration, and is the one to lead with.
+ */
+function getPeriodRollup(streamIds, windowMs) {
+  const until = Date.now();
+  const since = until - windowMs;
+  const ids = new Set(streamIds);
+
+  const inWindow = events.filter((e) => {
+    const t = new Date(e.timestamp).getTime();
+    return isFinite(t) && t > since && ids.has(e.streamId);
+  });
+
+  const failures = inWindow.filter((e) => e.type !== 'up');
+  const outages = failures.filter((e) => e.severity === 'outage');
+  const deadAir = failures.filter((e) => e.severity === 'dead_air');
+  const unconfirmed = failures.filter((e) => isUnconfirmedSeverity(e.severity));
+
+  // An event that emailed is notifiable whatever its severity: the retired
+  // server-blip rule did email unconfirmed events, and excluding them yields a
+  // denominator smaller than its own numerator.
+  const notifiable = inWindow.filter(
+    (e) => !isUnconfirmedSeverity(e.severity) || e.email?.sent === true,
+  );
+  const alerted = inWindow.filter((e) => e.email?.sent === true);
+
+  // Distinct messages, not distinct events — see the note above. messageId is
+  // absent on reconstructed history, so the subject+timestamp pair stands in.
+  const messages = new Set(
+    alerted.map((e) => e.email.messageId || `${e.email.subject}|${e.email.sentAt || e.timestamp}`),
+  );
+
+  const downtimeMs = failures.reduce((a, e) => a + (e.durationMs || 0), 0);
+  const ongoing = failures.filter((e) => !e.resolvedAt).length;
+
+  const audience = getAudienceSummary(streamIds, windowMs);
+
+  let listenersCutOff = 0;
+  let worstIncident = null;
+  let longest = null;
+  for (const e of failures) {
+    const a = e.audience;
+    if (a?.listenerMinutesLost) {
+      listenersCutOff += a.listenersBefore || 0;
+      if (!worstIncident || a.listenerMinutesLost > worstIncident.audience.listenerMinutesLost) {
+        worstIncident = e;
+      }
+    }
+    if (e.durationMs && (!longest || e.durationMs > longest.durationMs)) longest = e;
+  }
+
+  const perStream = streamIds.map((id) => {
+    const mine = failures.filter((e) => e.streamId === id);
+    const aud = audience.perStream[id] || {};
+    return {
+      id,
+      uptime: getUptime(id, windowMs),
+      outages: mine.filter((e) => e.severity === 'outage').length,
+      deadAir: mine.filter((e) => e.severity === 'dead_air').length,
+      unconfirmed: mine.filter((e) => isUnconfirmedSeverity(e.severity)).length,
+      downtimeMs: mine.reduce((a, e) => a + (e.durationMs || 0), 0),
+      listenerMinutesLost: aud.listenerMinutesLost || 0,
+      listenersCutOff: mine.reduce(
+        (a, e) => a + (e.audience?.listenerMinutesLost ? e.audience.listenersBefore || 0 : 0), 0,
+      ),
+      avgListeners: aud.avgListeners ?? null,
+      peakListeners: aud.peakListeners ?? null,
+    };
+  });
+
+  const brief = (e) => (e && {
+    id: e.id,
+    timestamp: e.timestamp,
+    streamId: e.streamId,
+    streamName: e.streamName,
+    severity: e.severity,
+    durationMs: e.durationMs || null,
+    durationLabel: e.durationLabel || null,
+    causeLabel: e.diagnosis?.causeLabel || null,
+    listenersBefore: e.audience?.listenersBefore ?? null,
+    listenerMinutesLost: e.audience?.listenerMinutesLost ?? null,
+    emailed: e.email?.sent === true,
+  }) || null;
+
+  const coverageStart = getCoverageStart(streamIds);
+
+  const rollup = {
+    windowMs,
+    days: Math.round((windowMs / 86400000) * 100) / 100,
+    since: new Date(since).toISOString(),
+    until: new Date(until).toISOString(),
+    uptime: getOverallUptime(streamIds, windowMs),
+    coverageStart,
+    // A monitor that has only been running two days cannot speak for a week.
+    coverageMs: coverageStart ? Math.min(windowMs, until - new Date(coverageStart).getTime()) : 0,
+    counts: {
+      total: inWindow.length,
+      failures: failures.length,
+      outages: outages.length,
+      deadAir: deadAir.length,
+      unconfirmed: unconfirmed.length,
+      recoveries: inWindow.filter((e) => e.severity === 'recovery').length,
+      ongoing,
+      streamsAffected: new Set(failures.map((e) => e.streamId)).size,
+    },
+    downtimeMs,
+    alerts: {
+      messages: messages.size,
+      eventsAlerted: alerted.length,
+      notifiable: notifiable.length,
+      failed: inWindow.filter((e) => e.email?.attempted && e.email?.sent === false).length,
+      suppressed: inWindow.filter(isSuppressed).length,
+      // Backfilled events predate delivery tracking — an alert may well have
+      // gone out. Counting them as failures would report an outage in the
+      // alerting that never happened. An event we deliberately chose not to
+      // email is NOT untracked: we know exactly what happened to it.
+      untracked: notifiable.filter(
+        (e) => e.email?.sent == null && !e.email?.attempted && !isSuppressed(e),
+      ).length,
+    },
+    audience: {
+      listenersCutOff,
+      listenerMinutesLost: audience.listenerMinutesLost,
+      listenerHoursLost: audience.listenerHoursLost,
+      listenerMinutesLostMeasured: audience.listenerMinutesLostMeasured,
+      eventsMissingAudience: audience.eventsMissingAudience,
+    },
+    perStream,
+    causes: getCauseBreakdown(windowMs),
+    longestOutage: brief(longest),
+    worstIncident: brief(worstIncident),
+    generatedAt: new Date().toISOString(),
+  };
+
+  rollup.narrative = narrate(rollup);
+  return rollup;
+}
+
 // ── Status cache ────────────────────────────────────────────────────────────
 function getStatusCache() { return streamStatusCache; }
 function setStatusCache(s) { streamStatusCache = s; dirtyEvents = true; }
+
+// ── Small persisted scalars ─────────────────────────────────────────────────
+/**
+ * Rides along in events.json rather than getting a file of its own. It holds
+ * things the monitor must not forget across a redeploy — chiefly when the last
+ * weekly roundup went out, without which every container restart would either
+ * re-send it or skip it.
+ */
+function getMeta(key) { return key === undefined ? { ...meta } : meta[key]; }
+function setMeta(key, value) {
+  meta[key] = value;
+  dirtyEvents = true;
+  return value;
+}
 
 // ── Persistence ─────────────────────────────────────────────────────────────
 function saveEvents(force = false) {
@@ -956,6 +1203,7 @@ function saveEvents(force = false) {
         version: 2,
         savedAt: new Date().toISOString(),
         appliedSeeds,
+        meta,
         events,
         streamStatus: streamStatusCache,
       }, null, 1),
@@ -1008,7 +1256,8 @@ module.exports = {
   addEvent, updateEvent, getEvents, findOpenOutage,
   addSample, getSamples, getAllSamples, getRollups,
   getUptime, getOverallUptime, getCoverageStart, getSummary, getDailyBuckets, getCauseBreakdown,
-  getStatusCache, setStatusCache, getStorageInfo,
+  getPeriodRollup,
+  getStatusCache, setStatusCache, getStorageInfo, getMeta, setMeta,
   isUnconfirmedSeverity,
   getAudienceContext, getHourOfDayProfile, buildAudienceImpact, deriveListenerImpact,
   getListenerSeries, getAudienceSummary, chooseBucketMs,

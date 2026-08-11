@@ -121,6 +121,15 @@ app.get('/api/uptime', (req, res) => {
   });
 });
 
+// ── Period Rollup ───────────────────────────────────────────────────────────
+// "What happened over this window", in numbers and in one English sentence.
+// The history page's Overview line and the weekly roundup email both read this,
+// so the dashboard and the inbox can never quote different figures.
+app.get('/api/rollup', (req, res) => {
+  const days = Math.min(Math.max(parseFloat(req.query.days) || 7, 0.04), 3650);
+  res.json(monitor.getPeriodRollup(days * 24 * 60 * 60 * 1000));
+});
+
 // ── Per-stream Telemetry (raw samples + hourly rollups) ─────────────────────
 app.get('/api/samples/:streamId', (req, res) => {
   const hours = Math.min(Math.max(parseInt(req.query.hours, 10) || 24, 1), 24 * 365);
@@ -182,6 +191,47 @@ app.get('/api/test-alert', async (req, res) => {
   try {
     await monitor.sendTestAlert(to);
     res.json({ success: true, message: `Test alert sent to ${to}` });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── Alert Email Preview ─────────────────────────────────────────────────────
+// Renders the alert email for a stored event. Lets the exact message be checked
+// against real data instead of only ever being seen when something breaks.
+app.get('/api/events/:id/email-preview', (req, res) => {
+  const message = monitor.previewAlertForEvent(req.params.id);
+  if (!message) return res.status(404).json({ error: 'Event not found' });
+  res.setHeader('X-Alert-Subject', encodeURIComponent(message.subject));
+  res.type('html').send(message.html);
+});
+
+// ── Weekly Roundup (manual send / preview) ──────────────────────────────────
+// The scheduled job sends this on its own; this route is for proving it works
+// without waiting a week, and for re-sending one on request.
+app.get('/api/weekly-roundup', async (req, res) => {
+  const to = (req.query.to || '').trim();
+  const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+  if (to && !emailRegex.test(to)) {
+    return res.status(400).json({ error: 'Invalid email address in ?to=' });
+  }
+  const days = Math.min(Math.max(parseFloat(req.query.days) || 7, 0.04), 365);
+  const windowMs = days * 24 * 60 * 60 * 1000;
+
+  // ?preview=1 renders the message in the browser instead of mailing it, so it
+  // can be checked before a real one goes out — and without needing SMTP at all.
+  if (req.query.preview === '1' || req.query.preview === 'true') {
+    const { subject, html } = monitor.previewWeeklyRoundup(windowMs);
+    res.setHeader('X-Roundup-Subject', encodeURIComponent(subject));
+    return res.type('html').send(html);
+  }
+
+  try {
+    const result = await monitor.sendWeeklyRoundup({ to: to || undefined, windowMs });
+    // A configuration problem is not a server fault — report it as a refusal
+    // with its reason rather than a 500 with no explanation.
+    if (!result.sent) return res.status(result.attempted ? 502 : 400).json(result);
+    res.json(result);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

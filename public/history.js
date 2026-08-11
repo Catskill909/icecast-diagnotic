@@ -18,6 +18,7 @@
   let lastUptime = null;   // last /api/uptime payload, re-read on filter changes
   let lastRangeIsAllTime = false;
   let lastListeners = null;
+  let lastRollup = null;   // server-computed period totals + narrative
 
   // 'blip' is the retired severity — stored history still carries it, so it has
   // to keep rendering. New events split it in two, because a vanished mount and
@@ -74,15 +75,17 @@
 
     // Same defensive contract as /api/uptime: audience is supplementary, and a
     // monitor mid-deploy may serve this page from a process without the route.
-    lastListeners = await fetch(`/api/listeners?days=${days}`)
-      .then((r) => (r.ok ? r.json() : null))
-      .catch(() => null);
+    [lastListeners, lastRollup] = await Promise.all([
+      fetch(`/api/listeners?days=${days}`).then((r) => (r.ok ? r.json() : null)).catch(() => null),
+      fetch(`/api/rollup?days=${days}`).then((r) => (r.ok ? r.json() : null)).catch(() => null),
+    ]);
 
     populateStreamFilter();
     populateCauseFilter();
     renderStorage();
     syncRangePills();
     renderOverviewRange();
+    renderRoundup();
     renderAudience();
     renderHeatmap();
     renderCauses();
@@ -123,6 +126,62 @@
     }
 
     el.textContent = startText ? `${label} · ${startText} – ${fmt(end)}` : label;
+  }
+
+  // ── Period roundup ──────────────────────────────────────────────────────
+  /**
+   * The period in one sentence, above the tiles that break it down.
+   *
+   * The sentence itself is composed SERVER-side and used verbatim — the weekly
+   * roundup email sends the same string, so the dashboard and the inbox cannot
+   * describe the same week differently. This function only decides how it looks.
+   *
+   * It describes the selected PERIOD, not the filtered timeline: the audience
+   * cost comes from each event's frozen impact block and is a whole-period
+   * figure, so quietly restating it as a subtotal whenever a filter is on would
+   * make it a different number with the same label. When a stream is selected,
+   * that stream's own figures are added on their own line instead.
+   */
+  function renderRoundup() {
+    const wrap = $('#overview-summary');
+    if (!wrap) return;
+
+    const r = lastRollup;
+    if (!r || !r.narrative) { wrap.style.display = 'none'; return; }
+
+    const clean = r.counts.outages === 0 && r.counts.deadAir === 0;
+    wrap.style.display = 'flex';
+    wrap.classList.toggle('clean', clean);
+    $('#os-icon').innerHTML =
+      `<span class="material-symbols-outlined">${clean ? 'check_circle' : 'summarize'}</span>`;
+    $('#os-headline').textContent = `${r.narrative.period} — ${r.narrative.headline}`;
+    $('#os-detail').textContent = r.narrative.detail;
+    renderRoundupScope();
+  }
+
+  /** Per-stream figures, shown only while a stream filter is narrowing the view. */
+  function renderRoundupScope() {
+    const el = $('#os-scope');
+    if (!el || !lastRollup) return;
+
+    const streamId = $('#f-stream').value;
+    const s = streamId && lastRollup.perStream.find((x) => x.id === streamId);
+    if (!s) { el.style.display = 'none'; return; }
+
+    const faults = s.outages + s.deadAir;
+    const bits = [
+      `${faults} confirmed outage${faults === 1 ? '' : 's'}`,
+      s.uptime != null ? `${s.uptime}% uptime` : null,
+      s.downtimeMs ? `${fmtDuration(s.downtimeMs)} down` : null,
+      s.listenersCutOff ? `≈${s.listenersCutOff.toLocaleString()} listeners cut off` : null,
+      s.listenerMinutesLost
+        ? `${Math.round((s.listenerMinutesLost / 60) * 10) / 10} listener-hours lost`
+        : null,
+      s.avgListeners != null ? `avg ${s.avgListeners} listening` : null,
+    ].filter(Boolean);
+
+    el.style.display = '';
+    el.textContent = `${s.name} alone: ${bits.join(' · ')}`;
   }
 
   // ── Uptime tile ─────────────────────────────────────────────────────────
@@ -347,6 +406,7 @@
     });
 
     renderUptimeStat();
+    renderRoundupScope();
     renderSummary();
     renderActiveFilterNote();
 
@@ -650,10 +710,16 @@
       (e) => !UNCONFIRMED.has(e.severity) || e.email?.sent === true,
     );
     const emailed = filtered.filter((e) => e.email?.sent === true).length;
+    // An outage the monitor deliberately declined to email — Icecast proved the
+    // mount kept serving — has a known outcome and must not be counted below as
+    // one whose delivery is unknown.
+    const isSuppressed = (e) => typeof e.email?.reason === 'string'
+      && e.email.reason.startsWith('suppressed');
+    const suppressed = filtered.filter(isSuppressed).length;
     // Backfilled events predate delivery tracking: an alert may well have gone
     // out, we simply have no record of it. Lumping them in with genuine
     // non-delivery reads as an alerting failure that never happened.
-    const untracked = notifiable.filter((e) => e.email?.sent == null).length;
+    const untracked = notifiable.filter((e) => e.email?.sent == null && !isSuppressed(e)).length;
     // Delivery we know happened but never logged live — flagged so the tile
     // never passes reconstruction off as a measured send.
     const reconstructedSends = filtered.filter(
@@ -685,6 +751,16 @@
     $('#stat-deadair').textContent = deadAir;
     $('#stat-emailed').textContent = emailed;
     let emailedDetail = `of ${notifiable.length} notifiable`;
+    // This tile counts EVENTS that were alerted; the roundup sentence above it
+    // counts MESSAGES, and one consolidated email covers several streams. Two
+    // different numbers labelled "emailed" a few centimetres apart read as a
+    // bug, so when they differ this says which is which. Only while the view is
+    // unfiltered — the rollup describes the whole period, not a subset.
+    const messages = lastRollup?.alerts?.messages;
+    if (messages != null && messages !== emailed && filtered.length === allEvents.length) {
+      emailedDetail += ` · ${messages} email${messages === 1 ? '' : 's'} sent`;
+    }
+    if (suppressed) emailedDetail += ` · ${suppressed} suppressed as harmless`;
     if (untracked) emailedDetail += ` · ${untracked} predate tracking`;
     else if (reconstructedSends === emailed && emailed) emailedDetail += ' · delivery reconstructed';
     $('#stat-emailed-detail').textContent = emailedDetail;

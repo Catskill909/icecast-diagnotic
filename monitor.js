@@ -71,6 +71,24 @@ const SAVE_INTERVAL = parseInt(process.env.SAVE_INTERVAL_MS, 10) || 60 * 1000;
 const ALERT_ON_HARMLESS_OUTAGE =
   String(process.env.ALERT_ON_HARMLESS_OUTAGE ?? '').trim().toLowerCase() === 'true';
 
+// ── Weekly roundup schedule ─────────────────────────────────────────────────
+// Every timestamp a human reads is in the station's own timezone, so the report
+// covers the week they lived through rather than a UTC one.
+const STATION_TZ = process.env.STATION_TZ || 'America/Chicago';
+const WEEKLY_ROUNDUP_ENABLED =
+  String(process.env.WEEKLY_ROUNDUP ?? 'true').trim().toLowerCase() !== 'false';
+// 0 = Sunday. Monday morning by default: the week it reports on is complete.
+const WEEKLY_ROUNDUP_DAY = clampInt(process.env.WEEKLY_ROUNDUP_DAY, 1, 0, 6);
+const WEEKLY_ROUNDUP_HOUR = clampInt(process.env.WEEKLY_ROUNDUP_HOUR, 9, 0, 23);
+const WEEKLY_ROUNDUP_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
+const ROUNDUP_TICK_MS = 5 * 60 * 1000;
+const ROUNDUP_MAX_ATTEMPTS = 4;
+
+function clampInt(raw, fallback, min, max) {
+  const n = parseInt(String(raw ?? '').trim(), 10);
+  return Number.isFinite(n) ? Math.min(max, Math.max(min, n)) : fallback;
+}
+
 // Severity for a failure that has not yet reached FAILURE_THRESHOLD. Split in
 // two because one label cannot honestly cover both: a vanished mount really did
 // cut listeners off mid-song, while a probe reset against a healthy mount cost
@@ -106,6 +124,8 @@ let snapshot = null;      // latest Icecast snapshot
 let prevSnapshot = null;
 let intervalHandle = null;
 let flushHandle = null;
+let roundupHandle = null;
+let roundupAttempts = { day: null, count: 0 };  // send retries for today's slot
 let transporter = null;
 
 // ── Initialize ──────────────────────────────────────────────────────────────
@@ -260,7 +280,12 @@ function scheduleAggressiveProbe(stream) {
 
       const emailResult = await sendAlert({
         kind: 'dead_air',
-        entries: [{ stream, result, diagnosis: dg }],
+        entries: [{
+          stream, result, diagnosis: dg,
+          // Dead air keeps listeners connected to silence, so the whole current
+          // audience is exposed to it — the same reach figure applies.
+          audience: store.getAudienceContext(stream.id, timestamp),
+        }],
         scope: 'stream',
       });
       store.updateEvent(event.id, { email: emailResult });
@@ -275,16 +300,19 @@ async function resolveDeadAir(stream, result, timestamp) {
     stream, result, snapshot, prevSnapshot, cycle: [{ stream, result }],
   });
 
+  let audience = null;
+  let deadAirMs = null;
   if (episode?.eventId) {
-    const durationMs = new Date(timestamp) - new Date(episode.startedAt);
+    deadAirMs = new Date(timestamp) - new Date(episode.startedAt);
     // Dead air keeps listeners connected — they are hearing silence rather than
     // being disconnected — so the audience is still fully exposed to it and the
     // same listener-minutes unit applies.
+    audience = store.buildAudienceImpact(stream.id, episode.startedAt, deadAirMs, 'confirmed');
     store.updateEvent(episode.eventId, {
       resolvedAt: timestamp,
-      durationMs,
-      durationLabel: diagnose.fmtDuration(durationMs),
-      audience: store.buildAudienceImpact(stream.id, episode.startedAt, durationMs, 'confirmed'),
+      durationMs: deadAirMs,
+      durationLabel: diagnose.fmtDuration(deadAirMs),
+      audience,
     });
   }
 
@@ -298,7 +326,9 @@ async function resolveDeadAir(stream, result, timestamp) {
     scope: 'stream',
     message: `${stream.name} audio output restored — dead air cleared`,
     relatedTo: episode?.eventId || null,
-    durationMs: episode ? new Date(timestamp) - new Date(episode.startedAt) : null,
+    durationMs: deadAirMs,
+    durationLabel: deadAirMs != null ? diagnose.fmtDuration(deadAirMs) : null,
+    audience,
     diagnosis: dg,
     email: { attempted: false, sent: null },
   });
@@ -307,7 +337,7 @@ async function resolveDeadAir(stream, result, timestamp) {
 
   const emailResult = await sendAlert({
     kind: 'recovery',
-    entries: [{ stream, result, diagnosis: dg }],
+    entries: [{ stream, result, diagnosis: dg, audience, durationMs: deadAirMs }],
     scope: 'stream',
     recoveredFrom: 'dead air',
   });
@@ -501,6 +531,12 @@ async function runChecks() {
             stream, result, diagnosis: dg,
             eventId: episode.eventId,
             reason: 'confirmed outage',
+            // What the audience WAS when this started. The loss cannot be
+            // totalled until recovery, but the reach can — and "≈66 listeners
+            // were connected" is the line that tells a reader in the first
+            // second whether to get out of bed.
+            audience: store.getAudienceContext(stream.id, episode.startedAt),
+            startedAt: episode.startedAt,
           });
         } else if (confirmed && !alertable && !episode.suppressionLogged) {
           episode.suppressionLogged = true;
@@ -568,7 +604,7 @@ async function runChecks() {
         }
 
         if (episode.alerted) {
-          recoveries.push({ stream, result, diagnosis: dg, episode, durationMs, sourceOutage });
+          recoveries.push({ stream, result, diagnosis: dg, episode, durationMs, sourceOutage, audience });
         } else {
           console.log(`[Monitor] ✓ ${stream.name} self-cleared after ${diagnose.fmtDuration(durationMs)} (no alert was sent)`);
         }
@@ -599,7 +635,7 @@ async function dispatchNotifications(newlyNotable, recoveries, ctx) {
 
     const consolidated = newlyNotable.length > 1;
     const entries = newlyNotable.map((n) => ({
-      stream: n.stream, result: n.result, diagnosis: n.diagnosis,
+      stream: n.stream, result: n.result, diagnosis: n.diagnosis, audience: n.audience,
     }));
 
     const emailResult = await sendAlert({
@@ -622,6 +658,7 @@ async function dispatchNotifications(newlyNotable, recoveries, ctx) {
   if (recoveries.length > 0) {
     const entries = recoveries.map((r) => ({
       stream: r.stream, result: r.result, diagnosis: r.diagnosis,
+      audience: r.audience, durationMs: r.durationMs,
     }));
 
     const emailResult = await sendAlert({
@@ -830,11 +867,69 @@ function renderDiagnosis(dg) {
     </div>`;
 }
 
+/** Plain-language qualifier for how an audience figure was arrived at. */
+function audienceBasisNote(confidence) {
+  return {
+    measured: 'measured from listener counts recorded just before the failure',
+    modelled: 'estimated from this hour’s typical audience — no live count was retained',
+  }[confidence] || null;
+}
+
+function fmtListenerHours(minutes) {
+  const hours = minutes / 60;
+  if (hours >= 1) return `${Math.round(hours * 10) / 10} listener-hour${Math.round(hours * 10) / 10 === 1 ? '' : 's'}`;
+  return `${minutes} listener-minute${minutes === 1 ? '' : 's'}`;
+}
+
+/**
+ * The audience cost of one failure, as email table rows.
+ *
+ * Accepts both shapes the monitor produces: the context taken when a failure is
+ * first confirmed (reach only — the loss is still accruing) and the frozen
+ * impact block written at recovery (reach × duration). An outage report without
+ * this is a technical notice; with it, it is a statement of what it cost.
+ */
+function renderAudienceRows(audience, durationMs) {
+  if (!audience) return '';
+  const rows = [];
+  const note = audienceBasisNote(audience.confidence);
+
+  if (audience.listenersBefore != null) {
+    const resolved = audience.listenerMinutesLost != null;
+    const label = resolved ? 'Listeners Cut Off' : 'Listeners At Risk';
+    const peak = audience.peakBefore != null && audience.peakBefore > audience.listenersBefore
+      ? ` <span class="label-col" style="color:#94a3b8 !important;">(peak ${audience.peakBefore})</span>`
+      : '';
+    rows.push(row(label,
+      `<span class="val-col" style="color:#fbbf24 !important; font-weight:700;">≈ ${audience.listenersBefore}</span>${peak}` +
+      (note ? `<br><span class="label-col" style="color:#94a3b8 !important; font-size:11px;">${esc(note)}</span>` : ''),
+    ));
+  }
+
+  if (audience.listenerMinutesLost != null) {
+    const lost = audience.listenerMinutesLost;
+    rows.push(row('Listening Lost',
+      lost > 0
+        ? `<span class="val-col" style="color:#f87171 !important; font-weight:700;">${fmtListenerHours(lost)}</span>` +
+          `<br><span class="label-col" style="color:#94a3b8 !important; font-size:11px;">${lost.toLocaleString()} listener-minutes — audience × outage length</span>`
+        : `<span class="val-col" style="color:#4ade80 !important; font-weight:600;">None</span>` +
+          `<br><span class="label-col" style="color:#94a3b8 !important; font-size:11px;">${esc(audience.basis || 'no listener impact')}</span>`,
+    ));
+  } else if (audience.listenersBefore == null) {
+    rows.push(row('Listener Impact',
+      '<span class="label-col" style="color:#94a3b8 !important;">Not measurable — no audience data retained for this period</span>'));
+  }
+
+  return rows.join('');
+}
+
 function renderStreamBlock(entry, index, total) {
   const { stream, result, diagnosis } = entry;
   const heading = total > 1
     ? `<h3 class="section-hdr" style="margin:${index === 0 ? '0' : '24px'} 0 12px 0; font-size:14px; color:#f8fafc !important; letter-spacing:0.02em;"><span style="color:#f8fafc !important;">${index + 1}. ${esc(stream.name)}</span></h3>`
     : `<h3 class="section-hdr" style="margin:0 0 12px 0; font-size:13px; color:#cbd5e1 !important; text-transform:uppercase; letter-spacing:0.05em;"><span class="section-hdr" style="color:#cbd5e1 !important;">Affected Stream</span></h3>`;
+
+  const audienceRows = renderAudienceRows(entry.audience, entry.durationMs);
 
   const rows = [
     row('Stream Name', `<span class="val-col" style="color:#f8fafc !important; font-weight:600;">${esc(stream.name)}</span>`),
@@ -848,7 +943,11 @@ function renderStreamBlock(entry, index, total) {
     result.errorCode
       ? row('Error Code', `<code style="background:#28283d; color:#fbbf24 !important; padding:3px 6px; border-radius:4px; font-size:12px;">${esc(result.errorCode)}</code>`)
       : '',
-    row('Response Time', `<span class="val-col" style="color:#f8fafc !important;">${result.responseTime}ms</span>`, true),
+    entry.durationMs != null
+      ? row('Outage Length', `<span class="val-col" style="color:#f8fafc !important; font-weight:600;">${esc(diagnose.fmtDuration(entry.durationMs))}</span>`)
+      : '',
+    row('Response Time', `<span class="val-col" style="color:#f8fafc !important;">${result.responseTime}ms</span>`, !audienceRows),
+    audienceRows,
   ].filter(Boolean).join('');
 
   return `${heading}
@@ -893,7 +992,7 @@ function renderAllStreamsTable() {
  * failure was logged and forgotten, leaving no way to tell a delivered alert
  * from a silently dropped one.
  */
-async function sendAlert({ kind, entries, scope, consolidated = false, recoveredFrom = null }) {
+async function sendAlert(opts) {
   const attemptedAt = new Date().toISOString();
 
   if (!transporter) {
@@ -909,67 +1008,7 @@ async function sendAlert({ kind, entries, scope, consolidated = false, recovered
   const ccRecipients = (process.env.ALERT_CC || '').split(',').map((e) => e.trim()).filter(Boolean);
   const fromAddr = process.env.SMTP_FROM || process.env.SMTP_USER;
 
-  const isDeadAir = kind === 'dead_air';
-  const isRecovery = kind === 'recovery';
-  const isDown = !isRecovery;
-
-  const emoji = isDeadAir ? '🔇' : isDown ? '🔴' : '🟢';
-  const statusText = isDeadAir ? 'DEAD AIR (SILENCE)' : isDown ? 'DOWN' : 'RECOVERED';
-
-  const names = entries.map((e) => e.stream.name);
-  const nameList = names.length > 2
-    ? `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}`
-    : names.join(' and ');
-
-  const primaryCause = entries[0]?.diagnosis?.causeLabel || '';
-
-  // Subject leads with the root cause, so the inbox itself is diagnostic.
-  let subject;
-  if (consolidated) {
-    subject = `${emoji} KPFT Alert: ${entries.length} streams ${statusText}${primaryCause ? ` — ${primaryCause}` : ''}`;
-  } else {
-    subject = `${emoji} KPFT Alert: ${nameList} — ${statusText}${primaryCause && isDown ? ` (${primaryCause})` : ''}`;
-  }
-
-  const headerBg = isDeadAir
-    ? 'linear-gradient(135deg, #d97706, #b45309)'
-    : isDown
-    ? 'linear-gradient(135deg, #dc2626, #991b1b)'
-    : 'linear-gradient(135deg, #16a34a, #15803d)';
-
-  const scopeNote = scope === 'server'
-    ? ' This is a SERVER-LEVEL event affecting every monitored stream.'
-    : scope === 'station'
-    ? ' This affects all KPFT mounts.'
-    : '';
-
-  const subtitle = isDeadAir
-    ? `${nameList} is connected but silent — dead air confirmed across ${SILENCE_FAILURE_THRESHOLD} consecutive probes.`
-    : isDown
-    ? `${nameList} ${entries.length > 1 ? 'have' : 'has'} gone offline.${scopeNote}`
-    : `${nameList} ${entries.length > 1 ? 'are' : 'is'} back online${recoveredFrom ? ` (recovered from ${recoveredFrom})` : ''}.`;
-
-  const detectedAt = new Date().toLocaleString('en-US', {
-    timeZone: 'America/Chicago', weekday: 'short', month: 'short', day: 'numeric',
-    hour: 'numeric', minute: '2-digit', second: '2-digit', hour12: true,
-  });
-
-  const blocks = entries.map((e, i) => renderStreamBlock(e, i, entries.length)).join('');
-
-  const contentHtml = `
-    ${blocks}
-    <table role="presentation" width="100%" border="0" cellspacing="0" cellpadding="0" style="margin-top:16px;">
-      ${row('Detected At', `<span class="val-col" style="color:#f8fafc !important;">${detectedAt} CT</span>`, true)}
-    </table>
-    <hr style="border: none; border-top: 1px solid #28283d; margin: 20px 0;">
-    ${renderAllStreamsTable()}`;
-
-  const html = buildEmailHtml({
-    title: `${emoji} Stream ${statusText}`,
-    subtitle,
-    headerBg,
-    contentHtml,
-  });
+  const { subject, html } = composeAlert(opts);
 
   try {
     const mailOptions = { from: fromAddr, to: recipients.join(', '), subject, html };
@@ -1006,6 +1045,124 @@ async function sendAlert({ kind, entries, scope, consolidated = false, recovered
   }
 }
 
+/**
+ * Builds the alert's subject and body. Split out from sending so the exact
+ * message can be rendered for inspection without an outage to trigger it —
+ * an email template that can only be seen in production is one nobody checks.
+ */
+function composeAlert({ kind, entries, scope, consolidated = false, recoveredFrom = null }) {
+  const isDeadAir = kind === 'dead_air';
+  const isRecovery = kind === 'recovery';
+  const isDown = !isRecovery;
+
+  const emoji = isDeadAir ? '🔇' : isDown ? '🔴' : '🟢';
+  const statusText = isDeadAir ? 'DEAD AIR (SILENCE)' : isDown ? 'DOWN' : 'RECOVERED';
+
+  const names = entries.map((e) => e.stream.name);
+  const nameList = names.length > 2
+    ? `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}`
+    : names.join(' and ');
+
+  const primaryCause = entries[0]?.diagnosis?.causeLabel || '';
+
+  // Audience cost across every stream in this message. On a down alert it is
+  // reach ("how many people this is happening to"); on a recovery it is the
+  // settled loss. Either way it belongs in the subject — that is the part read
+  // on a phone screen at 3am, and "≈66 listeners" is what makes it actionable.
+  const reach = entries.reduce((a, e) => a + (e.audience?.listenersBefore || 0), 0);
+  const lostMinutes = entries.reduce((a, e) => a + (e.audience?.listenerMinutesLost || 0), 0);
+  const subjectCost = isRecovery
+    ? (lostMinutes > 0 ? ` · ${fmtListenerHours(lostMinutes)} lost` : '')
+    : (reach > 0 ? ` · ≈${reach} listener${reach === 1 ? '' : 's'} affected` : '');
+
+  // Subject leads with the root cause, so the inbox itself is diagnostic.
+  let subject;
+  if (consolidated) {
+    subject = `${emoji} KPFT Alert: ${entries.length} streams ${statusText}${primaryCause ? ` — ${primaryCause}` : ''}${subjectCost}`;
+  } else {
+    subject = `${emoji} KPFT Alert: ${nameList} — ${statusText}${primaryCause && isDown ? ` (${primaryCause})` : ''}${subjectCost}`;
+  }
+
+  const headerBg = isDeadAir
+    ? 'linear-gradient(135deg, #d97706, #b45309)'
+    : isDown
+    ? 'linear-gradient(135deg, #dc2626, #991b1b)'
+    : 'linear-gradient(135deg, #16a34a, #15803d)';
+
+  const scopeNote = scope === 'server'
+    ? ' This is a SERVER-LEVEL event affecting every monitored stream.'
+    : scope === 'station'
+    ? ' This affects all KPFT mounts.'
+    : '';
+
+  const audienceNote = isRecovery
+    ? (lostMinutes > 0 ? ` ${fmtListenerHours(lostMinutes)} of listening were lost.` : '')
+    : (reach > 0 ? ` Around ${reach} listener${reach === 1 ? ' was' : 's were'} connected when it started.` : '');
+
+  const subtitle = isDeadAir
+    ? `${nameList} is connected but silent — dead air confirmed across ${SILENCE_FAILURE_THRESHOLD} consecutive probes.${audienceNote}`
+    : isDown
+    ? `${nameList} ${entries.length > 1 ? 'have' : 'has'} gone offline.${scopeNote}${audienceNote}`
+    : `${nameList} ${entries.length > 1 ? 'are' : 'is'} back online${recoveredFrom ? ` (recovered from ${recoveredFrom})` : ''}.${audienceNote}`;
+
+  const detectedAt = new Date().toLocaleString('en-US', {
+    timeZone: STATION_TZ, weekday: 'short', month: 'short', day: 'numeric',
+    hour: 'numeric', minute: '2-digit', second: '2-digit', hour12: true,
+  });
+
+  const blocks = entries.map((e, i) => renderStreamBlock(e, i, entries.length)).join('');
+
+  const contentHtml = `
+    ${blocks}
+    <table role="presentation" width="100%" border="0" cellspacing="0" cellpadding="0" style="margin-top:16px;">
+      ${row('Detected At', `<span class="val-col" style="color:#f8fafc !important;">${detectedAt} CT</span>`, true)}
+    </table>
+    <hr style="border: none; border-top: 1px solid #28283d; margin: 20px 0;">
+    ${renderAllStreamsTable()}`;
+
+  const html = buildEmailHtml({
+    title: `${emoji} Stream ${statusText}`,
+    subtitle,
+    headerBg,
+    contentHtml,
+  });
+
+  return { subject, html };
+}
+
+/**
+ * Re-renders the alert email for a stored event, exactly as the mailer would
+ * have built it from that event's own diagnosis and audience figures.
+ */
+function previewAlertForEvent(eventId) {
+  const event = store.getEvents({ limit: Number.MAX_SAFE_INTEGER })
+    .events.find((e) => e.id === eventId);
+  if (!event) return null;
+
+  const stream = streams.find((s) => s.id === event.streamId)
+    || { id: event.streamId, name: event.streamName, url: '' };
+
+  // The probe result is not kept on the event, so the parts of it the email
+  // shows are recovered from the diagnosis instead of invented.
+  const dg = event.diagnosis || {};
+  const result = {
+    httpStatus: dg.httpStatus ?? null,
+    error: dg.errorMessage || null,
+    errorCode: dg.errorCode || null,
+    responseTime: dg.timings?.ttfb ?? dg.responseTime ?? 0,
+  };
+
+  return composeAlert({
+    kind: event.severity === 'dead_air' ? 'dead_air' : event.type === 'up' ? 'recovery' : 'down',
+    entries: [{
+      stream, result, diagnosis: event.diagnosis,
+      audience: event.audience, durationMs: event.durationMs,
+    }],
+    scope: event.diagnosis?.scope || event.scope,
+    recoveredFrom: event.severity === 'recovery' && event.relatedTo ? 'the outage above' : null,
+  });
+}
+
 // ── Public API ──────────────────────────────────────────────────────────────
 function start() {
   init();
@@ -1017,6 +1174,16 @@ function start() {
 
   flushHandle = setInterval(() => store.save(), SAVE_INTERVAL);
 
+  if (WEEKLY_ROUNDUP_ENABLED) {
+    // Polled rather than scheduled with one long timeout: a five-minute tick
+    // survives clock changes, DST shifts and container restarts, none of which a
+    // days-long setTimeout does.
+    roundupHandle = setInterval(checkWeeklyRoundup, ROUNDUP_TICK_MS);
+    checkWeeklyRoundup();
+    const DAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+    console.log(`[Monitor] Weekly roundup: ${DAYS[WEEKLY_ROUNDUP_DAY]}s at ${String(WEEKLY_ROUNDUP_HOUR).padStart(2, '0')}:00 ${STATION_TZ}`);
+  }
+
   const shutdown = () => { store.save(true); process.exit(0); };
   process.on('SIGTERM', shutdown);
   process.on('SIGINT', shutdown);
@@ -1027,6 +1194,7 @@ function start() {
 function stop() {
   if (intervalHandle) clearInterval(intervalHandle);
   if (flushHandle) clearInterval(flushHandle);
+  if (roundupHandle) clearInterval(roundupHandle);
   Object.values(silenceState).forEach((st) => { if (st.timer) clearTimeout(st.timer); });
   store.save(true);
   console.log('[Monitor] Stopped');
@@ -1094,6 +1262,19 @@ function getListeners(windowMs, bucketMs) {
     generatedAt: new Date().toISOString(),
   };
 }
+/**
+ * Period totals for the Overview line and the weekly roundup, with stream names
+ * attached — the store keys everything by id and has no idea what they are called.
+ */
+function getPeriodRollup(windowMs) {
+  const rollup = store.getPeriodRollup(streams.map((s) => s.id), windowMs);
+  const nameOf = (id) => streams.find((s) => s.id === id)?.name || id;
+  return {
+    ...rollup,
+    perStream: rollup.perStream.map((s) => ({ ...s, name: nameOf(s.id) })),
+  };
+}
+
 function getSummary(windowMs) { return store.getSummary(streams.map((s) => s.id), windowMs); }
 function getOverallUptime(windowMs) { return store.getOverallUptime(streams.map((s) => s.id), windowMs); }
 function getCoverageStart() { return store.getCoverageStart(streams.map((s) => s.id)); }
@@ -1112,6 +1293,13 @@ function getConfig() {
     alertRecipients: (process.env.ALERT_EMAILS || '').split(',').map((e) => e.trim()).filter(Boolean).length,
     alertPolicy: ALERT_ON_HARMLESS_OUTAGE ? 'all confirmed outages' : 'confirmed outages with listener impact',
     alertOnHarmlessOutage: ALERT_ON_HARMLESS_OUTAGE,
+    weeklyRoundup: {
+      enabled: WEEKLY_ROUNDUP_ENABLED,
+      day: WEEKLY_ROUNDUP_DAY,
+      hour: WEEKLY_ROUNDUP_HOUR,
+      timezone: STATION_TZ,
+      lastSent: store.getMeta('lastWeeklyRoundup')?.sentAt || null,
+    },
     sampleRetentionDays: store.SAMPLE_RETENTION_DAYS,
     eventRetention: 'permanent',
     streams: streams.map((s) => ({ id: s.id, name: s.name })),
@@ -1163,8 +1351,281 @@ async function sendTestAlert(toEmail) {
   console.log(`[Monitor] Test alert sent to ${toEmail}`);
 }
 
+// ── Weekly Roundup ──────────────────────────────────────────────────────────
+/**
+ * A scheduled digest, deliberately unlike an alert.
+ *
+ * Alerts answer "is something broken right now" and are read in a hurry. This
+ * answers "how did the week go" — it is the only message that arrives when
+ * nothing is wrong, which is exactly what makes a quiet week visible instead of
+ * indistinguishable from a monitor that has silently died. Its subject says so
+ * in the first three words, so it never reads as an emergency.
+ *
+ * Every figure comes from store.getPeriodRollup — the same call behind the
+ * history page's Overview line, so the two cannot disagree.
+ */
+function statCell(label, value, color, note) {
+  return `
+    <td width="50%" style="padding:6px;" valign="top">
+      <table role="presentation" width="100%" border="0" cellspacing="0" cellpadding="0" class="callout-box" style="background-color:#1e1b38; border:1px solid #3d3575; border-radius:8px;">
+        <tr><td style="padding:12px 14px;">
+          <p class="label-col" style="margin:0 0 4px 0; font-size:11px; text-transform:uppercase; letter-spacing:0.05em; color:#94a3b8 !important;"><span class="label-col" style="color:#94a3b8 !important;">${esc(label)}</span></p>
+          <p style="margin:0; font-size:22px; font-weight:700; color:${color} !important; line-height:1.2;"><span style="color:${color} !important;">${value}</span></p>
+          ${note ? `<p class="label-col" style="margin:4px 0 0 0; font-size:11px; color:#94a3b8 !important;"><span class="label-col" style="color:#94a3b8 !important;">${esc(note)}</span></p>` : ''}
+        </td></tr>
+      </table>
+    </td>`;
+}
+
+function statGrid(cells) {
+  const rows = [];
+  for (let i = 0; i < cells.length; i += 2) {
+    rows.push(`<tr>${cells[i]}${cells[i + 1] || '<td width="50%"></td>'}</tr>`);
+  }
+  return `<table role="presentation" width="100%" border="0" cellspacing="0" cellpadding="0" style="margin:0 -6px 4px -6px;">${rows.join('')}</table>`;
+}
+
+function fmtStationDate(iso, opts = {}) {
+  return new Date(iso).toLocaleDateString('en-US', {
+    timeZone: STATION_TZ, month: 'short', day: 'numeric', ...opts,
+  });
+}
+
+function buildWeeklyRoundup(rollup) {
+  const { counts: c, audience: a, alerts, narrative } = rollup;
+  const rangeLabel = `${fmtStationDate(rollup.since)} – ${fmtStationDate(rollup.until, { year: 'numeric' })}`;
+  const clean = c.outages === 0 && c.deadAir === 0;
+
+  // The subject has to identify itself as a periodic report at a glance, and
+  // never be mistaken for an outage alert — hence the leading label and the
+  // deliberately un-alarming emoji, even in a bad week.
+  const subjectFacts = [
+    rollup.uptime != null ? `${rollup.uptime}% uptime` : null,
+    clean ? 'no outages' : `${c.outages + c.deadAir} outage${c.outages + c.deadAir === 1 ? '' : 's'}`,
+    a.listenerMinutesLost > 0 ? `${a.listenerHoursLost} listener-hours lost` : null,
+  ].filter(Boolean);
+  const subject = `📊 KPFT Weekly Stream Report — ${rangeLabel}: ${subjectFacts.join(', ')}`;
+
+  const uptimeColor = rollup.uptime == null ? '#94a3b8'
+    : rollup.uptime >= 99.5 ? '#4ade80' : rollup.uptime >= 98 ? '#fbbf24' : '#f87171';
+
+  const cells = [
+    statCell('Uptime', rollup.uptime != null ? `${rollup.uptime}%` : '—', uptimeColor, 'all streams combined'),
+    statCell('Confirmed Outages', String(c.outages), c.outages ? '#f87171' : '#4ade80',
+      c.deadAir ? `plus ${c.deadAir} dead-air event(s)` : 'failures that passed confirmation'),
+    statCell('Listeners Cut Off', a.listenersCutOff ? `≈ ${a.listenersCutOff.toLocaleString()}` : '0',
+      a.listenersCutOff ? '#fbbf24' : '#4ade80', 'summed per incident — repeats count twice'),
+    statCell('Listening Lost', a.listenerMinutesLost ? `${a.listenerHoursLost}h` : '0',
+      a.listenerMinutesLost ? '#f87171' : '#4ade80',
+      a.listenerMinutesLost ? `${a.listenerMinutesLost.toLocaleString()} listener-minutes` : 'no audience interrupted'),
+    statCell('Total Downtime', diagnose.fmtDuration(rollup.downtimeMs || 0), rollup.downtimeMs ? '#fbbf24' : '#4ade80',
+      `${c.unconfirmed} unconfirmed blip(s) also recorded`),
+    statCell('Alert Emails Sent', String(alerts.messages), '#a78bfa',
+      alerts.eventsAlerted > alerts.messages
+        ? `covering ${alerts.eventsAlerted} events`
+        : alerts.suppressed ? `${alerts.suppressed} suppressed as harmless` : 'one per notifiable event'),
+  ];
+
+  const streamRows = rollup.perStream.map((s) => {
+    const up = s.uptime == null ? '—' : `${s.uptime}%`;
+    const upColor = s.uptime == null ? '#94a3b8' : s.uptime >= 99.5 ? '#4ade80' : s.uptime >= 98 ? '#fbbf24' : '#f87171';
+    return `
+      <tr class="row-border" style="border-bottom:1px solid #28283d;">
+        <td class="val-col" style="padding:8px; color:#f8fafc !important; font-size:13px;"><span class="val-col" style="color:#f8fafc !important;">${esc(s.name)}</span></td>
+        <td style="padding:8px; font-size:13px; font-weight:600; color:${upColor} !important;"><span style="color:${upColor} !important;">${up}</span></td>
+        <td class="label-col" style="padding:8px; color:#94a3b8 !important; font-size:13px;"><span class="label-col" style="color:#94a3b8 !important;">${s.outages + s.deadAir}${
+          // Without this a stream reads "0 outages" next to a non-zero downtime,
+          // which looks like an arithmetic fault rather than the truth: brief
+          // failures are counted in downtime but are not confirmed outages.
+          s.unconfirmed ? ` <span style="color:#64748b !important; font-size:11px;">+${s.unconfirmed} brief</span>` : ''
+        }</span></td>
+        <td class="label-col" style="padding:8px; color:#94a3b8 !important; font-size:13px;"><span class="label-col" style="color:#94a3b8 !important;">${s.downtimeMs ? esc(diagnose.fmtDuration(s.downtimeMs)) : '—'}</span></td>
+        <td class="label-col" style="padding:8px; color:#94a3b8 !important; font-size:13px;"><span class="label-col" style="color:#94a3b8 !important;">${s.avgListeners ?? '—'}</span></td>
+        <td class="label-col" style="padding:8px; color:${s.listenerMinutesLost ? '#f87171' : '#94a3b8'} !important; font-size:13px;"><span style="color:${s.listenerMinutesLost ? '#f87171' : '#94a3b8'} !important;">${s.listenerMinutesLost ? `${Math.round((s.listenerMinutesLost / 60) * 10) / 10}h` : '—'}</span></td>
+      </tr>`;
+  }).join('');
+
+  const causeRows = (rollup.causes || []).slice(0, 5).map((c2) => `
+      <tr class="row-border" style="border-bottom:1px solid #28283d;">
+        <td class="val-col" style="padding:7px 8px; color:#f8fafc !important; font-size:13px;"><span class="val-col" style="color:#f8fafc !important;">${esc(c2.label || c2.cause)}</span></td>
+        <td class="label-col" style="padding:7px 8px; color:#94a3b8 !important; font-size:13px; text-align:right;"><span class="label-col" style="color:#94a3b8 !important;">${c2.count}</span></td>
+      </tr>`).join('');
+
+  const notable = [rollup.longestOutage, rollup.worstIncident]
+    .filter((e, i, arr) => e && arr.findIndex((x) => x && x.id === e.id) === i)
+    .map((e) => {
+      const when = new Date(e.timestamp).toLocaleString('en-US', {
+        timeZone: STATION_TZ, weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit',
+      });
+      const cost = e.listenerMinutesLost
+        ? ` — ≈${e.listenersBefore} listener(s) cut off, ${fmtListenerHours(e.listenerMinutesLost)} lost`
+        : '';
+      return `<li style="color:#e2e8f0 !important; margin-bottom:6px;"><span style="color:#e2e8f0 !important;"><strong>${esc(e.streamName)}</strong> · ${when} CT · ${esc(e.durationLabel || '—')}${e.causeLabel ? ` · ${esc(e.causeLabel)}` : ''}${cost}${e.emailed ? '' : ' <em>(no alert was emailed)</em>'}</span></li>`;
+    }).join('');
+
+  // A monitor that only started midway through the period cannot speak for all
+  // of it. Say so rather than presenting a partial week as a full one.
+  const partial = rollup.coverageMs < rollup.windowMs * 0.95;
+  const coverageNote = partial
+    ? `<p style="margin:12px 0 0 0; font-size:12px; color:#fbbf24 !important;"><span style="color:#fbbf24 !important;">⚠️ Monitoring covered only ${diagnose.fmtDuration(rollup.coverageMs)} of this ${Math.round(rollup.days)}-day period — figures describe the monitored part.</span></p>`
+    : '';
+
+  const contentHtml = `
+    <div class="callout-box" style="background-color:#1e1b38; border:1px solid #3d3575; border-radius:8px; padding:16px; margin-bottom:18px;">
+      <p class="callout-text" style="margin:0; font-size:15px; line-height:1.6; color:#f8fafc !important;"><span style="color:#f8fafc !important;">${clean ? '✅' : '📉'} ${esc(narrative.headline)}</span></p>
+      <p class="label-col" style="margin:8px 0 0 0; font-size:12px; line-height:1.6; color:#94a3b8 !important;"><span class="label-col" style="color:#94a3b8 !important;">${esc(narrative.detail)}</span></p>
+      ${coverageNote}
+    </div>
+
+    ${statGrid(cells)}
+
+    <h3 class="section-hdr" style="margin:22px 0 10px 0; font-size:13px; color:#cbd5e1 !important; text-transform:uppercase; letter-spacing:0.05em;"><span class="section-hdr" style="color:#cbd5e1 !important;">Per Stream</span></h3>
+    <table role="presentation" width="100%" border="0" cellspacing="0" cellpadding="0">
+      <tr>
+        <td class="label-col" style="padding:6px 8px; border-bottom:1px solid #28283d; font-size:11px; text-transform:uppercase; letter-spacing:0.05em;"><span class="label-col" style="color:#94a3b8 !important;">Stream</span></td>
+        <td class="label-col" style="padding:6px 8px; border-bottom:1px solid #28283d; font-size:11px; text-transform:uppercase; letter-spacing:0.05em;"><span class="label-col" style="color:#94a3b8 !important;">Uptime</span></td>
+        <td class="label-col" style="padding:6px 8px; border-bottom:1px solid #28283d; font-size:11px; text-transform:uppercase; letter-spacing:0.05em;"><span class="label-col" style="color:#94a3b8 !important;">Outages</span></td>
+        <td class="label-col" style="padding:6px 8px; border-bottom:1px solid #28283d; font-size:11px; text-transform:uppercase; letter-spacing:0.05em;"><span class="label-col" style="color:#94a3b8 !important;">Downtime</span></td>
+        <td class="label-col" style="padding:6px 8px; border-bottom:1px solid #28283d; font-size:11px; text-transform:uppercase; letter-spacing:0.05em;"><span class="label-col" style="color:#94a3b8 !important;">Avg listeners</span></td>
+        <td class="label-col" style="padding:6px 8px; border-bottom:1px solid #28283d; font-size:11px; text-transform:uppercase; letter-spacing:0.05em;"><span class="label-col" style="color:#94a3b8 !important;">Listening lost</span></td>
+      </tr>
+      ${streamRows}
+    </table>
+
+    ${causeRows ? `
+    <h3 class="section-hdr" style="margin:22px 0 10px 0; font-size:13px; color:#cbd5e1 !important; text-transform:uppercase; letter-spacing:0.05em;"><span class="section-hdr" style="color:#cbd5e1 !important;">Why It Failed</span></h3>
+    <table role="presentation" width="100%" border="0" cellspacing="0" cellpadding="0">${causeRows}</table>` : ''}
+
+    ${notable ? `
+    <div class="diag-box" style="background-color:#101a2e; border:1px solid #1e3a5f; border-radius:8px; padding:16px; margin-top:22px;">
+      <p class="diag-title" style="font-weight:700; color:#7dd3fc !important; margin:0 0 10px 0; font-size:14px;"><span class="diag-title" style="color:#7dd3fc !important;">🔎 Worth a look</span></p>
+      <ul style="margin:0; padding-left:18px; font-size:13px; line-height:1.6;">${notable}</ul>
+    </div>` : ''}
+
+    <p class="label-col" style="margin:20px 0 0 0; font-size:11px; line-height:1.6; color:#94a3b8 !important;"><span class="label-col" style="color:#94a3b8 !important;">This is a scheduled weekly summary, not an alert — it arrives whether or not anything went wrong. "Listening lost" is the audience at the moment of failure multiplied by how long the failure lasted.</span></p>`;
+
+  const html = buildEmailHtml({
+    title: '📊 KPFT Weekly Stream Report',
+    subtitle: `${rangeLabel} · ${rollup.perStream.length} streams monitored · scheduled summary`,
+    headerBg: clean
+      ? 'linear-gradient(135deg, #0f766e, #115e59)'
+      : 'linear-gradient(135deg, #4f46e5, #3730a3)',
+    contentHtml,
+  });
+
+  return { subject, html };
+}
+
+/** The roundup as it would be sent, without sending it. */
+function previewWeeklyRoundup(windowMs = WEEKLY_ROUNDUP_WINDOW_MS) {
+  return buildWeeklyRoundup(getPeriodRollup(windowMs));
+}
+
+/**
+ * Builds and sends the roundup. Returns the same delivery-outcome shape as
+ * sendAlert, so a failure is reported rather than logged and forgotten.
+ */
+async function sendWeeklyRoundup({ to, windowMs = WEEKLY_ROUNDUP_WINDOW_MS } = {}) {
+  const attemptedAt = new Date().toISOString();
+  if (!transporter) return { attempted: false, sent: false, reason: 'SMTP not configured', attemptedAt };
+
+  const recipients = to
+    ? [to]
+    : (process.env.WEEKLY_ROUNDUP_EMAILS || process.env.ALERT_EMAILS || '')
+      .split(',').map((e) => e.trim()).filter(Boolean);
+  if (!recipients.length) {
+    return { attempted: false, sent: false, reason: 'no recipients configured', attemptedAt };
+  }
+
+  const rollup = getPeriodRollup(windowMs);
+  const { subject, html } = buildWeeklyRoundup(rollup);
+
+  try {
+    const info = await transporter.sendMail({
+      from: process.env.SMTP_FROM || process.env.SMTP_USER,
+      to: recipients.join(', '),
+      subject,
+      html,
+    });
+    console.log(`[Monitor] 📊 Weekly roundup sent to ${recipients.length} recipient(s) — ${subject}`);
+    return {
+      attempted: true, sent: true, attemptedAt, sentAt: new Date().toISOString(),
+      recipients, subject, messageId: info?.messageId || null,
+    };
+  } catch (err) {
+    console.error('[Monitor] 📊 FAILED to send weekly roundup:', err.message);
+    return { attempted: true, sent: false, attemptedAt, recipients, subject, error: err.message };
+  }
+}
+
+/** Calendar fields for an instant in the station's timezone. */
+function zonedParts(date, tz) {
+  const parts = Object.fromEntries(
+    new Intl.DateTimeFormat('en-US', {
+      timeZone: tz, weekday: 'short', year: 'numeric', month: '2-digit',
+      day: '2-digit', hour: '2-digit', hour12: false,
+    }).formatToParts(date).map((p) => [p.type, p.value]),
+  );
+  const WEEKDAYS = { Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6 };
+  return {
+    day: `${parts.year}-${parts.month}-${parts.day}`,
+    hour: parseInt(parts.hour, 10) % 24,   // some locales render midnight as 24
+    weekday: WEEKDAYS[parts.weekday],
+  };
+}
+
+/**
+ * Fires the roundup on its scheduled day, at most once per week.
+ *
+ * The last send is keyed by its station-local DATE and persisted, which is what
+ * makes this safe on a container that redeploys several times a day: a restart
+ * an hour after Monday's send finds Monday already recorded and stays quiet,
+ * and a monitor that was down at the scheduled hour still sends when it comes
+ * back later that same day rather than skipping the week entirely.
+ */
+function checkWeeklyRoundup() {
+  if (!WEEKLY_ROUNDUP_ENABLED || !transporter) return;
+
+  const now = zonedParts(new Date(), STATION_TZ);
+  if (now.weekday !== WEEKLY_ROUNDUP_DAY || now.hour < WEEKLY_ROUNDUP_HOUR) return;
+  if (store.getMeta('lastWeeklyRoundupDay') === now.day) return;
+
+  // A monitor with almost no history for the period would report a week of
+  // silence it never actually watched. Claim the slot anyway so it does not
+  // retry every five minutes for the rest of the day.
+  const rollup = getPeriodRollup(WEEKLY_ROUNDUP_WINDOW_MS);
+  if (rollup.coverageMs < 12 * 60 * 60 * 1000) {
+    console.log('[Monitor] 📊 Weekly roundup skipped — under 12h of monitoring data for the period');
+    store.setMeta('lastWeeklyRoundupDay', now.day);
+    store.saveEvents();
+    return;
+  }
+
+  // Claim the slot BEFORE sending, so a send that takes longer than the tick
+  // interval cannot be started twice.
+  store.setMeta('lastWeeklyRoundupDay', now.day);
+  roundupAttempts = roundupAttempts.day === now.day
+    ? { day: now.day, count: roundupAttempts.count + 1 }
+    : { day: now.day, count: 1 };
+
+  sendWeeklyRoundup()
+    .then((res) => {
+      store.setMeta('lastWeeklyRoundup', res);
+      // A refused SMTP connection should not cost the whole week's report, but
+      // nor should a broken mail server be retried 288 times before midnight.
+      // Release the slot for a few more attempts, then leave it claimed.
+      if (!res.sent && res.attempted && roundupAttempts.count < ROUNDUP_MAX_ATTEMPTS) {
+        store.setMeta('lastWeeklyRoundupDay', null);
+        console.warn(`[Monitor] 📊 Weekly roundup send failed — retrying in ${ROUNDUP_TICK_MS / 60000} min (attempt ${roundupAttempts.count}/${ROUNDUP_MAX_ATTEMPTS})`);
+      }
+      store.saveEvents();
+    })
+    .catch((err) => console.error('[Monitor] 📊 Weekly roundup failed:', err.message));
+}
+
 module.exports = {
   start, stop, getStreams, getStatus, getHistory, getIncidents, getConfig, sendTestAlert,
+  getPeriodRollup, sendWeeklyRoundup, previewWeeklyRoundup, previewAlertForEvent,
   getEvents, getSamples, getRollups, getListeners, getSummary, getOverallUptime, getCoverageStart,
   getDailyBuckets, getCauseBreakdown, getStorageInfo, getSnapshot,
 };
