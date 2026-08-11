@@ -48,11 +48,7 @@ a.help-btn { text-decoration: none; }
    before anything else on the page. Every other number here is diagnostic:
    useful for finding the cause, secondary to the cost. */
 .impact-hero {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 24px;
-  background: linear-gradient(135deg, rgba(239, 68, 68, 0.10), rgba(124, 106, 239, 0.06));
+  background: linear-gradient(135deg, rgba(124, 106, 239, 0.08), rgba(124, 106, 239, 0.02));
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
   padding: 22px 26px;
@@ -60,7 +56,14 @@ a.help-btn { text-decoration: none; }
   box-shadow: var(--shadow-sm);
 }
 .impact-hero.clean {
-  background: linear-gradient(135deg, rgba(34, 197, 94, 0.10), rgba(124, 106, 239, 0.05));
+  background: linear-gradient(135deg, rgba(34, 197, 94, 0.10), rgba(124, 106, 239, 0.04));
+}
+
+.ih-top {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 24px;
 }
 
 .ih-main { flex: 1 1 300px; min-width: 0; }
@@ -74,12 +77,14 @@ a.help-btn { text-decoration: none; }
   margin-bottom: 6px;
 }
 
+/* Delivery is the positive framing and is coloured accordingly. The losses are
+   named underneath in full — this is proportion, not spin. */
 .ih-value {
   font-size: 2.6rem;
   font-weight: 700;
   line-height: 1.05;
   letter-spacing: -0.02em;
-  color: var(--status-down);
+  color: var(--text-primary);
 }
 .impact-hero.clean .ih-value { color: var(--status-up); }
 
@@ -112,10 +117,57 @@ a.help-btn { text-decoration: none; }
   color: var(--text-tertiary);
 }
 
-@media (max-width: 700px) {
-  .impact-hero { padding: 18px; gap: 16px; }
+/* The incidents themselves — what an engineer acts on and a manager remembers. */
+.ih-incidents {
+  margin-top: 18px;
+  padding-top: 14px;
+  border-top: 1px solid var(--border);
+}
+
+.ih-row {
+  display: grid;
+  grid-template-columns: 52px minmax(120px, 1.1fr) 72px minmax(140px, 1.4fr) 92px;
+  gap: 12px;
+  align-items: baseline;
+  padding: 5px 0;
+  font-size: 0.83rem;
+  color: var(--text-secondary);
+}
+
+.ih-when { color: var(--text-tertiary); font-variant-numeric: tabular-nums; }
+.ih-streams { color: var(--text-primary); font-weight: 500; }
+.ih-dur { color: var(--text-primary); font-variant-numeric: tabular-nums; }
+.ih-cause { color: var(--text-secondary); }
+.ih-cost {
+  text-align: right;
+  color: var(--status-down);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.ih-rest {
+  margin-top: 8px;
+  font-size: 0.78rem;
+  color: var(--text-tertiary);
+}
+
+@media (max-width: 760px) {
+  .impact-hero { padding: 18px; }
+  .ih-top { gap: 16px; }
   .ih-value { font-size: 2rem; }
   .ih-side { padding-left: 0; border-left: none; gap: 22px; }
+  /* Stacked: the grid columns would each be a few characters wide. */
+  .ih-row {
+    grid-template-columns: 1fr auto;
+    row-gap: 2px;
+    padding: 8px 0;
+    border-bottom: 1px solid var(--border);
+  }
+  .ih-when { grid-column: 1; }
+  .ih-cost { grid-column: 2; grid-row: 1; }
+  .ih-streams { grid-column: 1 / -1; }
+  .ih-dur, .ih-cause { grid-column: 1 / -1; font-size: 0.78rem; }
 }
 
 /* ── Second-tier stats ─────────────────────────────────────────────────────── */

@@ -1413,12 +1413,17 @@ function buildWeeklyRoundup(rollup) {
   // deliberately un-alarming emoji, even in a bad week.
   // Audience cost leads the subject line too — it is the part read on a phone
   // without opening anything.
+  // Proportion first — an absolute listener-hours figure in a subject line
+  // reads as a catastrophe whatever the scale behind it.
+  const deliveredPct = a.lostSharePercent != null
+    ? Math.round((100 - a.lostSharePercent) * 10) / 10
+    : null;
   const subjectFacts = [
-    a.listenerMinutesLost > 0
-      ? `${a.listenerHoursLost} listener-hours lost`
-      : 'no listening lost',
-    clean ? 'no outages' : `${c.listenerAffecting} outage${c.listenerAffecting === 1 ? '' : 's'}`,
-    rollup.uptime != null ? `${rollup.uptime}% audio uptime` : null,
+    deliveredPct != null ? `${deliveredPct}% of listening delivered` : null,
+    clean
+      ? 'no outages'
+      : `${c.significant} significant outage${c.significant === 1 ? '' : 's'}`,
+    a.listenerMinutesLost > 0 ? `${a.listenerHoursLost} listener-hours lost` : null,
   ].filter(Boolean);
   const subject = `📊 KPFT Weekly Stream Report — ${rangeLabel}: ${subjectFacts.join(', ')}`;
 
@@ -1439,11 +1444,9 @@ function buildWeeklyRoundup(rollup) {
         : 'no listener lost audio'),
     statCell('Listeners Cut Off', a.listenersCutOff ? `≈ ${a.listenersCutOff.toLocaleString()}` : '0',
       a.listenersCutOff ? '#fbbf24' : '#4ade80', 'summed per incident — repeats count twice'),
-    statCell('Outages Listeners Felt', String(c.listenerAffecting),
-      c.listenerAffecting ? '#f87171' : '#4ade80',
-      c.deadAir
-        ? `including ${c.deadAir} dead-air event(s)`
-        : `${c.noListenerImpact} further anomal${c.noListenerImpact === 1 ? 'y' : 'ies'} cost nothing`),
+    statCell('Significant Outages', String(c.significant),
+      c.significant ? '#f87171' : '#4ade80',
+      `over ${diagnose.fmtDuration(rollup.significantThresholdMs)} · ${c.brief} brief interruption(s) besides`),
     statCell('Time Off Air', diagnose.fmtDuration(rollup.downtime.wallClockMs || 0),
       rollup.downtime.wallClockMs ? '#fbbf24' : '#4ade80',
       rollup.downtime.streamMs > rollup.downtime.wallClockMs

@@ -139,22 +139,62 @@
    */
   function renderImpactHero() {
     const hero = $('#impact-hero');
-    if (!hero) return;
+    if (!hero || !lastRollup) { if (hero) hero.style.display = 'none'; return; }
 
-    const a = lastRollup?.audience;
-    const hours = lastListeners?.summary?.listenerHoursLost ?? a?.listenerHoursLost;
-    if (hours == null) { hero.style.display = 'none'; return; }
-    hero.style.display = 'flex';
+    const r = lastRollup;
+    const a = r.audience || {};
+    if (a.lostSharePercent == null && !a.listenerHoursLost) { hero.style.display = 'none'; return; }
+    hero.style.display = 'block';
 
-    const clean = !hours;
+    const lostShare = a.lostSharePercent ?? 0;
+    const delivered = Math.round((100 - lostShare) * 10) / 10;
+    const clean = !a.listenerMinutesLost;
     hero.classList.toggle('clean', clean);
 
-    $('#ih-value').textContent = clean ? 'None' : `${hours} listener-hours`;
+    $('#ih-value').textContent = `${delivered}%`;
+    $('#ih-lost').textContent = a.listenerHoursLost ?? 0;
+    $('#ih-listeners').textContent = a.listenersCutOff ? `≈${a.listenersCutOff.toLocaleString()}` : '0';
+
+    const top = r.topIncidents || [];
+    const concentration = a.listenerMinutesLost && top.length
+      ? Math.round((top.reduce((x, i) => x + i.listenerMinutesLost, 0) / a.listenerMinutesLost) * 100)
+      : 0;
+
     $('#ih-sub').textContent = clean
       ? 'No listener lost audio in this period.'
-      : 'Audio that real people — on radios, phones, apps and smart speakers — did not get to hear.';
-    $('#ih-listeners').textContent = a?.listenersCutOff ? `≈${a.listenersCutOff.toLocaleString()}` : '0';
-    $('#ih-share').textContent = a?.lostSharePercent != null ? `${a.lostSharePercent}%` : '—';
+      : `${lostShare}% lost` + (concentration >= 50
+        ? ` — ${concentration}% of it in ${top.length === 1 ? 'a single incident' : `${top.length} incidents`}`
+        : '');
+
+    // Name the incidents. This is the part an engineer acts on and the part a
+    // manager remembers; a total on its own gives neither of them anything.
+    const host = $('#ih-incidents');
+    if (!host) return;
+    if (!top.length) {
+      host.innerHTML = r.otherIncidents?.count
+        ? `<div class="ih-rest">${r.otherIncidents.count} brief interruption${r.otherIncidents.count === 1 ? '' : 's'}, none longer than ${fmtDuration(r.otherIncidents.longestMs)}.</div>`
+        : '';
+      return;
+    }
+
+    const rows = top.map((i) => {
+      const when = new Date(i.timestamp).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+      return `
+        <div class="ih-row">
+          <span class="ih-when">${esc(when)}</span>
+          <span class="ih-streams">${esc(i.streams.join(' + '))}</span>
+          <span class="ih-dur">${esc(fmtDuration(i.durationMs))}</span>
+          <span class="ih-cause">${esc(i.cause || 'cause not diagnosed')}</span>
+          <span class="ih-cost">${i.listenerHoursLost} l-hrs</span>
+        </div>`;
+    }).join('');
+
+    const rest = r.otherIncidents?.count
+      ? `<div class="ih-rest">${r.otherIncidents.count} further interruption${r.otherIncidents.count === 1 ? '' : 's'}${
+        r.otherIncidents.longestMs ? `, none longer than ${fmtDuration(r.otherIncidents.longestMs)}` : ''}.</div>`
+      : '';
+
+    host.innerHTML = rows + rest;
   }
 
   // ── Period roundup ──────────────────────────────────────────────────────
@@ -756,7 +796,14 @@
     const failures = filtered.filter((e) => e.type !== 'up');
     const felt = failures.filter(costListeners);
     const unfelt = failures.filter((e) => !costListeners(e));
-    const outages = felt.length;
+    // Sustained enough that the audience is gone, vs a gap the player rode out.
+    // Counting a 60-second reconnect alongside an 18-hour dropout produced a
+    // headline of "45 outages" with a median duration of two minutes, which
+    // told the station nothing it could act on.
+    const sigMs = lastRollup?.significantThresholdMs ?? 5 * 60 * 1000;
+    const significant = felt.filter((e) => (e.durationMs || 0) >= sigMs);
+    const briefFelt = felt.filter((e) => (e.durationMs || 0) < sigMs);
+    const outages = significant.length;
     const blips = unfelt.length;
     const deadAir = filtered.filter((e) => e.severity === 'dead_air').length;
 
@@ -801,10 +848,19 @@
     $('#stat-outages').textContent = outages;
     // Say how many streams it touched, not how many rows are in the table —
     // "177 events in view" invited reading the whole log as damage.
-    const streamsHit = new Set(felt.map((e) => e.streamId)).size;
+    const streamsHit = new Set(significant.map((e) => e.streamId)).size;
     $('#stat-outages-detail').textContent = outages
-      ? `cut the audience off · ${streamsHit} stream${streamsHit === 1 ? '' : 's'} affected`
-      : 'nothing reached a listener';
+      ? `over ${fmtDuration(sigMs)} · ${streamsHit} stream${streamsHit === 1 ? '' : 's'} affected`
+      : 'no sustained loss of audience';
+
+    const briefEl = $('#stat-brief');
+    if (briefEl) {
+      briefEl.textContent = briefFelt.length;
+      const longest = briefFelt.reduce((a, e) => Math.max(a, e.durationMs || 0), 0);
+      $('#stat-brief-detail').textContent = briefFelt.length
+        ? `under ${fmtDuration(sigMs)} · longest ${fmtDuration(longest)}`
+        : 'short gaps — players usually rebuffer';
+    }
 
     const blipsDetail = $('#stat-blips-detail');
     if (blipsDetail) {
@@ -1132,10 +1188,12 @@
     const s = Math.round(ms / 1000);
     if (s < 60) return `${s}s`;
     const m = Math.floor(s / 60);
-    if (m < 60) return `${m}m ${s % 60}s`;
+    // Drop a zero remainder rather than printing "5m 0s", which reads as a
+    // stopwatch reading where a plain "5m" reads as a length.
+    if (m < 60) return s % 60 ? `${m}m ${s % 60}s` : `${m}m`;
     const h = Math.floor(m / 60);
-    if (h < 24) return `${h}h ${m % 60}m`;
-    return `${Math.floor(h / 24)}d ${h % 24}h`;
+    if (h < 24) return m % 60 ? `${h}h ${m % 60}m` : `${h}h`;
+    return h % 24 ? `${Math.floor(h / 24)}d ${h % 24}h` : `${Math.floor(h / 24)}d`;
   }
 
   function esc(str) {

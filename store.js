@@ -1219,6 +1219,62 @@ function isSuppressed(e) {
   return typeof e.email?.reason === 'string' && e.email.reason.startsWith('suppressed');
 }
 
+/**
+ * The line between an interruption and a lost listener.
+ *
+ * Below this, a stream client has usually rebuffered and carried on: the
+ * listener heard a gap. Above it, the audience has tuned out or switched away.
+ * Both are recorded identically — the threshold only decides which number a
+ * station manager sees first, because a count that weighs a 60-second reconnect
+ * the same as an 18-hour dropout tells nobody anything. On the first production
+ * week this split 45 undifferentiated "outages" into 9 real ones and 36 blips.
+ */
+const SIGNIFICANT_OUTAGE_MS = 5 * 60 * 1000;
+
+/**
+ * Collapses concurrent failures into the single incident they actually were.
+ *
+ * One Icecast fault takes three mounts down at the same second and the record
+ * stores three events, correctly — but reporting it as three outages misleads.
+ * Failures that begin within a couple of minutes of each other with the same
+ * diagnosed cause are one incident affecting several streams, which is how the
+ * engineer who has to fix it thinks about it too.
+ */
+function groupIncidents(list) {
+  const GROUP_WINDOW_MS = 2 * 60 * 1000;
+  const sorted = [...list].sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
+  const groups = [];
+
+  for (const e of sorted) {
+    const t = new Date(e.timestamp).getTime();
+    if (!isFinite(t)) continue;
+    const cause = e.diagnosis?.causeLabel || null;
+    const g = groups.find((x) => x.cause === cause && Math.abs(x.startMs - t) <= GROUP_WINDOW_MS);
+
+    if (g) {
+      g.streams.push(e.streamName || e.streamId);
+      g.durationMs = Math.max(g.durationMs, e.durationMs || 0);
+      g.listenerMinutesLost += e.audience?.listenerMinutesLost || 0;
+      g.events++;
+    } else {
+      groups.push({
+        startMs: t,
+        timestamp: e.timestamp,
+        cause,
+        severity: e.severity,
+        streams: [e.streamName || e.streamId],
+        durationMs: e.durationMs || 0,
+        listenerMinutesLost: e.audience?.listenerMinutesLost || 0,
+        events: 1,
+      });
+    }
+  }
+
+  return groups
+    .map((g) => ({ ...g, listenerHoursLost: Math.round((g.listenerMinutesLost / 60) * 10) / 10 }))
+    .sort((a, b) => b.listenerMinutesLost - a.listenerMinutesLost);
+}
+
 /** Compact duration for narrative text — "41m", "2h 5m", "3d 4h". */
 function fmtMs(ms) {
   if (!ms || ms < 1000) return '0s';
@@ -1247,24 +1303,36 @@ function narrate(r) {
 
   const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;
 
-  // Lead with what the audience lost. A period in which nothing reached a
-  // listener is a good period, however many times our probe tripped over its
-  // own feet, and the sentence should say so first.
+  // Lead with the proportion delivered, then name the incidents that explain
+  // the rest. An aggregate like "214 listener-hours lost" is arithmetically
+  // true and reads as a catastrophe: the unit multiplies, so it is always a big
+  // number, and on the production record 89% of it came from two incidents on a
+  // single day. A station's first sentence should say how the service did, and
+  // its second should say what went wrong — not shout a total.
+  const delivered = a.lostSharePercent != null
+    ? Math.round((100 - a.lostSharePercent) * 10) / 10
+    : null;
+
   let headline;
   if (c.listenerAffecting === 0) {
     headline = c.noListenerImpact
       ? `No listener heard a break. ${c.noListenerImpact} monitoring ${c.noListenerImpact === 1 ? 'anomaly was' : 'anomalies were'} recorded, none of which interrupted the stream.`
       : 'No outages at all — every stream held for the whole period.';
+  } else if (r.topIncidents.length) {
+    const top = r.topIncidents[0];
+    const share = top.listenerMinutesLost && a.listenerMinutesLost
+      ? Math.round((r.topIncidents.reduce((x, i) => x + i.listenerMinutesLost, 0) / a.listenerMinutesLost) * 100)
+      : 0;
+    const led = delivered != null ? `${delivered}% of all listening was delivered. ` : '';
+    headline = `${led}${plural(c.significant, 'significant outage')}${
+      c.brief ? ` and ${plural(c.brief, 'brief interruption')}` : ''
+    } cost ${a.listenerHoursLost} listener-hours${
+      share >= 50 ? `, ${share}% of it in ${r.topIncidents.length === 1 ? 'a single incident' : `just ${r.topIncidents.length} incidents`} — the worst ${top.streams.join(' and ')} for ${fmtMs(top.durationMs)}` : ''
+    }.`;
   } else {
-    const across = c.streamsAffected > 1 ? ` across ${c.streamsAffected} streams` : '';
-    const deadAirNote = c.deadAir
-      ? ` ${c.deadAir} of them ${c.deadAir === 1 ? 'was' : 'were'} dead air — connected but silent.`
-      : '';
-    const cost = a.listenerMinutesLost > 0
-      ? `, cutting off ≈${a.listenersCutOff.toLocaleString()} listener${a.listenersCutOff === 1 ? '' : 's'} and costing ${a.listenerHoursLost} listener-hours of listening${
-        a.lostSharePercent != null ? ` — ${a.lostSharePercent}% of everything the audience could have heard` : ''}`
-      : '';
-    headline = `${plural(c.listenerAffecting, 'outage')} interrupted the audience${across}${cost}.${deadAirNote}`;
+    // Nothing crossed the significance threshold: say so plainly.
+    headline = `${plural(c.brief, 'brief interruption')} reached listeners, none lasting more than ${fmtMs(r.otherIncidents.longestMs)}. ${
+      delivered != null ? `${delivered}% of all listening was delivered.` : ''}`.trim();
   }
 
   const bits = [];
@@ -1281,6 +1349,7 @@ function narrate(r) {
   if (c.noListenerImpact && c.listenerAffecting) {
     bits.push(`${c.noListenerImpact} anomal${c.noListenerImpact === 1 ? 'y' : 'ies'} with no listener impact`);
   }
+  if (a.listenersCutOff) bits.push(`≈${a.listenersCutOff.toLocaleString()} listeners cut off`);
   // Messages, not events — one consolidated email can cover three streams.
   bits.push(r.alerts.messages
     ? `${plural(r.alerts.messages, 'alert email')} sent${
@@ -1359,6 +1428,15 @@ function getPeriodRollup(streamIds, windowMs) {
   const harmless = failures.filter((e) => !costListeners(e));
   const impactful = failures.filter(costListeners);
 
+  // Sustained enough that the audience is gone, vs a gap the player rode out.
+  const significant = impactful.filter((e) => (e.durationMs || 0) >= SIGNIFICANT_OUTAGE_MS);
+  const brief = impactful.filter((e) => (e.durationMs || 0) < SIGNIFICANT_OUTAGE_MS);
+
+  // The few incidents that actually explain the period. On the production
+  // record three of them carried 89% of all lost listening, so a page that
+  // leads with totals instead of naming these is hiding its own answer.
+  const incidents = groupIncidents(significant);
+
   const wallClockMs = mergedDowntimeMs(impactful);
   const streamMs = impactful.reduce((a, e) => a + (e.durationMs || 0), 0);
   const ongoing = failures.filter((e) => !e.resolvedAt).length;
@@ -1416,7 +1494,7 @@ function getPeriodRollup(streamIds, windowMs) {
     };
   });
 
-  const brief = (e) => (e && {
+  const summarise = (e) => (e && {
     id: e.id,
     timestamp: e.timestamp,
     streamId: e.streamId,
@@ -1450,6 +1528,9 @@ function getPeriodRollup(streamIds, windowMs) {
       failures: failures.length,
       // Grouped by what the audience experienced — the headline figures.
       listenerAffecting: impactful.length,
+      significant: significant.length,
+      brief: brief.length,
+      incidents: incidents.length,
       noListenerImpact: harmless.length,
       // Grouped by confirmation threshold — a monitoring detail, kept for the
       // timeline filters and for continuity, not for the headline.
@@ -1501,8 +1582,16 @@ function getPeriodRollup(streamIds, windowMs) {
     },
     perStream,
     causes: getCauseBreakdown(windowMs),
-    longestOutage: brief(longest),
-    worstIncident: brief(worstIncident),
+    longestOutage: summarise(longest),
+    worstIncident: summarise(worstIncident),
+    // The handful worth naming, worst first, plus what is left over — the
+    // reassurance that nothing else ran long.
+    topIncidents: incidents.slice(0, 3),
+    otherIncidents: {
+      count: Math.max(0, incidents.length - 3) + brief.length,
+      longestMs: brief.reduce((a, e) => Math.max(a, e.durationMs || 0), 0),
+    },
+    significantThresholdMs: SIGNIFICANT_OUTAGE_MS,
     generatedAt: new Date().toISOString(),
   };
 

@@ -532,10 +532,12 @@ function fmtDuration(ms) {
   const s = Math.round(ms / 1000);
   if (s < 60) return `${s}s`;
   const m = Math.floor(s / 60);
-  if (m < 60) return `${m}m ${s % 60}s`;
+  // Drop a zero remainder rather than printing "5m 0s", which reads as a
+  // stopwatch reading where a plain "5m" reads as a length.
+  if (m < 60) return s % 60 ? `${m}m ${s % 60}s` : `${m}m`;
   const h = Math.floor(m / 60);
-  if (h < 24) return `${h}h ${m % 60}m`;
-  return `${Math.floor(h / 24)}d ${h % 24}h`;
+  if (h < 24) return m % 60 ? `${h}h ${m % 60}m` : `${h}h`;
+  return h % 24 ? `${Math.floor(h / 24)}d ${h % 24}h` : `${Math.floor(h / 24)}d`;
 }
 
 // ── The Classifier ──────────────────────────────────────────────────────────
