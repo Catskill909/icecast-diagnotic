@@ -1253,6 +1253,7 @@ function groupIncidents(list) {
 
     if (g) {
       g.streams.push(e.streamName || e.streamId);
+      g.eventIds.push(e.id);
       g.durationMs = Math.max(g.durationMs, e.durationMs || 0);
       // A headcount, summed across the streams this incident took out. Real
       // people who could not hear anything — nothing multiplied by anything.
@@ -1266,6 +1267,10 @@ function groupIncidents(list) {
         severity: e.severity,
         fault: faultSide(e),
         streams: [e.streamName || e.streamId],
+        // Carried so the summary row can open the full drill-down for this
+        // incident rather than duplicating evidence and remediation into a
+        // second view that would then have to be kept in step.
+        eventIds: [e.id],
         durationMs: e.durationMs || 0,
         listenersTunedIn: e.audience?.listenersBefore || 0,
         events: 1,

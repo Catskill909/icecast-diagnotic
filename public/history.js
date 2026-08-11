@@ -19,6 +19,7 @@
   let lastRangeIsAllTime = false;
   let lastListeners = null;
   let lastRollup = null;   // server-computed period totals + narrative
+  let incidentsExpanded = false;  // "show all" state for the What happened list
 
   // 'blip' is the retired severity — stored history still carries it, so it has
   // to keep rendering. New events split it in two, because a vanished mount and
@@ -248,7 +249,13 @@
       unknown: { label: 'cause unclear', cls: 'unknown' },
     };
 
-    const rows = top.map((i) => {
+    // A week shows nine of these; a year could show hundreds. Cap the default
+    // view and let it be opened — truncating silently is what made the old
+    // three-of-nine list feel disconnected from the totals above it.
+    const CAP = 8;
+    const visible = incidentsExpanded ? top : top.slice(0, CAP);
+
+    const rows = visible.map((i) => {
       const when = new Date(i.timestamp).toLocaleString('en-US', {
         month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit',
       });
@@ -257,7 +264,7 @@
         ? `${i.listenersTunedIn} listener${i.listenersTunedIn === 1 ? '' : 's'}`
         : 'no one listening';
       return `
-        <div class="ih-row">
+        <div class="ih-row" data-event="${esc(i.eventIds?.[0] || '')}" title="Open the full diagnosis for this incident">
           <span class="ih-when">${esc(when)}</span>
           <span class="ih-streams">${esc(i.streams.join(' + '))} off air</span>
           <span class="ih-dur">${esc(fmtDuration(i.durationMs))}</span>
@@ -277,7 +284,28 @@
         r.otherIncidents.longestMs ? `, the longest ${fmtDuration(r.otherIncidents.longestMs)}` : ''}.</div>`
       : '';
 
-    host.innerHTML = rows + rest;
+    const moreBtn = top.length > CAP
+      ? `<button class="ih-more" id="ih-more">${incidentsExpanded
+        ? `Show fewer — top ${CAP} only`
+        : `Show all ${top.length} incidents (${top.length - CAP} more)`}</button>`
+      : '';
+
+    host.innerHTML = rows + moreBtn + rest;
+
+    const btn = $('#ih-more');
+    if (btn) {
+      btn.onclick = () => { incidentsExpanded = !incidentsExpanded; renderImpactHero(); };
+    }
+
+    // Each row opens the full diagnosis — evidence, remediation, Icecast state
+    // — in the timeline below, reusing the drill-down that already exists
+    // rather than growing a second copy of it here.
+    host.querySelectorAll('.ih-row[data-event]').forEach((row) => {
+      const id = row.dataset.event;
+      if (!id) return;
+      row.classList.add('clickable');
+      row.onclick = () => openEventInTimeline(id);
+    });
 
     const countNote = $('#incidents-count-note');
     if (countNote) {
@@ -289,6 +317,46 @@
         ? `all ${top.length} outage${top.length === 1 ? '' : 's'} that cut listeners off, longest first`
         : `all ${sigCount} outages that cut listeners off — ${top.length} incidents, as some hit two streams at once`;
     }
+  }
+
+  /**
+   * Opens one incident's full diagnosis in the timeline below and scrolls to it.
+   *
+   * Clears any filter that would hide the row first — clicking a summary line
+   * and landing on nothing because a stream filter was set is worse than not
+   * making it clickable at all.
+   */
+  function openEventInTimeline(id) {
+    const evt = allEvents.find((e) => e.id === id);
+    if (!evt) return;
+
+    if (!filtered.some((e) => e.id === id)) {
+      $('#f-stream').value = '';
+      $('#f-severity').value = '';
+      $('#f-cause').value = '';
+      $('#f-email').value = '';
+      $('#f-search').value = '';
+      dayFilter = null;
+      renderHeatmap();
+      renderCauses();
+      applyFilters();
+    }
+
+    openIds.add(id);
+    // Page it in if it sits beyond the rows rendered so far.
+    let guard = 0;
+    while (!document.querySelector(`.evt[data-id="${CSS.escape(id)}"]`)
+      && rendered < filtered.length && guard++ < 50) {
+      renderMore();
+    }
+
+    const row = document.querySelector(`.evt[data-id="${CSS.escape(id)}"]`);
+    if (!row) return;
+    if (!row.classList.contains('open')) {
+      row.querySelector('.evt-body').innerHTML = renderBody(evt);
+      row.classList.add('open');
+    }
+    row.scrollIntoView({ block: 'center', behavior: 'smooth' });
   }
 
   /**

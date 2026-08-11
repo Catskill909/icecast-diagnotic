@@ -115,7 +115,29 @@ An unconfirmed failure is split by the same verdict: `brief_outage` when the mou
 vanish (a real gap, just short) and `probe_error` when Icecast stayed healthy throughout. The
 retired name for both was `blip`; stored events still carry it and every counter recognises it.
 
-### What an email says about the audience
+### Who this is for, and which number leads
+
+Two audiences read the same pages, and the layout is built around that:
+
+| | Needs to know | Reads |
+|---|---|---|
+| **Station managers** (non-technical) | Is something broken? Whose fault? How many listeners did we lose? | the headline, the fault split, the incident list |
+| **KPFT & Pacifica engineers** | What broke, when, for how long, with evidence | the incident list, the drill-downs, the timeline |
+
+**The metric hierarchy is fixed and deliberate:**
+
+1. **Listeners cut off** — a headcount. The headline, always.
+2. **Listening lost** — listener-hours. The subheadline, always with its explanation.
+3. **Where the fault was** — KPFT equipment vs Pacifica server.
+4. **Stream downtime** — clock time, for engineers.
+5. Everything else — monitoring detail.
+
+**The rule that keeps it readable: a headcount, a clock duration and a person-hours figure
+never appear in the same row or the same tile group.** They measure different things, and
+formatted alike they invite a reader to reconcile numbers that cannot be compared — which is
+exactly how "3h 35m … 100.9 listener-hours" came to read as four days of downtime.
+
+### What an alert says about the audience
 
 Every alert states the human cost, in the subject as well as the body — that is the part read
 on a phone at 3am, and it is what separates "get up now" from "look at it in the morning".
@@ -157,6 +179,22 @@ re-costed this way keep `flatEquivalent` so the older figure is always recoverab
 The curve is used only when the profile has at least 12 populated hours, and the rescaling
 factor is clamped to 0.2×–5× so one freak reading at the moment of failure cannot multiply a
 long extrapolation. Failing either guard, the flat figure stands.
+
+#### Where the fault was
+
+`faultSplit` attributes every listener-affecting outage to the equipment that failed, decided
+by whether Icecast itself answered at the moment of failure:
+
+| `side` | Means |
+|---|---|
+| `kpft` | Icecast was **reachable and serving other mounts** — our source encoder or mount dropped |
+| `pacifica` | Icecast itself could **not be reached** |
+| `unknown` | not enough evidence to attribute |
+
+This is the single most consequential field in the record. On the first production week it read
+19h 26m of KPFT encoder dropouts against 3h 46m of Pacifica server trouble — a conclusion no
+aggregate downtime figure can produce, and the difference between an engineer looking at the
+studio Barix and a pointless conversation with Pacifica.
 
 #### Time off air vs. stream-hours
 

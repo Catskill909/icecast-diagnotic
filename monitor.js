@@ -1424,17 +1424,55 @@ function buildWeeklyRoundup(rollup) {
 
   // Ordered by what the station actually needs to know, not by what is easiest
   // to measure: the audience cost first, the technical detail underneath it.
+  // WHO HAS TO FIX IT — the first block after the summary, because it is the
+  // reason this email gets forwarded. An 18-hour dropout with Icecast serving
+  // other stations throughout is a studio problem, and the report has to say so
+  // before anyone starts a conversation with the wrong department.
+  const FAULT_META = {
+    kpft: { label: 'KPFT equipment', sub: 'our studio encoder or mount — Icecast was up', color: '#fbbf24' },
+    pacifica: { label: 'Pacifica server', sub: 'Icecast itself could not be reached', color: '#7dd3fc' },
+    unknown: { label: 'Cause unclear', sub: 'not enough evidence to attribute', color: '#94a3b8' },
+  };
+
+  const faultRows = (rollup.faultSplit || []).map((s) => {
+    const m = FAULT_META[s.side] || FAULT_META.unknown;
+    return `
+      <tr class="row-border" style="border-bottom:1px solid #28283d;">
+        <td style="padding:10px 8px; font-size:13px;">
+          <span style="color:${m.color} !important; font-weight:700;">${esc(m.label)}</span>
+          <br><span class="label-col" style="color:#94a3b8 !important; font-size:11px;">${esc(m.sub)}</span>
+        </td>
+        <td style="padding:10px 8px; font-size:15px; font-weight:700; color:${m.color} !important; white-space:nowrap;">
+          <span style="color:${m.color} !important;">${esc(diagnose.fmtDuration(s.wallClockMs))}</span>
+          <br><span class="label-col" style="color:#94a3b8 !important; font-size:11px; font-weight:400;">off air</span>
+        </td>
+        <td class="label-col" style="padding:10px 8px; color:#94a3b8 !important; font-size:12px;">
+          <span class="label-col" style="color:#94a3b8 !important;">${s.outages} outage(s)<br>${s.listenersCutOff.toLocaleString()} listeners cut off<br>longest ${esc(diagnose.fmtDuration(s.longestMs))}</span>
+        </td>
+      </tr>`;
+  }).join('');
+
+  const faultBlock = faultRows ? `
+    <h3 class="section-hdr" style="margin:22px 0 6px 0; font-size:13px; color:#cbd5e1 !important; text-transform:uppercase; letter-spacing:0.05em;"><span class="section-hdr" style="color:#cbd5e1 !important;">Where the fault was</span></h3>
+    <p class="label-col" style="margin:0 0 10px 0; font-size:11px; line-height:1.5; color:#94a3b8 !important;"><span class="label-col" style="color:#94a3b8 !important;">Decided by whether Icecast itself was reachable at the moment of failure.</span></p>
+    <table role="presentation" width="100%" border="0" cellspacing="0" cellpadding="0">${faultRows}</table>` : '';
+
   const cells = [
     // A volume, not a duration — so it is NOT shown with an "h" suffix beside a
     // downtime tile that is one. The share is what makes it legible: "214" means
     // nothing on its own, "2.2% of all listening" is actionable.
-    statCell('Time Listeners Had No Audio',
-      rollup.downtimeMs ? diagnose.fmtDuration(rollup.downtimeMs) : 'None',
-      rollup.downtimeMs ? '#f87171' : '#4ade80',
-      'total across all streams'),
-    statCell('Listening Delivered',
-      a.lostSharePercent != null ? `${Math.round((100 - a.lostSharePercent) * 10) / 10}%` : '—',
-      '#4ade80', 'share of all listening that got through'),
+    // Headline: people. Subheadline: their listening time, with the sentence
+    // that stops it being read as clock hours.
+    statCell('Listeners Cut Off',
+      a.listenersCutOff ? a.listenersCutOff.toLocaleString() : '0',
+      a.listenersCutOff ? '#f87171' : '#4ade80',
+      `across ${c.listenerAffecting} interruption(s) — someone cut off twice counts twice`),
+    statCell('Listening Lost',
+      a.listenerHoursLost ? `${a.listenerHoursLost} listener-hours` : 'None',
+      a.listenerHoursLost ? '#fbbf24' : '#4ade80',
+      a.lostSharePercent != null
+        ? `${a.lostSharePercent}% of all listening · person-hours, not clock time`
+        : 'person-hours, not clock time'),
     statCell('Significant Outages', String(c.significant),
       c.significant ? '#f87171' : '#4ade80',
       `over ${diagnose.fmtDuration(rollup.significantThresholdMs)} · ${c.brief} brief interruption(s) besides`),
@@ -1502,6 +1540,8 @@ function buildWeeklyRoundup(rollup) {
 
     ${statGrid(cells)}
 
+    ${faultBlock}
+
     <h3 class="section-hdr" style="margin:22px 0 10px 0; font-size:13px; color:#cbd5e1 !important; text-transform:uppercase; letter-spacing:0.05em;"><span class="section-hdr" style="color:#cbd5e1 !important;">Per Stream</span></h3>
     <table role="presentation" width="100%" border="0" cellspacing="0" cellpadding="0">
       <tr>
@@ -1525,7 +1565,7 @@ function buildWeeklyRoundup(rollup) {
       <ul style="margin:0; padding-left:18px; font-size:13px; line-height:1.6;">${notable}</ul>
     </div>` : ''}
 
-    <p class="label-col" style="margin:20px 0 0 0; font-size:11px; line-height:1.6; color:#94a3b8 !important;"><span class="label-col" style="color:#94a3b8 !important;">This is a scheduled weekly summary, not an alert — it arrives whether or not anything went wrong.<br><br>“Time off air” is elapsed time with at least one stream down; concurrent outages are counted once, so it is smaller than the per-stream figures added together. Failures where Icecast kept serving the mount are not counted as downtime at all.<br><br>“Listening lost” is a volume, not a duration: the audience measured just before a failure, held across short outages and projected along this stream’s normal hour-by-hour audience curve for ones lasting over an hour.</span></p>`;
+    <p class="label-col" style="margin:20px 0 0 0; font-size:11px; line-height:1.6; color:#94a3b8 !important;"><span class="label-col" style="color:#94a3b8 !important;">This is a scheduled weekly summary, not an alert — it arrives whether or not anything went wrong.<br><br><strong>Listeners cut off</strong> is a headcount taken as each outage began; someone cut off by two separate outages counts twice.<br><br><strong>Listening lost</strong> is that audience multiplied by how long they were off air, the way man-hours works — 50 people for one hour is 50 listener-hours. It is not a clock duration and cannot be compared with the times beside it.<br><br><strong>Time off air</strong> is elapsed clock time with at least one stream down; concurrent outages count once. Failures where Icecast kept serving the mount are not counted as downtime at all.</span></p>`;
 
   const html = buildEmailHtml({
     title: '📊 KPFT Weekly Stream Report',

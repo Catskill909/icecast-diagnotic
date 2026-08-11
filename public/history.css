@@ -167,6 +167,32 @@ a.help-btn { text-decoration: none; }
   color: var(--text-tertiary);
 }
 
+/* Rows open the full diagnosis in the timeline below. */
+.ih-row.clickable {
+  cursor: pointer;
+  border-radius: var(--radius-sm);
+  margin: 0 -8px;
+  padding-left: 8px;
+  padding-right: 8px;
+  transition: background var(--transition);
+}
+.ih-row.clickable:hover { background: var(--surface-2); }
+
+.ih-more {
+  margin-top: 10px;
+  padding: 7px 14px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text-secondary);
+  font-family: inherit;
+  font-size: 0.78rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: var(--transition);
+}
+.ih-more:hover { background: var(--surface-3); color: var(--text-primary); border-color: var(--border-hover); }
+
 @media (max-width: 760px) {
   .impact-hero { padding: 18px; }
   .ih-top { gap: 16px; }
