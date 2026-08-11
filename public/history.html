@@ -74,18 +74,6 @@
       </div>
     </div>
 
-    <!-- Period roundup: the tiles in one sentence, before the numbers -->
-    <div class="overview-summary fade-in" id="overview-summary" style="display:none;">
-      <div class="os-icon" id="os-icon">
-        <span class="material-symbols-outlined">summarize</span>
-      </div>
-      <div class="os-body">
-        <div class="os-headline" id="os-headline"></div>
-        <div class="os-detail" id="os-detail"></div>
-        <div class="os-scope" id="os-scope" style="display:none;"></div>
-      </div>
-    </div>
-
     <!-- Summary tiles -->
     <div class="summary-bar fade-in">
       <div class="summary-card">
@@ -122,6 +110,20 @@
         <div class="summary-label">Listening Lost</div>
         <div class="summary-value down" id="stat-listener-loss">—</div>
         <div class="summary-detail" id="stat-listener-loss-detail">audience × downtime</div>
+      </div>
+    </div>
+
+    <!-- The tiles above, read back as a sentence. Informational by design: it
+         summarises a period that has already happened, so it must not look like
+         a live alarm however bad the numbers in it are. -->
+    <div class="overview-summary fade-in" id="overview-summary" style="display:none;">
+      <div class="os-icon" id="os-icon">
+        <span class="material-symbols-outlined">summarize</span>
+      </div>
+      <div class="os-body">
+        <div class="os-headline" id="os-headline"></div>
+        <div class="os-detail" id="os-detail"></div>
+        <div class="os-scope" id="os-scope" style="display:none;"></div>
       </div>
     </div>
 

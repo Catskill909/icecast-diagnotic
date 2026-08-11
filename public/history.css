@@ -44,21 +44,26 @@ a.help-btn { text-decoration: none; }
 }
 
 /* ── Period roundup ────────────────────────────────────────────────────────── */
-/* Sits above the tiles and states the same thing in words. Deliberately quieter
-   than the numbers it introduces — a lead paragraph, not a seventh tile. */
+/* Sits BELOW the tiles and reads them back as a sentence.
+   Styled as a note, not an alarm. It describes a window that has already
+   closed, so a red emergency treatment would be wrong even in a terrible week —
+   the live dashboard is where urgency belongs. A quiet period earns a green
+   icon; everything else stays neutral and simply states the facts. */
 .overview-summary {
   display: flex;
   gap: 14px;
   align-items: flex-start;
   background: var(--surface-1);
   border: 1px solid var(--border);
-  border-left: 3px solid var(--status-down);
-  border-radius: var(--radius-md);
-  padding: 16px 18px;
-  margin-bottom: 16px;
+  border-radius: var(--radius-lg);
+  padding: 18px 20px;
+  margin-bottom: 28px;
   box-shadow: var(--shadow-sm);
 }
-.overview-summary.clean { border-left-color: var(--status-up); }
+
+/* Tighten the 32px the tile grid leaves behind: the sentence belongs to the
+   tiles above it, and a full gap reads as an unrelated section. */
+.summary-bar + .overview-summary { margin-top: -14px; }
 
 .os-icon {
   display: flex;
@@ -67,8 +72,8 @@ a.help-btn { text-decoration: none; }
   width: 34px;
   height: 34px;
   border-radius: var(--radius-sm);
-  background: var(--status-down-surface);
-  color: var(--status-down);
+  background: var(--primary-surface);
+  color: var(--primary-light);
   flex-shrink: 0;
 }
 .overview-summary.clean .os-icon {
