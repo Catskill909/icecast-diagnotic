@@ -82,11 +82,15 @@
     <div class="impact-hero fade-in" id="impact-hero">
       <div class="ih-top">
         <div class="ih-main">
-          <div class="ih-label">Listeners who lost audio</div>
+          <div class="ih-label">Listeners cut off</div>
           <div class="ih-value" id="ih-value">—</div>
           <div class="ih-sub" id="ih-sub"></div>
         </div>
         <div class="ih-side">
+          <div class="ih-stat">
+            <div class="ih-stat-value" id="ih-peak">—</div>
+            <div class="ih-stat-label">at the worst single moment</div>
+          </div>
           <div class="ih-stat">
             <div class="ih-stat-value" id="ih-incidents-count">—</div>
             <div class="ih-stat-label">outages that reached listeners</div>
@@ -97,10 +101,26 @@
           </div>
         </div>
       </div>
-      <div class="ih-note">
-        People, counted at the moment each outage began. This is a headcount —
-        it is not a length of time, and it does not relate to the hours below.
-      </div>
+
+      <!-- Subheadline: the same loss expressed as listening time, with the
+           sentence that stops it being read as clock hours. -->
+      <div class="ih-secondary" id="ih-secondary"></div>
+
+      <div class="ih-note" id="ih-note"></div>
+    </div>
+
+    <!-- WHO HAS TO FIX IT — the block a station manager forwards. -->
+    <div class="section-subhead">
+      <span class="material-symbols-outlined">build</span>
+      Where the fault was
+      <span class="section-subhead-note">decided by whether Icecast itself was reachable</span>
+    </div>
+    <div class="section-note">
+      Every outage traced to the equipment that failed. <strong>KPFT equipment</strong> means our
+      studio encoder dropped while Pacifica's Icecast server was up and serving other stations.
+      <strong>Pacifica server</strong> means the server itself could not be reached.
+    </div>
+    <div class="fault-split" id="fault-split"></div>
     </div>
 
     <!-- SECTION 2 — clock time. Deliberately its own block: a duration and a
@@ -138,24 +158,16 @@
       </div>
     </div>
 
+    <!-- Every outage that reached a listener, longest first. -->
+    <div class="section-subhead">
+      <span class="material-symbols-outlined">list</span>
+      What happened
+      <span class="section-subhead-note" id="incidents-count-note"></span>
+    </div>
     <div class="panel incidents-panel fade-in" id="incidents-panel">
       <div class="ih-incidents" id="ih-incidents"></div>
     </div>
 
-    <!-- SECTION 3 — audience volume. A different kind of number entirely, so
-         it gets its own block and its own explanation, far from any duration. -->
-    <div class="section-subhead">
-      <span class="material-symbols-outlined">headphones</span>
-      Audience volume
-      <span class="section-subhead-note">total listening lost, in person-hours</span>
-    </div>
-    <div class="section-note">
-      A <strong>person-hours</strong> figure, like man-hours: 50 people listening for one hour
-      is 50 listener-hours. It measures how much listening was lost in total, so it is
-      always far larger than the clock time above. <strong>It is not a duration</strong> — the
-      two cannot be compared.
-    </div>
-    <div class="volume-line" id="volume-line"></div>
 
     <!-- Second tier: monitoring detail. These describe the health of the
          MONITOR as much as the streams, and putting them alongside the numbers

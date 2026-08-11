@@ -208,29 +208,85 @@ a.help-btn { text-decoration: none; }
   max-width: 72ch;
 }
 
-/* ── Audience volume ───────────────────────────────────────────────────────── */
-/* Alone, spelled out, and always beside the total it is a fraction of. */
-.volume-line {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: baseline;
-  gap: 10px;
-  background: var(--surface-1);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-lg);
-  padding: 18px 22px;
+/* ── Subheadline: listening time lost ──────────────────────────────────────── */
+/* Directly under the headline it restates, because it is the second question a
+   manager asks — and carrying its own explanation, because the unit is the one
+   that gets misread as clock time. */
+.ih-secondary {
+  margin-top: 14px;
+  padding-top: 14px;
+  border-top: 1px solid var(--border);
+  line-height: 1.6;
+}
+.ihs-value {
+  font-size: 1.15rem;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+.ihs-text { font-size: 0.86rem; color: var(--text-secondary); }
+
+/* ── Where the fault was ───────────────────────────────────────────────────── */
+.fault-split {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 16px;
   margin-bottom: 28px;
 }
-.vl-value {
-  font-size: 1.7rem;
+
+.fs-card {
+  background: var(--surface-1);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--text-tertiary);
+  border-radius: var(--radius-lg);
+  padding: 18px 20px;
+}
+.fs-card.kpft { border-left-color: var(--warn); }
+.fs-card.pacifica { border-left-color: var(--info); }
+
+.fs-head { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
+.fs-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--text-tertiary); }
+.fs-card.kpft .fs-dot { background: var(--warn); }
+.fs-card.pacifica .fs-dot { background: var(--info); }
+.fs-label {
+  font-size: 0.78rem;
   font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--text-secondary);
+}
+
+.fs-time {
+  font-size: 1.9rem;
+  font-weight: 700;
+  line-height: 1.1;
   color: var(--text-primary);
   font-variant-numeric: tabular-nums;
 }
-.vl-unit { font-size: 0.9rem; font-weight: 600; color: var(--text-secondary); }
-.vl-of { font-size: 0.82rem; color: var(--text-tertiary); }
-.vl-of strong { color: var(--text-secondary); }
-.vl-clean { font-size: 0.9rem; color: var(--status-up); }
+.fs-time-label {
+  font-size: 0.74rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-tertiary);
+  margin-bottom: 10px;
+}
+
+.fs-facts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 14px;
+  font-size: 0.8rem;
+  color: var(--text-tertiary);
+}
+.fs-facts strong { color: var(--text-secondary); font-weight: 600; }
+
+.fs-sub {
+  margin-top: 10px;
+  font-size: 0.75rem;
+  line-height: 1.5;
+  color: var(--text-tertiary);
+}
+
+.fs-clean { font-size: 0.9rem; color: var(--status-up); }
 
 .incidents-panel { padding: 16px 20px; }
 .incidents-panel .ih-incidents { margin-top: 0; padding-top: 0; border-top: none; }

@@ -126,6 +126,22 @@
       startText = fmt(start);
     }
 
+    // When the monitor has not been running as long as the selected range, show
+    // the window that actually has data. "Last 30 days · Jul 13 – Aug 11" over
+    // seven days of history invites spreading the figures across a month that
+    // was never watched.
+    const covStart = stats?.storage?.oldestEvent && lastRollup?.coverageStart;
+    const realStart = covStart ? new Date(lastRollup.coverageStart) : null;
+    if (value !== 'all' && realStart && startText) {
+      const nominal = new Date(end);
+      nominal.setDate(nominal.getDate() - (parseInt(value, 10) - 1));
+      if (realStart > nominal) {
+        const days = (end - realStart) / 86400000;
+        el.textContent = `${label} · only ${days < 10 ? days.toFixed(1) : Math.round(days)} days of data — ${fmt(realStart)} – ${fmt(end)}`;
+        return;
+      }
+    }
+
     el.textContent = startText ? `${label} · ${startText} – ${fmt(end)}` : label;
   }
 
@@ -154,17 +170,60 @@
     // PEOPLE ONLY in this block. No duration appears anywhere near it — a
     // headcount and a clock time formatted alike, side by side, is what made
     // the whole page unreadable.
-    $('#ih-value').textContent = clean ? 'None' : peak.toLocaleString();
+    //
+    // The headline is the PERIOD TOTAL, not the worst moment: "how many
+    // listeners did we lose" is the station's question, and answering it with a
+    // single instant's peak buries it.
+    const cutOff = a.listenersCutOff || 0;
+    $('#ih-value').textContent = clean ? 'None' : cutOff.toLocaleString();
+    $('#ih-peak').textContent = peak ? peak.toLocaleString() : '—';
     $('#ih-incidents-count').textContent = r.counts?.significant ?? 0;
     $('#ih-streams').textContent = r.counts?.streamsAffected ?? 0;
-    // Attribute the peak to the failure it actually came from — which is rarely
-    // the longest one, because the longest outage often hits a quiet daypart.
+
+    // Say what window this really covers. A "Last 30 days" pill over a monitor
+    // that has only been running a week invites the reader to spread these
+    // figures across a month that was never watched.
+    const covDays = r.coverageMs ? r.coverageMs / 86400000 : null;
+    const partial = covDays != null && r.windowMs && r.coverageMs < r.windowMs * 0.95;
+    const window = partial
+      ? `in the ${covDays < 10 ? covDays.toFixed(1) : Math.round(covDays)} days monitored so far`
+      : 'in this period';
     $('#ih-sub').textContent = clean
       ? 'Every stream served audio for the whole period.'
-      : `at the worst single moment${a.peakListenersStream ? ` — ${a.peakListenersStream}` : ''}${
-        a.peakListenersAt
-          ? ` on ${new Date(a.peakListenersAt).toLocaleDateString('en-US', { month: 'long', day: 'numeric' })}`
-          : ''}`;
+      : `${window} — across ${r.counts?.listenerAffecting ?? 0} interruption${
+        r.counts?.listenerAffecting === 1 ? '' : 's'}`;
+
+    // SUBHEADLINE — the same loss as listening time. Directly under the
+    // headline because it is the second thing a manager asks, and carrying the
+    // sentence that stops it being read as clock hours.
+    const sec = $('#ih-secondary');
+    if (sec) {
+      if (!a.listenerMinutesLost) {
+        sec.innerHTML = '';
+      } else {
+        const total = (a.listenerHoursDelivered || 0) + a.listenerHoursLost;
+        sec.innerHTML =
+          `<span class="ihs-value">${a.listenerHoursLost.toLocaleString()} listener-hours</span>` +
+          `<span class="ihs-text"> of listening lost` +
+          (a.lostSharePercent != null
+            ? ` — ${a.lostSharePercent}% of the ${total.toLocaleString()} hours the audience would otherwise have heard`
+            : '') + `</span>`;
+      }
+    }
+
+    const note = $('#ih-note');
+    if (note) {
+      // Both caveats, stated plainly rather than hidden: what the headcount
+      // double-counts, and what a listener-hour actually is.
+      note.innerHTML =
+        '<strong>Listeners cut off</strong> is a headcount taken as each outage began — someone '
+        + 'cut off by two separate outages counts twice. '
+        + '<strong>Listener-hours</strong> is that audience multiplied by how long they were off '
+        + 'air, the way man-hours works: 50 people for one hour is 50 listener-hours. It is not a '
+        + 'clock duration and cannot be compared with the times below.';
+    }
+
+    renderFaultSplit();
 
     renderVolumeLine();
 
@@ -209,12 +268,72 @@
         </div>`;
     }).join('');
 
+    // Counted in the SAME unit as the tile that reports them — brief events,
+    // never mixed with hidden incident groups. Previously this line silently
+    // added 5 unshown outages to 36 brief events and tied to the total by luck.
     const rest = r.otherIncidents?.count
-      ? `<div class="ih-rest">${r.otherIncidents.count} further interruption${r.otherIncidents.count === 1 ? '' : 's'}${
-        r.otherIncidents.longestMs ? `, none longer than ${fmtDuration(r.otherIncidents.longestMs)}` : ''}.</div>`
+      ? `<div class="ih-rest">Plus ${r.otherIncidents.count} brief interruption${
+        r.otherIncidents.count === 1 ? '' : 's'} under ${fmtDuration(r.significantThresholdMs || 300000)}${
+        r.otherIncidents.longestMs ? `, the longest ${fmtDuration(r.otherIncidents.longestMs)}` : ''}.</div>`
       : '';
 
     host.innerHTML = rows + rest;
+
+    const countNote = $('#incidents-count-note');
+    if (countNote) {
+      // Reconcile the two counts out loud. One fault can take two streams down
+      // at the same second, so "9 outages" and "8 incidents" are both true and
+      // the difference has to be visible rather than look like an error.
+      const sigCount = r.counts?.significant ?? top.length;
+      countNote.textContent = sigCount === top.length
+        ? `all ${top.length} outage${top.length === 1 ? '' : 's'} that cut listeners off, longest first`
+        : `all ${sigCount} outages that cut listeners off — ${top.length} incidents, as some hit two streams at once`;
+    }
+  }
+
+  /**
+   * Who has to fix it.
+   *
+   * The block a station manager forwards and an engineer acts on. Icecast's own
+   * reachability at the moment of failure is what separates a KPFT studio fault
+   * from a Pacifica server fault — a distinction no aggregate downtime figure
+   * can make, and the one thing that stops "we were down 19 hours" landing on
+   * the wrong desk.
+   */
+  function renderFaultSplit() {
+    const host = $('#fault-split');
+    if (!host || !lastRollup) return;
+
+    const META = {
+      kpft: { label: 'KPFT equipment', sub: 'our studio encoder or mount — Icecast was up', cls: 'kpft' },
+      pacifica: { label: 'Pacifica server', sub: 'Icecast itself could not be reached', cls: 'pacifica' },
+      unknown: { label: 'Cause unclear', sub: 'not enough evidence to attribute', cls: 'unknown' },
+    };
+
+    const split = lastRollup.faultSplit || [];
+    if (!split.length) {
+      host.innerHTML = '<div class="fs-clean">No outage reached a listener in this period.</div>';
+      return;
+    }
+
+    host.innerHTML = split.map((s) => {
+      const m = META[s.side] || META.unknown;
+      return `
+        <div class="fs-card ${m.cls}">
+          <div class="fs-head">
+            <span class="fs-dot"></span>
+            <span class="fs-label">${esc(m.label)}</span>
+          </div>
+          <div class="fs-time">${esc(fmtDuration(s.wallClockMs))}</div>
+          <div class="fs-time-label">off air</div>
+          <div class="fs-facts">
+            <span><strong>${s.outages}</strong> outage${s.outages === 1 ? '' : 's'}</span>
+            <span><strong>${s.listenersCutOff.toLocaleString()}</strong> listeners cut off</span>
+            <span>longest <strong>${esc(fmtDuration(s.longestMs))}</strong></span>
+          </div>
+          <div class="fs-sub">${esc(m.sub)}</div>
+        </div>`;
+    }).join('');
   }
 
   /**
@@ -921,8 +1040,15 @@
     // its own section below. Neither belongs in this row of clock-time tiles.
     $('#stat-blips').textContent = blips;
     $('#stat-deadair').textContent = deadAir;
+    // This tile counts a DIFFERENT population from every other one on the page:
+    // outage alerts AND their "back online" counterparts. Unstated, 92 sitting
+    // beside "9 outages" reads as impossible. So it says which is which.
+    const downAlerts = filtered.filter((e) => e.email?.sent === true && e.type !== 'up').length;
+    const upAlerts = filtered.filter((e) => e.email?.sent === true && e.type === 'up').length;
     $('#stat-emailed').textContent = emailed;
-    let emailedDetail = `of ${notifiable.length} notifiable`;
+    let emailedDetail = upAlerts
+      ? `${downAlerts} outage + ${upAlerts} all-clear`
+      : `of ${notifiable.length} notifiable`;
     // This tile counts EVENTS that were alerted; the roundup sentence above it
     // counts MESSAGES, and one consolidated email covers several streams. Two
     // different numbers labelled "emailed" a few centimetres apart read as a

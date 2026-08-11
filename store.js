@@ -1440,6 +1440,23 @@ function getPeriodRollup(streamIds, windowMs) {
   // leads with totals instead of naming these is hiding its own answer.
   const incidents = groupIncidents(significant);
 
+  // WHO HAS TO FIX IT. The question a station manager forwards and an engineer
+  // acts on, and the one thing the record can answer that nobody's memory can:
+  // Icecast's own reachability at the moment of failure separates a KPFT studio
+  // fault from a Pacifica server fault. On the first production week this was
+  // 19.4h of KPFT encoder dropouts against 3.8h of server trouble — a
+  // conclusion no amount of aggregate downtime could have shown.
+  const faultSplit = ['kpft', 'pacifica', 'unknown'].map((side) => {
+    const mine = impactful.filter((e) => faultSide(e) === side);
+    return {
+      side,
+      outages: mine.length,
+      wallClockMs: mergedDowntimeMs(mine),
+      listenersCutOff: mine.reduce((a, e) => a + (e.audience?.listenersBefore || 0), 0),
+      longestMs: mine.reduce((a, e) => Math.max(a, e.durationMs || 0), 0),
+    };
+  }).filter((s) => s.outages > 0);
+
   const peakEvent = impactful.reduce(
     (best, e) => ((e.audience?.listenersBefore || 0) > (best?.audience?.listenersBefore || 0) ? e : best),
     null,
@@ -1599,11 +1616,16 @@ function getPeriodRollup(streamIds, windowMs) {
     causes: getCauseBreakdown(windowMs),
     longestOutage: summarise(longest),
     worstIncident: summarise(worstIncident),
-    // The handful worth naming, worst first, plus what is left over — the
-    // reassurance that nothing else ran long.
-    topIncidents: incidents.slice(0, 3),
+    faultSplit,
+    // EVERY outage that cut listeners off, longest first — not a sample of
+    // them. Nine rows is nothing to read, and showing three of nine without
+    // saying so is what made this list feel disconnected from the totals.
+    topIncidents: incidents,
+    // Only the brief ones are summarised away, and they are counted in the
+    // same unit as the tile that reports them: events, never mixed with
+    // incident groups.
     otherIncidents: {
-      count: Math.max(0, incidents.length - 3) + brief.length,
+      count: brief.length,
       longestMs: brief.reduce((a, e) => Math.max(a, e.durationMs || 0), 0),
     },
     significantThresholdMs: SIGNIFICANT_OUTAGE_MS,
