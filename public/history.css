@@ -871,11 +871,43 @@ a.help-btn { text-decoration: none; }
 /* ── Overview period control ───────────────────────────────────────────────── */
 /* The range control belongs beside the numbers it governs, not buried in the
    timeline filter bar below the fold. */
-.section-title .range-pills { margin-left: auto; }
+/* The control was being missed entirely: at 10px the pills read as decoration
+   rather than as the thing that reframes every number above them. The "Range:"
+   label names it, and the larger hit target makes it look clickable. Scoped to
+   .section-title so the compact pills in the dashboard's Uptime card — which
+   sit in a ~217px grid column — keep their original size. */
+/* Label and pills are one unit — they must wrap together, never apart. */
+.section-title .range-control {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
 
-@media (max-width: 560px) {
-  .section-title .range-pills { margin-left: 0; width: 100%; justify-content: space-between; }
+.section-title .range-label {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.section-title .range-pills { gap: 3px; padding: 3px; }
+
+.section-title .range-pill {
+  font-size: 13px;
+  padding: 7px 14px;
+  letter-spacing: 0.01em;
+}
+
+/* Below ~780px the date hint leaves too little room on the title line, so the
+   control drops to a full-width row of its own rather than wrapping the pills
+   into a ragged two-line block. */
+@media (max-width: 780px) {
   .section-title { flex-wrap: wrap; }
+  .section-title .range-control { margin-left: 0; width: 100%; }
+  .section-title .range-pills { flex: 1; justify-content: space-between; }
+  .section-title .range-pill { font-size: 12px; padding: 6px 10px; }
 }
 
 /* ── Listener audience chart ────────────────────────────────────────────────
