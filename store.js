@@ -1254,7 +1254,9 @@ function groupIncidents(list) {
     if (g) {
       g.streams.push(e.streamName || e.streamId);
       g.durationMs = Math.max(g.durationMs, e.durationMs || 0);
-      g.listenerMinutesLost += e.audience?.listenerMinutesLost || 0;
+      // A headcount, summed across the streams this incident took out. Real
+      // people who could not hear anything — nothing multiplied by anything.
+      g.listenersTunedIn += e.audience?.listenersBefore || 0;
       g.events++;
     } else {
       groups.push({
@@ -1262,17 +1264,33 @@ function groupIncidents(list) {
         timestamp: e.timestamp,
         cause,
         severity: e.severity,
+        fault: faultSide(e),
         streams: [e.streamName || e.streamId],
         durationMs: e.durationMs || 0,
-        listenerMinutesLost: e.audience?.listenerMinutesLost || 0,
+        listenersTunedIn: e.audience?.listenersBefore || 0,
         events: 1,
       });
     }
   }
 
-  return groups
-    .map((g) => ({ ...g, listenerHoursLost: Math.round((g.listenerMinutesLost / 60) * 10) / 10 }))
-    .sort((a, b) => b.listenerMinutesLost - a.listenerMinutesLost);
+  // Longest first: the incident that kept listeners off the air longest is the
+  // one that matters, not the one with the biggest derived score.
+  return groups.sort((a, b) => b.durationMs - a.durationMs);
+}
+
+/**
+ * Whose equipment failed.
+ *
+ * The single most important fact when this record is sent to Pacifica: an
+ * 18-hour HD2 dropout with the Icecast server serving 11 other mounts happily
+ * is a KPFT studio problem, and reporting it as "the server was down" is both
+ * wrong and embarrassing. Icecast's own reachability decides it.
+ */
+function faultSide(e) {
+  const ice = e.diagnosis?.icecast || {};
+  if (ice.reachable === false) return 'pacifica';   // the server itself was unreachable
+  if (ice.reachable === true) return 'kpft';        // server fine, our mount/source gone
+  return 'unknown';
 }
 
 /** Compact duration for narrative text — "41m", "2h 5m", "3d 4h". */
@@ -1320,36 +1338,21 @@ function narrate(r) {
       : 'No outages at all — every stream held for the whole period.';
   } else if (r.topIncidents.length) {
     const top = r.topIncidents[0];
-    const share = top.listenerMinutesLost && a.listenerMinutesLost
-      ? Math.round((r.topIncidents.reduce((x, i) => x + i.listenerMinutesLost, 0) / a.listenerMinutesLost) * 100)
-      : 0;
-    const led = delivered != null ? `${delivered}% of all listening was delivered. ` : '';
-    headline = `${led}${plural(c.significant, 'significant outage')}${
-      c.brief ? ` and ${plural(c.brief, 'brief interruption')}` : ''
-    } cost ${a.listenerHoursLost} listener-hours${
-      share >= 50 ? `, ${share}% of it in ${r.topIncidents.length === 1 ? 'a single incident' : `just ${r.topIncidents.length} incidents`} — the worst ${top.streams.join(' and ')} for ${fmtMs(top.durationMs)}` : ''
-    }.`;
+    headline = `Listeners lost audio for ${fmtMs(r.downtimeMs)} in total. `
+      + `The longest was ${top.streams.join(' and ')}, off air ${fmtMs(top.durationMs)}`
+      + (top.cause ? ` — ${top.cause.toLowerCase()}` : '') + '.';
   } else {
-    // Nothing crossed the significance threshold: say so plainly.
-    headline = `${plural(c.brief, 'brief interruption')} reached listeners, none lasting more than ${fmtMs(r.otherIncidents.longestMs)}. ${
-      delivered != null ? `${delivered}% of all listening was delivered.` : ''}`.trim();
+    headline = `${plural(c.brief, 'brief interruption')} reached listeners, none lasting more than ${fmtMs(r.otherIncidents.longestMs)}.`;
   }
 
   const bits = [];
-  if (r.uptime != null) bits.push(`${r.uptime}% uptime`);
-  if (r.downtimeMs) {
-    // Say WHICH downtime this is. "Total downtime" invited reading a summed
-    // per-stream figure as elapsed time, which overstated it by nearly half.
-    bits.push(`${fmtMs(r.downtimeMs)} with at least one stream down`
-      + (r.downtime.streamMs > r.downtimeMs
-        ? ` (${fmtMs(r.downtime.streamMs)} summed across streams)` : ''));
-  }
+  if (r.uptime != null) bits.push(`${r.uptime}% of the time all streams were serving audio`);
+  if (delivered != null) bits.push(`${delivered}% of listening delivered`);
   // Stated as what it is — a monitoring artefact — rather than as "unconfirmed
   // blips", which sounds like outages we failed to pin down.
   if (c.noListenerImpact && c.listenerAffecting) {
     bits.push(`${c.noListenerImpact} anomal${c.noListenerImpact === 1 ? 'y' : 'ies'} with no listener impact`);
   }
-  if (a.listenersCutOff) bits.push(`≈${a.listenersCutOff.toLocaleString()} listeners cut off`);
   // Messages, not events — one consolidated email can cover three streams.
   bits.push(r.alerts.messages
     ? `${plural(r.alerts.messages, 'alert email')} sent${
@@ -1436,6 +1439,11 @@ function getPeriodRollup(streamIds, windowMs) {
   // record three of them carried 89% of all lost listening, so a page that
   // leads with totals instead of naming these is hiding its own answer.
   const incidents = groupIncidents(significant);
+
+  const peakEvent = impactful.reduce(
+    (best, e) => ((e.audience?.listenersBefore || 0) > (best?.audience?.listenersBefore || 0) ? e : best),
+    null,
+  );
 
   const wallClockMs = mergedDowntimeMs(impactful);
   const streamMs = impactful.reduce((a, e) => a + (e.durationMs || 0), 0);
@@ -1570,6 +1578,13 @@ function getPeriodRollup(streamIds, windowMs) {
       listenersCutOff,
       listenerMinutesLost: audience.listenerMinutesLost,
       listenerHoursLost: audience.listenerHoursLost,
+      // The largest audience any single failure took off the air — a plain
+      // headcount at one instant, not a total accumulated over the period.
+      // Carries WHICH failure it was: the peak rarely belongs to the longest
+      // outage, and attributing it to the wrong one is its own small lie.
+      peakListenersAffected: peakEvent?.audience?.listenersBefore || 0,
+      peakListenersStream: peakEvent?.streamName || null,
+      peakListenersAt: peakEvent?.timestamp || null,
       listenerMinutesDelivered: delivered,
       listenerHoursDelivered: Math.round(delivered / 60),
       // Share of everything that could have been listened to. Null rather than

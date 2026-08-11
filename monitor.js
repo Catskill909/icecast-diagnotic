@@ -600,7 +600,7 @@ async function runChecks() {
         store.updateEvent(episode.eventId, patch);
 
         if (audience.listenerMinutesLost) {
-          console.log(`[Monitor] 📉 ${stream.name} — ~${audience.listenersBefore} listener(s) cut off, ${audience.listenerMinutesLost} listener-minutes lost (${audience.confidence})`);
+          console.log(`[Monitor] 📉 ${stream.name} — ${audience.listenersBefore} listener(s) lost audio for ${diagnose.fmtDuration(durationMs)} (${audience.confidence})`);
         }
 
         if (episode.alerted) {
@@ -875,12 +875,6 @@ function audienceBasisNote(confidence) {
   }[confidence] || null;
 }
 
-function fmtListenerHours(minutes) {
-  const hours = minutes / 60;
-  if (hours >= 1) return `${Math.round(hours * 10) / 10} listener-hour${Math.round(hours * 10) / 10 === 1 ? '' : 's'}`;
-  return `${minutes} listener-minute${minutes === 1 ? '' : 's'}`;
-}
-
 /**
  * The audience cost of one failure, as email table rows.
  *
@@ -907,14 +901,13 @@ function renderAudienceRows(audience, durationMs) {
   }
 
   if (audience.listenerMinutesLost != null) {
-    const lost = audience.listenerMinutesLost;
-    rows.push(row('Listening Lost',
-      lost > 0
-        ? `<span class="val-col" style="color:#f87171 !important; font-weight:700;">${fmtListenerHours(lost)}</span>` +
-          `<br><span class="label-col" style="color:#94a3b8 !important; font-size:11px;">${lost.toLocaleString()} listener-minutes${
-            audience.model === 'hour-of-day'
-              ? ' — projected along this stream’s normal audience curve'
-              : ' — audience × outage length'}</span>`
+    // Listener impact stated as a headcount and a duration only. A derived
+    // "listener-hours" figure was several times larger than the outage that
+    // caused it and carried the word "hours", so it read as days of downtime.
+    rows.push(row('Listener Impact',
+      audience.listenerMinutesLost > 0
+        ? `<span class="val-col" style="color:#f87171 !important; font-weight:700;">${audience.listenersBefore ?? '?'} listener(s) lost audio</span>` +
+          `<br><span class="label-col" style="color:#94a3b8 !important; font-size:11px;">for the ${esc(diagnose.fmtDuration(durationMs || 0))} the stream was off air</span>`
         : `<span class="val-col" style="color:#4ade80 !important; font-weight:600;">None</span>` +
           `<br><span class="label-col" style="color:#94a3b8 !important; font-size:11px;">${esc(audience.basis || 'no listener impact')}</span>`,
     ));
@@ -1073,10 +1066,9 @@ function composeAlert({ kind, entries, scope, consolidated = false, recoveredFro
   // settled loss. Either way it belongs in the subject — that is the part read
   // on a phone screen at 3am, and "≈66 listeners" is what makes it actionable.
   const reach = entries.reduce((a, e) => a + (e.audience?.listenersBefore || 0), 0);
-  const lostMinutes = entries.reduce((a, e) => a + (e.audience?.listenerMinutesLost || 0), 0);
-  const subjectCost = isRecovery
-    ? (lostMinutes > 0 ? ` · ${fmtListenerHours(lostMinutes)} lost` : '')
-    : (reach > 0 ? ` · ≈${reach} listener${reach === 1 ? '' : 's'} affected` : '');
+  const subjectCost = reach > 0
+    ? ` · ${reach} listener${reach === 1 ? '' : 's'} affected`
+    : '';
 
   // Subject leads with the root cause, so the inbox itself is diagnostic.
   let subject;
@@ -1098,9 +1090,9 @@ function composeAlert({ kind, entries, scope, consolidated = false, recoveredFro
     ? ' This affects all KPFT mounts.'
     : '';
 
-  const audienceNote = isRecovery
-    ? (lostMinutes > 0 ? ` ${fmtListenerHours(lostMinutes)} of listening were lost.` : '')
-    : (reach > 0 ? ` Around ${reach} listener${reach === 1 ? ' was' : 's were'} connected when it started.` : '');
+  const audienceNote = reach > 0
+    ? ` ${reach} listener${reach === 1 ? ' was' : 's were'} tuned in${isRecovery ? ' when it started' : ''}.`
+    : '';
 
   const subtitle = isDeadAir
     ? `${nameList} is connected but silent — dead air confirmed across ${SILENCE_FAILURE_THRESHOLD} consecutive probes.${audienceNote}`
@@ -1423,7 +1415,7 @@ function buildWeeklyRoundup(rollup) {
     clean
       ? 'no outages'
       : `${c.significant} significant outage${c.significant === 1 ? '' : 's'}`,
-    a.listenerMinutesLost > 0 ? `${a.listenerHoursLost} listener-hours lost` : null,
+    rollup.downtimeMs ? `${diagnose.fmtDuration(rollup.downtimeMs)} off air` : null,
   ].filter(Boolean);
   const subject = `📊 KPFT Weekly Stream Report — ${rangeLabel}: ${subjectFacts.join(', ')}`;
 
@@ -1436,14 +1428,13 @@ function buildWeeklyRoundup(rollup) {
     // A volume, not a duration — so it is NOT shown with an "h" suffix beside a
     // downtime tile that is one. The share is what makes it legible: "214" means
     // nothing on its own, "2.2% of all listening" is actionable.
-    statCell('Listening Lost',
-      a.listenerMinutesLost ? `${a.listenerHoursLost} listener-hours` : 'None',
-      a.listenerMinutesLost ? '#f87171' : '#4ade80',
-      a.listenerMinutesLost
-        ? `${a.lostSharePercent != null ? `${a.lostSharePercent}% of all listening · ` : ''}${a.listenerHoursDelivered.toLocaleString()} listener-hours delivered`
-        : 'no listener lost audio'),
-    statCell('Listeners Cut Off', a.listenersCutOff ? `≈ ${a.listenersCutOff.toLocaleString()}` : '0',
-      a.listenersCutOff ? '#fbbf24' : '#4ade80', 'summed per incident — repeats count twice'),
+    statCell('Time Listeners Had No Audio',
+      rollup.downtimeMs ? diagnose.fmtDuration(rollup.downtimeMs) : 'None',
+      rollup.downtimeMs ? '#f87171' : '#4ade80',
+      'total across all streams'),
+    statCell('Listening Delivered',
+      a.lostSharePercent != null ? `${Math.round((100 - a.lostSharePercent) * 10) / 10}%` : '—',
+      '#4ade80', 'share of all listening that got through'),
     statCell('Significant Outages', String(c.significant),
       c.significant ? '#f87171' : '#4ade80',
       `over ${diagnose.fmtDuration(rollup.significantThresholdMs)} · ${c.brief} brief interruption(s) besides`),
@@ -1475,7 +1466,7 @@ function buildWeeklyRoundup(rollup) {
         }</span></td>
         <td class="label-col" style="padding:8px; color:#94a3b8 !important; font-size:13px;"><span class="label-col" style="color:#94a3b8 !important;">${s.downtimeMs ? esc(diagnose.fmtDuration(s.downtimeMs)) : '—'}</span></td>
         <td class="label-col" style="padding:8px; color:#94a3b8 !important; font-size:13px;"><span class="label-col" style="color:#94a3b8 !important;">${s.avgListeners ?? '—'}</span></td>
-        <td class="label-col" style="padding:8px; color:${s.listenerMinutesLost ? '#f87171' : '#94a3b8'} !important; font-size:13px;"><span style="color:${s.listenerMinutesLost ? '#f87171' : '#94a3b8'} !important;">${s.listenerMinutesLost ? `${Math.round((s.listenerMinutesLost / 60) * 10) / 10}h` : '—'}</span></td>
+        <td class="label-col" style="padding:8px; color:#94a3b8 !important; font-size:13px;"><span class="label-col" style="color:#94a3b8 !important;">${s.peakListeners ?? '—'}</span></td>
       </tr>`;
   }).join('');
 
@@ -1491,9 +1482,7 @@ function buildWeeklyRoundup(rollup) {
       const when = new Date(e.timestamp).toLocaleString('en-US', {
         timeZone: STATION_TZ, weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit',
       });
-      const cost = e.listenerMinutesLost
-        ? ` — ≈${e.listenersBefore} listener(s) cut off, ${fmtListenerHours(e.listenerMinutesLost)} lost`
-        : '';
+      const cost = e.listenersBefore ? ` — ${e.listenersBefore} listener(s) were tuned in` : '';
       return `<li style="color:#e2e8f0 !important; margin-bottom:6px;"><span style="color:#e2e8f0 !important;"><strong>${esc(e.streamName)}</strong> · ${when} CT · ${esc(e.durationLabel || '—')}${e.causeLabel ? ` · ${esc(e.causeLabel)}` : ''}${cost}${e.emailed ? '' : ' <em>(no alert was emailed)</em>'}</span></li>`;
     }).join('');
 
@@ -1521,7 +1510,7 @@ function buildWeeklyRoundup(rollup) {
         <td class="label-col" style="padding:6px 8px; border-bottom:1px solid #28283d; font-size:11px; text-transform:uppercase; letter-spacing:0.05em;"><span class="label-col" style="color:#94a3b8 !important;">Outages</span></td>
         <td class="label-col" style="padding:6px 8px; border-bottom:1px solid #28283d; font-size:11px; text-transform:uppercase; letter-spacing:0.05em;"><span class="label-col" style="color:#94a3b8 !important;">Downtime</span></td>
         <td class="label-col" style="padding:6px 8px; border-bottom:1px solid #28283d; font-size:11px; text-transform:uppercase; letter-spacing:0.05em;"><span class="label-col" style="color:#94a3b8 !important;">Avg listeners</span></td>
-        <td class="label-col" style="padding:6px 8px; border-bottom:1px solid #28283d; font-size:11px; text-transform:uppercase; letter-spacing:0.05em;"><span class="label-col" style="color:#94a3b8 !important;">Listening lost</span></td>
+        <td class="label-col" style="padding:6px 8px; border-bottom:1px solid #28283d; font-size:11px; text-transform:uppercase; letter-spacing:0.05em;"><span class="label-col" style="color:#94a3b8 !important;">Peak listeners</span></td>
       </tr>
       ${streamRows}
     </table>

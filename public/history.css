@@ -126,7 +126,7 @@ a.help-btn { text-decoration: none; }
 
 .ih-row {
   display: grid;
-  grid-template-columns: 52px minmax(120px, 1.1fr) 72px minmax(140px, 1.4fr) 92px;
+  grid-template-columns: 108px minmax(150px, 1fr) 74px minmax(200px, 1.3fr) 96px;
   gap: 12px;
   align-items: baseline;
   padding: 5px 0;
@@ -134,17 +134,32 @@ a.help-btn { text-decoration: none; }
   color: var(--text-secondary);
 }
 
-.ih-when { color: var(--text-tertiary); font-variant-numeric: tabular-nums; }
+.ih-when { color: var(--text-tertiary); font-variant-numeric: tabular-nums; white-space: nowrap; }
 .ih-streams { color: var(--text-primary); font-weight: 500; }
 .ih-dur { color: var(--text-primary); font-variant-numeric: tabular-nums; }
 .ih-cause { color: var(--text-secondary); }
 .ih-cost {
   text-align: right;
-  color: var(--status-down);
+  color: var(--text-primary);
   font-weight: 600;
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
+
+/* Whose kit failed — the first thing asked when this goes to Pacifica. */
+.ih-fault {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 1px 7px;
+  border-radius: 999px;
+  font-size: 0.68rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+}
+.ih-fault.kpft { background: rgba(245, 158, 11, 0.14); color: #fbbf24; }
+.ih-fault.pacifica { background: rgba(56, 189, 248, 0.14); color: #7dd3fc; }
+.ih-fault.unknown { background: var(--surface-3); color: var(--text-tertiary); }
 
 .ih-rest {
   margin-top: 8px;
@@ -169,6 +184,56 @@ a.help-btn { text-decoration: none; }
   .ih-streams { grid-column: 1 / -1; }
   .ih-dur, .ih-cause { grid-column: 1 / -1; font-size: 0.78rem; }
 }
+
+/* ── Section explainers ────────────────────────────────────────────────────── */
+/* One quiet sentence per section saying what KIND of number is in it. The page
+   mixes headcounts, clock time and person-hours; unlabelled, a reader assumes
+   they share a unit and tries to reconcile figures that cannot be compared. */
+.section-note {
+  max-width: 78ch;
+  margin: -6px 0 14px;
+  font-size: 0.78rem;
+  line-height: 1.6;
+  color: var(--text-tertiary);
+}
+.section-note strong { color: var(--text-secondary); font-weight: 600; }
+
+.ih-note {
+  margin-top: 16px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+  font-size: 0.76rem;
+  line-height: 1.6;
+  color: var(--text-tertiary);
+  max-width: 72ch;
+}
+
+/* ── Audience volume ───────────────────────────────────────────────────────── */
+/* Alone, spelled out, and always beside the total it is a fraction of. */
+.volume-line {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 10px;
+  background: var(--surface-1);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: 18px 22px;
+  margin-bottom: 28px;
+}
+.vl-value {
+  font-size: 1.7rem;
+  font-weight: 700;
+  color: var(--text-primary);
+  font-variant-numeric: tabular-nums;
+}
+.vl-unit { font-size: 0.9rem; font-weight: 600; color: var(--text-secondary); }
+.vl-of { font-size: 0.82rem; color: var(--text-tertiary); }
+.vl-of strong { color: var(--text-secondary); }
+.vl-clean { font-size: 0.9rem; color: var(--status-up); }
+
+.incidents-panel { padding: 16px 20px; }
+.incidents-panel .ih-incidents { margin-top: 0; padding-top: 0; border-top: none; }
 
 /* ── Second-tier stats ─────────────────────────────────────────────────────── */
 /* Monitoring detail, deliberately quieter than the listener-facing tiles above.

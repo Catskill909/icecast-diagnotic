@@ -82,25 +82,39 @@
     <div class="impact-hero fade-in" id="impact-hero">
       <div class="ih-top">
         <div class="ih-main">
-          <div class="ih-label">Listening delivered</div>
+          <div class="ih-label">Listeners who lost audio</div>
           <div class="ih-value" id="ih-value">—</div>
           <div class="ih-sub" id="ih-sub"></div>
         </div>
         <div class="ih-side">
           <div class="ih-stat">
-            <div class="ih-stat-value" id="ih-lost">—</div>
-            <div class="ih-stat-label">listener-hours lost</div>
+            <div class="ih-stat-value" id="ih-incidents-count">—</div>
+            <div class="ih-stat-label">outages that reached listeners</div>
           </div>
           <div class="ih-stat">
-            <div class="ih-stat-value" id="ih-listeners">—</div>
-            <div class="ih-stat-label">listeners cut off</div>
+            <div class="ih-stat-value" id="ih-streams">—</div>
+            <div class="ih-stat-label">streams affected</div>
           </div>
         </div>
       </div>
-      <div class="ih-incidents" id="ih-incidents"></div>
+      <div class="ih-note">
+        People, counted at the moment each outage began. This is a headcount —
+        it is not a length of time, and it does not relate to the hours below.
+      </div>
     </div>
 
-    <!-- Summary tiles -->
+    <!-- SECTION 2 — clock time. Deliberately its own block: a duration and a
+         headcount in the same tile row is what made this page unreadable. -->
+    <div class="section-subhead">
+      <span class="material-symbols-outlined">schedule</span>
+      Stream downtime
+      <span class="section-subhead-note">clock time the streams were off air</span>
+    </div>
+    <div class="section-note">
+      How long each stream was actually silent, on the clock. These are hours of
+      <strong>broadcast time</strong> — nothing here is multiplied by the number of listeners.
+    </div>
+
     <div class="summary-bar fade-in">
       <div class="summary-card">
         <div class="summary-label">Audio Uptime</div>
@@ -108,21 +122,40 @@
         <div class="summary-detail" id="stat-uptime-detail">across all streams</div>
       </div>
       <div class="summary-card">
-        <div class="summary-label">Significant Outages</div>
-        <div class="summary-value down" id="stat-outages">—</div>
-        <div class="summary-detail" id="stat-outages-detail">in range</div>
-      </div>
-      <div class="summary-card">
         <div class="summary-label">Time Off Air</div>
         <div class="summary-value neutral" id="stat-downtime">—</div>
         <div class="summary-detail" id="stat-downtime-detail">at least one stream down</div>
       </div>
       <div class="summary-card">
-        <div class="summary-label">Listening Lost</div>
-        <div class="summary-value down" id="stat-listener-loss">—</div>
-        <div class="summary-detail" id="stat-listener-loss-detail">listening the audience actually lost</div>
+        <div class="summary-label">Significant Outages</div>
+        <div class="summary-value down" id="stat-outages">—</div>
+        <div class="summary-detail" id="stat-outages-detail">in range</div>
+      </div>
+      <div class="summary-card">
+        <div class="summary-label">Brief Interruptions</div>
+        <div class="summary-value neutral" id="stat-brief">—</div>
+        <div class="summary-detail" id="stat-brief-detail">short gaps — players usually rebuffer</div>
       </div>
     </div>
+
+    <div class="panel incidents-panel fade-in" id="incidents-panel">
+      <div class="ih-incidents" id="ih-incidents"></div>
+    </div>
+
+    <!-- SECTION 3 — audience volume. A different kind of number entirely, so
+         it gets its own block and its own explanation, far from any duration. -->
+    <div class="section-subhead">
+      <span class="material-symbols-outlined">headphones</span>
+      Audience volume
+      <span class="section-subhead-note">total listening lost, in person-hours</span>
+    </div>
+    <div class="section-note">
+      A <strong>person-hours</strong> figure, like man-hours: 50 people listening for one hour
+      is 50 listener-hours. It measures how much listening was lost in total, so it is
+      always far larger than the clock time above. <strong>It is not a duration</strong> — the
+      two cannot be compared.
+    </div>
+    <div class="volume-line" id="volume-line"></div>
 
     <!-- Second tier: monitoring detail. These describe the health of the
          MONITOR as much as the streams, and putting them alongside the numbers
@@ -133,11 +166,6 @@
       <span class="section-subhead-note">recorded in full — none of this reached a listener unless noted</span>
     </div>
     <div class="summary-bar summary-bar-minor fade-in">
-      <div class="summary-card">
-        <div class="summary-label">Brief Interruptions</div>
-        <div class="summary-value neutral" id="stat-brief">—</div>
-        <div class="summary-detail" id="stat-brief-detail">short gaps — players usually rebuffer</div>
-      </div>
       <div class="summary-card">
         <div class="summary-label">No Listener Impact</div>
         <div class="summary-value neutral" id="stat-blips">—</div>

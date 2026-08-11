@@ -146,25 +146,27 @@
     if (a.lostSharePercent == null && !a.listenerHoursLost) { hero.style.display = 'none'; return; }
     hero.style.display = 'block';
 
-    const lostShare = a.lostSharePercent ?? 0;
-    const delivered = Math.round((100 - lostShare) * 10) / 10;
-    const clean = !a.listenerMinutesLost;
+    const top = r.topIncidents || [];
+    const peak = a.peakListenersAffected || 0;
+    const clean = !r.counts?.listenerAffecting;
     hero.classList.toggle('clean', clean);
 
-    $('#ih-value').textContent = `${delivered}%`;
-    $('#ih-lost').textContent = a.listenerHoursLost ?? 0;
-    $('#ih-listeners').textContent = a.listenersCutOff ? `≈${a.listenersCutOff.toLocaleString()}` : '0';
-
-    const top = r.topIncidents || [];
-    const concentration = a.listenerMinutesLost && top.length
-      ? Math.round((top.reduce((x, i) => x + i.listenerMinutesLost, 0) / a.listenerMinutesLost) * 100)
-      : 0;
-
+    // PEOPLE ONLY in this block. No duration appears anywhere near it — a
+    // headcount and a clock time formatted alike, side by side, is what made
+    // the whole page unreadable.
+    $('#ih-value').textContent = clean ? 'None' : peak.toLocaleString();
+    $('#ih-incidents-count').textContent = r.counts?.significant ?? 0;
+    $('#ih-streams').textContent = r.counts?.streamsAffected ?? 0;
+    // Attribute the peak to the failure it actually came from — which is rarely
+    // the longest one, because the longest outage often hits a quiet daypart.
     $('#ih-sub').textContent = clean
-      ? 'No listener lost audio in this period.'
-      : `${lostShare}% lost` + (concentration >= 50
-        ? ` — ${concentration}% of it in ${top.length === 1 ? 'a single incident' : `${top.length} incidents`}`
-        : '');
+      ? 'Every stream served audio for the whole period.'
+      : `at the worst single moment${a.peakListenersStream ? ` — ${a.peakListenersStream}` : ''}${
+        a.peakListenersAt
+          ? ` on ${new Date(a.peakListenersAt).toLocaleDateString('en-US', { month: 'long', day: 'numeric' })}`
+          : ''}`;
+
+    renderVolumeLine();
 
     // Name the incidents. This is the part an engineer acts on and the part a
     // manager remembers; a total on its own gives neither of them anything.
@@ -177,15 +179,33 @@
       return;
     }
 
+    // Whose equipment failed. The single most useful fact when this record
+    // goes to Pacifica: an 18-hour HD2 dropout while Icecast served 11 other
+    // mounts is a KPFT studio fault, and calling it "the server was down" is
+    // both wrong and embarrassing.
+    const FAULT = {
+      kpft: { label: 'KPFT equipment', cls: 'kpft' },
+      pacifica: { label: 'Pacifica server', cls: 'pacifica' },
+      unknown: { label: 'cause unclear', cls: 'unknown' },
+    };
+
     const rows = top.map((i) => {
-      const when = new Date(i.timestamp).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+      const when = new Date(i.timestamp).toLocaleString('en-US', {
+        month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit',
+      });
+      const f = FAULT[i.fault] || FAULT.unknown;
+      const heads = i.listenersTunedIn
+        ? `${i.listenersTunedIn} listener${i.listenersTunedIn === 1 ? '' : 's'}`
+        : 'no one listening';
       return `
         <div class="ih-row">
           <span class="ih-when">${esc(when)}</span>
-          <span class="ih-streams">${esc(i.streams.join(' + '))}</span>
+          <span class="ih-streams">${esc(i.streams.join(' + '))} off air</span>
           <span class="ih-dur">${esc(fmtDuration(i.durationMs))}</span>
-          <span class="ih-cause">${esc(i.cause || 'cause not diagnosed')}</span>
-          <span class="ih-cost">${i.listenerHoursLost} l-hrs</span>
+          <span class="ih-cause">${esc(i.cause || 'cause not diagnosed')}
+            <span class="ih-fault ${f.cls}">${esc(f.label)}</span>
+          </span>
+          <span class="ih-cost">${esc(heads)}</span>
         </div>`;
     }).join('');
 
@@ -195,6 +215,37 @@
       : '';
 
     host.innerHTML = rows + rest;
+  }
+
+  /**
+   * Audience volume — kept, but quarantined.
+   *
+   * Listener-hours is a legitimate broadcast measure and the engineer and the
+   * GM may both want it. It is ruinous next to a clock duration: "3h 35m" and
+   * "100.9 l-hrs" in one row invite the reader to treat them as the same unit,
+   * and the second is always the larger. So it lives alone, spelled out in
+   * full, and always beside the total it is a fraction of.
+   */
+  function renderVolumeLine() {
+    const el = $('#volume-line');
+    if (!el || !lastRollup) return;
+
+    const a = lastRollup.audience || {};
+    if (a.listenerHoursLost == null) { el.style.display = 'none'; return; }
+    el.style.display = '';
+
+    if (!a.listenerMinutesLost) {
+      el.innerHTML = '<span class="vl-clean">No listening was lost in this period.</span>';
+      return;
+    }
+
+    const deliveredTotal = (a.listenerHoursDelivered || 0) + a.listenerHoursLost;
+    el.innerHTML =
+      `<span class="vl-value">${a.listenerHoursLost.toLocaleString()}</span>` +
+      `<span class="vl-unit">listener-hours lost</span>` +
+      `<span class="vl-of">out of ${deliveredTotal.toLocaleString()} that would otherwise have been heard` +
+      (a.lostSharePercent != null ? ` — <strong>${a.lostSharePercent}%</strong>` : '') +
+      `</span>`;
   }
 
   // ── Period roundup ──────────────────────────────────────────────────────
@@ -242,11 +293,7 @@
       `${faults} confirmed outage${faults === 1 ? '' : 's'}`,
       s.uptime != null ? `${s.uptime}% uptime` : null,
       s.downtimeMs ? `${fmtDuration(s.downtimeMs)} down` : null,
-      s.listenersCutOff ? `≈${s.listenersCutOff.toLocaleString()} listeners cut off` : null,
-      s.listenerMinutesLost
-        ? `${Math.round((s.listenerMinutesLost / 60) * 10) / 10} listener-hours lost`
-        : null,
-      s.avgListeners != null ? `avg ${s.avgListeners} listening` : null,
+      s.avgListeners != null ? `avg ${s.avgListeners} listeners` : null,
     ].filter(Boolean);
 
     el.style.display = '';
@@ -592,15 +639,15 @@
         const confirmed = o.severity === 'outage' || o.severity === 'dead_air';
         const cls = harmless ? 'harmless' : confirmed ? 'confirmed' : 'brief';
         const bw = Math.max(confirmed ? 2.5 : 1.5, x(Math.min(e, t1)) - bx);
-        const lost = o.audience?.listenerMinutesLost;
+        const heads = o.audience?.listenersBefore;
         const tip =
           `${o.streamName} — ${o.causeLabel || o.severity}\n` +
           `${confirmed ? 'Confirmed outage' : harmless ? 'Probe anomaly' : 'Brief outage'}\n` +
           `${fmtTime(o.start)} · lasted ${o.durationLabel || '—'}` +
           (harmless
             ? '\nNo listener impact — mount kept serving'
-            : lost != null
-            ? `\n~${o.audience.listenersBefore} listener(s) cut off · ${lost} listener-minutes lost`
+            : heads != null
+            ? `\n${heads} listener(s) were tuned in`
             : '');
         parts.push(
           `<rect class="aud-band ${cls}" x="${bx.toFixed(1)}" y="${top}" ` +
@@ -673,7 +720,6 @@
       });
 
       const sum = data.summary?.perStream?.[stream.id];
-      const lostMin = sum?.listenerMinutesLost || 0;
       // State the outage count in words as well as marks. However the ticks
       // cluster, the number itself is never in doubt.
       const nOutages = confirmedMarks.length;
@@ -681,8 +727,7 @@
         `<text class="aud-rowlabel" x="${PAD_L + 8}" y="${top + 15}">${esc(stream.name)}</text>` +
         `<text class="aud-rowmeta" x="${W - PAD_R - 6}" y="${top + 15}" text-anchor="end">` +
         (nOutages ? `${nOutages} outage${nOutages === 1 ? '' : 's'} · ` : '') +
-        `avg ${sum?.avgListeners ?? '—'} · peak ${sum?.peakListeners ?? '—'}` +
-        (lostMin ? ` · ${lostMin} listener-min lost` : '') +
+        `avg ${sum?.avgListeners ?? '—'} · peak ${sum?.peakListeners ?? '—'} listeners` +
         `</text>`,
       );
     });
@@ -713,12 +758,13 @@
     host.innerHTML =
       `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Listeners over time per stream, with outage periods marked">${parts.join('')}</svg>`;
 
-    const sm = data.summary;
     if (hint) {
-      hint.textContent = sm
-        ? `${sm.listenerHoursLost} listener-hours lost` +
-          (sm.eventsMissingAudience ? ` · ${sm.eventsMissingAudience} event(s) not yet measured` : '')
-        : '';
+      // Concurrent listeners, which is what the chart actually plots.
+      const peak = rows.reduce((m, s) => {
+        const p = data.summary?.perStream?.[s.id]?.peakListeners;
+        return p != null ? Math.max(m, p) : m;
+      }, 0);
+      hint.textContent = peak ? `peak ${peak} listeners online` : '';
     }
   }
 
@@ -871,28 +917,8 @@
         : 'stream kept playing throughout';
     }
 
-    // Audience cost is range-wide, not filter-wide: it comes from the events'
-    // frozen audience blocks via the API, so it deliberately ignores the
-    // timeline filters rather than silently reporting a subtotal as a total.
-    const lossEl = $('#stat-listener-loss');
-    const lossDetailEl = $('#stat-listener-loss-detail');
-    if (lossEl && lossDetailEl) {
-      const aud = lastListeners?.summary;
-      const share = lastRollup?.audience;
-      // No "h" suffix: this is a volume (people × time) and the tile beside it
-      // is a duration. Two adjacent numbers both ending in "h", meaning
-      // different things, is what made this one unreadable.
-      lossEl.textContent = aud ? `${aud.listenerHoursLost}` : '—';
-      if (!aud) {
-        lossDetailEl.textContent = 'listening the audience actually lost';
-      } else {
-        const parts = ['listener-hours'];
-        // The denominator is what gives the figure meaning.
-        if (share?.lostSharePercent != null) parts.push(`${share.lostSharePercent}% of all listening`);
-        if (aud.eventsMissingAudience) parts.push(`${aud.eventsMissingAudience} unmeasured`);
-        lossDetailEl.textContent = parts.join(' · ');
-      }
-    }
+    // Listener headcounts live in the hero block above, and audience volume in
+    // its own section below. Neither belongs in this row of clock-time tiles.
     $('#stat-blips').textContent = blips;
     $('#stat-deadair').textContent = deadAir;
     $('#stat-emailed').textContent = emailed;
