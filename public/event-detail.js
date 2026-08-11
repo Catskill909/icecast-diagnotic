@@ -68,6 +68,55 @@
         </div>`);
     }
 
+    // ── Who lost audio ──────────────────────────────────────────────────────
+    // Every report answers this, because it is the first thing anyone asks and
+    // the only part a non-technical reader needs. Stated as a headcount and a
+    // duration; the listener-hours figure follows with the sentence that stops
+    // it being read as clock time.
+    const aud = e.audience;
+    if (e.type !== 'up' && (aud || (d && d.listenerImpact))) {
+      const verdict = (aud && aud.listenerImpact) || (d && d.listenerImpact);
+      const heads = aud && aud.listenersBefore;
+      let headline;
+      let cls;
+      let detail = '';
+
+      if (verdict === 'none') {
+        headline = 'No listeners lost audio';
+        cls = 'good';
+        detail = 'Icecast stayed reachable and kept serving the mount throughout — '
+          + 'our probe failed, the stream did not.';
+      } else if (heads == null) {
+        headline = 'Listener count not measurable';
+        cls = 'warn';
+        detail = 'No audience reading survived for this moment, so the number of '
+          + 'people affected cannot be stated.';
+      } else {
+        headline = `${heads} listener${heads === 1 ? '' : 's'} lost audio`;
+        cls = verdict === 'unknown' ? 'warn' : 'bad';
+        detail = `Tuned in when it began${e.durationLabel ? `, for the ${e.durationLabel} it lasted` : ''}.`;
+        if (verdict === 'unknown') {
+          detail += ' Icecast could not be reached, so this could not be cleared — '
+            + 'it is counted as a real loss rather than assumed harmless.';
+        }
+        if (aud && aud.listenerMinutesLost) {
+          const hrs = Math.round((aud.listenerMinutesLost / 60) * 10) / 10;
+          detail += ` That is ${hrs} listener-hours of listening — the audience multiplied `
+            + 'by how long they were off air, the way man-hours works. It is not a clock duration.';
+        }
+        if (aud && aud.confidence === 'modelled') {
+          detail += ' (Estimated from this hour’s typical audience — no live count survived.)';
+        }
+      }
+
+      grid.push(`
+        <div class="detail-block">
+          <h5>Who lost audio</h5>
+          <p class="impact-headline ${cls}">${esc(headline)}</p>
+          <p class="impact-detail">${esc(detail)}</p>
+        </div>`);
+    }
+
     // ── Technical facts ─────────────────────────────────────────────────────
     const rows = [];
     const push = (k, v, cls) => { if (v != null && v !== '') rows.push(kvRow(k, v, cls)); };
@@ -75,13 +124,20 @@
     push('Occurred', new Date(e.timestamp).toLocaleString('en-US'));
     if (e.resolvedAt) push('Resolved', new Date(e.resolvedAt).toLocaleString('en-US'));
     // The verdict that decides whether this event was worth an email.
-    if (d && d.listenerImpact && e.type !== 'up') {
+    //
+    // The SETTLED verdict, not the one recorded mid-failure. While a stream is
+    // down and Icecast is unreachable the honest answer is 'unknown'; recovery
+    // then settles it by asking Icecast whether the mount actually went away.
+    // Showing the mid-failure guess here left events reading "Unknown" forever
+    // when the record had long since resolved them.
+    const settled = (e.audience && e.audience.listenerImpact) || (d && d.listenerImpact);
+    if (settled && e.type !== 'up') {
       const IMPACT = {
         confirmed: ['Listeners were cut off', 'bad'],
         none: ['None — mount kept serving', 'good'],
         unknown: ['Unknown — Icecast unreachable', 'warn'],
       };
-      const [label, cls] = IMPACT[d.listenerImpact] || [d.listenerImpact, ''];
+      const [label, cls] = IMPACT[settled] || [settled, ''];
       push('Listener impact', label, cls);
     }
     if (e.durationLabel) push('Duration', esc(e.durationLabel), 'warn');

@@ -1345,6 +1345,26 @@ body::before {
 }
 .detail-block ol { margin: 0; padding-left: 17px; }
 
+/* "Who lost audio" — the answer every incident report has to carry, stated as a
+   headcount so it can never be mistaken for a length of time. */
+.impact-headline {
+  margin: 0 0 6px 0;
+  font-size: 1.05rem;
+  font-weight: 700;
+  line-height: 1.3;
+  color: var(--text-primary);
+}
+.impact-headline.good { color: var(--status-up); }
+.impact-headline.bad { color: var(--status-down); }
+.impact-headline.warn { color: var(--warn, #f59e0b); }
+
+.impact-detail {
+  margin: 0;
+  font-size: 0.8rem;
+  line-height: 1.6;
+  color: var(--text-secondary);
+}
+
 .kv { display: flex; flex-direction: column; gap: 6px; }
 .kv-row {
   display: flex;
