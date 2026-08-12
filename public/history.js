@@ -87,7 +87,6 @@
     syncRangePills();
     renderOverviewRange();
     renderImpactHero();
-    renderRoundup();
     renderAudience();
     renderHeatmap();
     renderCauses();
@@ -168,17 +167,16 @@
     const clean = !r.counts?.listenerAffecting;
     hero.classList.toggle('clean', clean);
 
-    // PEOPLE ONLY in this block. No duration appears anywhere near it — a
-    // headcount and a clock time formatted alike, side by side, is what made
-    // the whole page unreadable.
-    //
-    // The headline is the PERIOD TOTAL, not the worst moment: "how many
-    // listeners did we lose" is the station's question, and answering it with a
-    // single instant's peak buries it.
+    // Lead with proportion, not an unqualified large count. Listener-hours
+    // naturally grows with both audience and duration, so the share delivered
+    // is the only top-line number whose scale is immediately legible.
     const cutOff = a.listenersCutOff || 0;
-    $('#ih-value').textContent = clean ? 'None' : cutOff.toLocaleString();
+    const deliveredPct = a.lostSharePercent == null
+      ? null
+      : Math.round((100 - a.lostSharePercent) * 10) / 10;
+    $('#ih-value').textContent = deliveredPct == null ? '—' : `${deliveredPct}%`;
     $('#ih-peak').textContent = peak ? peak.toLocaleString() : '—';
-    $('#ih-incidents-count').textContent = r.counts?.significant ?? 0;
+    $('#ih-incidents-count').textContent = r.counts?.listenerAffecting ?? 0;
     $('#ih-streams').textContent = r.counts?.streamsAffected ?? 0;
 
     // Say what window this really covers. A "Last 30 days" pill over a monitor
@@ -190,43 +188,22 @@
       ? `in the ${covDays < 10 ? covDays.toFixed(1) : Math.round(covDays)} days monitored so far`
       : 'in this period';
     $('#ih-sub').textContent = clean
-      ? 'Every stream served audio for the whole period.'
-      : `${window} — across ${r.counts?.listenerAffecting ?? 0} interruption${
-        r.counts?.listenerAffecting === 1 ? '' : 's'}`;
+      ? `No estimated listening was lost ${window}.`
+      : `${window}; ${a.lostSharePercent}% of possible listening was lost.`;
 
     // SUBHEADLINE — the same loss as listening time. Directly under the
-    // headline because it is the second thing a manager asks, and carrying the
-    // sentence that stops it being read as clock hours.
+    // headline because it is the second thing a manager asks; the definition
+    // now sits in the compact info popover beside the headline.
     const sec = $('#ih-secondary');
     if (sec) {
-      if (!a.listenerMinutesLost) {
-        sec.innerHTML = '';
-      } else {
-        const total = (a.listenerHoursDelivered || 0) + a.listenerHoursLost;
-        sec.innerHTML =
-          `<span class="ihs-value">${a.listenerHoursLost.toLocaleString()} listener-hours</span>` +
-          `<span class="ihs-text"> of listening lost` +
-          (a.lostSharePercent != null
-            ? ` — ${a.lostSharePercent}% of the ${total.toLocaleString()} hours the audience would otherwise have heard`
-            : '') + `</span>`;
-      }
+      sec.innerHTML = clean
+        ? '<span class="ihs-text">No listener interruptions were recorded.</span>'
+        : `<span class="ihs-value">${cutOff.toLocaleString()} listener interruptions</span>` +
+          `<span class="ihs-text"> recorded — this is not a unique-person count; the same listener is counted again if a later outage interrupts them.</span>`;
     }
 
-    const note = $('#ih-note');
-    if (note) {
-      // Both caveats, stated plainly rather than hidden: what the headcount
-      // double-counts, and what a listener-hour actually is.
-      note.innerHTML =
-        '<strong>Listeners cut off</strong> is a headcount taken as each outage began — someone '
-        + 'cut off by two separate outages counts twice. '
-        + '<strong>Listener-hours</strong> is that audience multiplied by how long they were off '
-        + 'air, the way man-hours works: 50 people for one hour is 50 listener-hours. It is not a '
-        + 'clock duration and cannot be compared with the times below.';
-    }
-
+    renderMetricReconciliation();
     renderFaultSplit();
-
-    renderVolumeLine();
 
     // Name the incidents. This is the part an engineer acts on and the part a
     // manager remembers; a total on its own gives neither of them anything.
@@ -239,13 +216,12 @@
       return;
     }
 
-    // Whose equipment failed. The single most useful fact when this record
-    // goes to Pacifica: an 18-hour HD2 dropout while Icecast served 11 other
-    // mounts is a KPFT studio fault, and calling it "the server was down" is
-    // both wrong and embarrassing.
+    // Which side of the handoff the evidence points to. Reachability identifies
+    // a path, not a particular physical device, so the labels stay deliberately
+    // narrower than "equipment failed" or "server failed".
     const FAULT = {
-      kpft: { label: 'KPFT equipment', cls: 'kpft' },
-      pacifica: { label: 'Pacifica server', cls: 'pacifica' },
+      kpft: { label: 'KPFT source/feed path', cls: 'kpft' },
+      pacifica: { label: 'Pacifica/Icecast path', cls: 'pacifica' },
       unknown: { label: 'cause unclear', cls: 'unknown' },
     };
 
@@ -314,9 +290,30 @@
       // the difference has to be visible rather than look like an error.
       const sigCount = r.counts?.significant ?? top.length;
       countNote.textContent = sigCount === top.length
-        ? `all ${top.length} outage${top.length === 1 ? '' : 's'} that cut listeners off, longest first`
-        : `all ${sigCount} outages that cut listeners off — ${top.length} incidents, as some hit two streams at once`;
+        ? `all ${top.length} sustained incident${top.length === 1 ? '' : 's'}, longest first`
+        : `${sigCount} sustained stream records grouped into ${top.length} incidents; some hit two streams at once`;
     }
+  }
+
+  /** Put the unit and counting rule directly beside each large duration. */
+  function renderMetricReconciliation() {
+    const el = $('#metric-reconciliation');
+    if (!el || !lastRollup) return;
+    const r = lastRollup;
+    const a = r.audience || {};
+    $('#stat-downtime').textContent = fmtDuration(r.downtime?.wallClockMs || 0);
+    $('#stat-streamtime').textContent = fmtDuration(r.downtime?.streamMs || 0);
+    $('#mr-listener-hours').textContent = `${(a.listenerHoursLost || 0).toLocaleString()} listener-hours`;
+
+    const sig = r.counts?.significant || 0;
+    const brief = r.counts?.brief || 0;
+    const total = r.counts?.listenerAffecting || 0;
+    $('#mr-equation').innerHTML =
+      `<strong id="stat-outages">${total}</strong> ` +
+      `<span id="stat-outages-detail">stream interruption record${total === 1 ? '' : 's'}` +
+      ` = ${sig} sustained (${fmtDuration(r.significantThresholdMs || 300000)} or longer)` +
+      ` + ${brief} brief (under ${fmtDuration(r.significantThresholdMs || 300000)}). ` +
+      `These are per-stream records, so one incident affecting two streams creates two records.</span>`;
   }
 
   /**
@@ -360,22 +357,30 @@
   }
 
   /**
-   * Who has to fix it.
+   * Who has to act.
    *
    * The block a station manager forwards and an engineer acts on. Icecast's own
-   * reachability at the moment of failure is what separates a KPFT studio fault
-   * from a Pacifica server fault — a distinction no aggregate downtime figure
-   * can make, and the one thing that stops "we were down 19 hours" landing on
-   * the wrong desk.
+   * reachability at the moment of failure separates the station source/feed
+   * path from the Pacifica/Icecast path. It does not prove which physical box
+   * failed, so the evidence and the owner are stated separately.
    */
   function renderFaultSplit() {
     const host = $('#fault-split');
     if (!host || !lastRollup) return;
 
     const META = {
-      kpft: { label: 'KPFT equipment', sub: 'our studio encoder or mount — Icecast was up', cls: 'kpft' },
-      pacifica: { label: 'Pacifica server', sub: 'Icecast itself could not be reached', cls: 'pacifica' },
-      unknown: { label: 'Cause unclear', sub: 'not enough evidence to attribute', cls: 'unknown' },
+      kpft: {
+        label: 'KPFT source/feed path', owner: 'Station / local feed owner', cls: 'kpft',
+        sub: 'Evidence: Icecast answered, but the monitored source or mount was absent. This identifies the station-to-Icecast feed path, not a specific device.',
+      },
+      pacifica: {
+        label: 'Pacifica/Icecast path', owner: 'Pacifica / platform engineer', cls: 'pacifica',
+        sub: 'Evidence: the monitor could not reach Icecast. Check the server and its network, DNS, and TLS path; reachability alone does not isolate the component.',
+      },
+      unknown: {
+        label: 'Path unclear', owner: 'Joint investigation', cls: 'unknown',
+        sub: 'The recorded evidence is not sufficient to assign the handoff.',
+      },
     };
 
     const split = lastRollup.faultSplit || [];
@@ -386,105 +391,33 @@
 
     host.innerHTML = split.map((s) => {
       const m = META[s.side] || META.unknown;
+      const recordCount = s.streamRecords ?? s.outages;
       return `
         <div class="fs-card ${m.cls}">
           <div class="fs-head">
             <span class="fs-dot"></span>
             <span class="fs-label">${esc(m.label)}</span>
+            <span class="fs-owner">${esc(m.owner)}</span>
           </div>
-          <div class="fs-time">${esc(fmtDuration(s.wallClockMs))}</div>
-          <div class="fs-time-label">off air</div>
+          <div class="fs-time">${recordCount} of ${lastRollup.counts?.listenerAffecting || recordCount}</div>
+          <div class="fs-time-label">listener-impacting stream records</div>
           <div class="fs-facts">
-            <span><strong>${s.outages}</strong> outage${s.outages === 1 ? '' : 's'}</span>
-            <span><strong>${s.listenersCutOff.toLocaleString()}</strong> listeners cut off</span>
+            <span><strong>${esc(fmtDuration(s.wallClockMs))}</strong> elapsed category window</span>
+            <span><strong>${s.listenersCutOff.toLocaleString()}</strong> listener interruptions</span>
             <span>longest <strong>${esc(fmtDuration(s.longestMs))}</strong></span>
           </div>
           <div class="fs-sub">${esc(m.sub)}</div>
         </div>`;
     }).join('');
-  }
 
-  /**
-   * Audience volume — kept, but quarantined.
-   *
-   * Listener-hours is a legitimate broadcast measure and the engineer and the
-   * GM may both want it. It is ruinous next to a clock duration: "3h 35m" and
-   * "100.9 l-hrs" in one row invite the reader to treat them as the same unit,
-   * and the second is always the larger. So it lives alone, spelled out in
-   * full, and always beside the total it is a fraction of.
-   */
-  function renderVolumeLine() {
-    const el = $('#volume-line');
-    if (!el || !lastRollup) return;
-
-    const a = lastRollup.audience || {};
-    if (a.listenerHoursLost == null) { el.style.display = 'none'; return; }
-    el.style.display = '';
-
-    if (!a.listenerMinutesLost) {
-      el.innerHTML = '<span class="vl-clean">No listening was lost in this period.</span>';
-      return;
+    const categoryMs = split.reduce((sum, s) => sum + (s.wallClockMs || 0), 0);
+    const overlapMs = Math.max(0, categoryMs - (lastRollup.downtime?.wallClockMs || 0));
+    if (overlapMs > 0) {
+      host.insertAdjacentHTML('beforeend',
+        `<div class="fs-overlap-note"><strong>Do not add the category hours.</strong> ` +
+        `${esc(fmtDuration(overlapMs))} occurred while more than one path category was failing at the same time; ` +
+        `the overall elapsed off-air window remains ${esc(fmtDuration(lastRollup.downtime.wallClockMs))}.</div>`);
     }
-
-    const deliveredTotal = (a.listenerHoursDelivered || 0) + a.listenerHoursLost;
-    el.innerHTML =
-      `<span class="vl-value">${a.listenerHoursLost.toLocaleString()}</span>` +
-      `<span class="vl-unit">listener-hours lost</span>` +
-      `<span class="vl-of">out of ${deliveredTotal.toLocaleString()} that would otherwise have been heard` +
-      (a.lostSharePercent != null ? ` — <strong>${a.lostSharePercent}%</strong>` : '') +
-      `</span>`;
-  }
-
-  // ── Period roundup ──────────────────────────────────────────────────────
-  /**
-   * The period in one sentence, above the tiles that break it down.
-   *
-   * The sentence itself is composed SERVER-side and used verbatim — the weekly
-   * roundup email sends the same string, so the dashboard and the inbox cannot
-   * describe the same week differently. This function only decides how it looks.
-   *
-   * It describes the selected PERIOD, not the filtered timeline: the audience
-   * cost comes from each event's frozen impact block and is a whole-period
-   * figure, so quietly restating it as a subtotal whenever a filter is on would
-   * make it a different number with the same label. When a stream is selected,
-   * that stream's own figures are added on their own line instead.
-   */
-  function renderRoundup() {
-    const wrap = $('#overview-summary');
-    if (!wrap) return;
-
-    const r = lastRollup;
-    if (!r || !r.narrative) { wrap.style.display = 'none'; return; }
-
-    const clean = r.counts.outages === 0 && r.counts.deadAir === 0;
-    wrap.style.display = 'flex';
-    wrap.classList.toggle('clean', clean);
-    $('#os-icon').innerHTML =
-      `<span class="material-symbols-outlined">${clean ? 'check_circle' : 'summarize'}</span>`;
-    $('#os-headline').textContent = `${r.narrative.period} — ${r.narrative.headline}`;
-    $('#os-detail').textContent = r.narrative.detail;
-    renderRoundupScope();
-  }
-
-  /** Per-stream figures, shown only while a stream filter is narrowing the view. */
-  function renderRoundupScope() {
-    const el = $('#os-scope');
-    if (!el || !lastRollup) return;
-
-    const streamId = $('#f-stream').value;
-    const s = streamId && lastRollup.perStream.find((x) => x.id === streamId);
-    if (!s) { el.style.display = 'none'; return; }
-
-    const faults = s.outages + s.deadAir;
-    const bits = [
-      `${faults} confirmed outage${faults === 1 ? '' : 's'}`,
-      s.uptime != null ? `${s.uptime}% uptime` : null,
-      s.downtimeMs ? `${fmtDuration(s.downtimeMs)} down` : null,
-      s.avgListeners != null ? `avg ${s.avgListeners} listeners` : null,
-    ].filter(Boolean);
-
-    el.style.display = '';
-    el.textContent = `${s.name} alone: ${bits.join(' · ')}`;
   }
 
   // ── Uptime tile ─────────────────────────────────────────────────────────
@@ -496,37 +429,31 @@
 
   /**
    * Reads from the last fetch rather than taking arguments, so it can be
-   * re-run whenever the stream filter changes without another round trip —
-   * otherwise this tile would keep reporting every stream while its five
-   * neighbours narrowed to one.
+   * re-run after data refresh. Timeline filters never rewrite Overview totals;
+   * only the range control above the section governs this figure.
    */
   function renderUptimeStat() {
     const valueEl = $('#stat-uptime');
     const detailEl = $('#stat-uptime-detail');
     if (!valueEl || !detailEl) return;
 
-    const streamId = $('#f-stream').value;
-    // Audio uptime — probe-only failures are not charged to the station. The
-    // rollup carries it per stream, so a stream filter narrows it without
-    // falling back to the sample-based figure and silently changing meaning.
-    const perStream = streamId ? lastRollup?.perStream?.find((s) => s.id === streamId) : null;
-    const percent = streamId ? perStream?.uptime : lastRollup?.uptime ?? lastUptime?.uptime;
-    const scope = streamId
-      ? (streams.find((s) => s.id === streamId)?.name || streamId)
-      : 'across all streams';
+    // Audio uptime — probe-only failures are not charged to the station.
+    const streamId = null;
+    const percent = lastRollup?.uptime ?? lastUptime?.uptime;
+    const scope = 'all monitored stream-time combined';
 
     if (percent == null) {
       valueEl.textContent = '—';
-      valueEl.className = 'summary-value neutral';
+      valueEl.className = 'mr-value neutral';
       detailEl.textContent = !streamId && !lastUptime
         ? 'Uptime unavailable'
         : 'Collecting data — check back soon';
-      detailEl.className = 'summary-detail partial';
+      detailEl.className = 'mr-note partial';
       return;
     }
 
     valueEl.textContent = `${percent}%`;
-    valueEl.className = percent >= 99 ? 'summary-value up' : percent >= 95 ? 'summary-value neutral' : 'summary-value down';
+    valueEl.className = percent >= 99 ? 'mr-value up' : percent >= 95 ? 'mr-value neutral' : 'mr-value down';
 
     // Coverage is a property of the monitor's lifetime, not of the selected
     // stream, so the shortfall warning applies either way.
@@ -537,10 +464,10 @@
     const basis = `${scope} · excludes probe-only failures`;
     if (partial) {
       detailEl.textContent = `${basis} · partial, only ${coverageLabel(lastUptime.coverageDays)} collected`;
-      detailEl.className = 'summary-detail partial';
+      detailEl.className = 'mr-note partial';
     } else {
       detailEl.textContent = basis;
-      detailEl.className = 'summary-detail';
+      detailEl.className = 'mr-note';
     }
   }
 
@@ -569,9 +496,10 @@
     const s = stats.storage || {};
     const kb = (n) => (n > 1048576 ? `${(n / 1048576).toFixed(1)} MB` : `${Math.round(n / 1024)} KB`);
     $('#storage-text').textContent = `${s.eventCount || 0} events · ${kb((s.eventsBytes || 0) + (s.samplesBytes || 0))}`;
+    const atLimit = s.maxEvents && s.eventCount >= s.maxEvents;
     $('#retention-note').textContent = s.oldestEvent
-      ? `Permanent record since ${new Date(s.oldestEvent).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}`
-      : 'Complete permanent record';
+      ? `${atLimit ? `Newest ${s.maxEvents.toLocaleString()} events` : 'Long-term record'} since ${new Date(s.oldestEvent).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}`
+      : 'Complete long-term record';
   }
 
   // ── Heatmap ─────────────────────────────────────────────────────────────
@@ -616,15 +544,21 @@
     for (let d = new Date(start); d <= end; d.setDate(d.getDate() + 1)) {
       const key = toLocalKey(d);
       const bucket = byDay.get(key);
-      const score = bucket ? bucket.outages * 3 + bucket.deadAir * 3 + bucket.blips : 0;
-      const level = score === 0 ? 0 : score <= 2 ? 1 : score <= 5 ? 2 : score <= 10 ? 3 : 4;
-      const cls = score === 0 ? 'empty' : `l${level}`;
+      const impactMs = bucket?.impactMs || 0;
+      const level = impactMs === 0 ? 0
+        : impactMs < 5 * 60000 ? 1
+        : impactMs < 60 * 60000 ? 2
+        : impactMs < 6 * 60 * 60000 ? 3 : 4;
+      const cls = impactMs === 0 ? 'empty' : `l${level}`;
       const selected = dayFilter === key ? ' selected' : '';
-      const label = bucket
-        ? `${key}: ${bucket.outages} outage(s), ${bucket.blips} blip(s), ${bucket.deadAir} dead air, ${bucket.recoveries} recovery`
-        : `${key}: no events`;
+      const streamExtra = bucket?.streamMs > impactMs
+        ? `; ${fmtDuration(bucket.streamMs)} summed across streams`
+        : '';
+      const label = impactMs
+        ? `${key}: ${fmtDuration(impactMs)} elapsed off-air time${streamExtra}; ${bucket.impactStarts || 0} interruption(s) began`
+        : `${key}: no listener-impacting off-air time`;
       cells.push(
-        `<div class="hm-cell ${cls}${selected}" data-day="${key}" title="${esc(label)}"></div>`,
+        `<div class="hm-cell ${cls}${selected}"${impactMs ? ` data-day="${key}"` : ''} title="${esc(label)}"></div>`,
       );
     }
 
@@ -702,7 +636,7 @@
       if (cause && e.diagnosis?.cause !== cause) return false;
       if (email === 'true' && e.email?.sent !== true) return false;
       if (email === 'false' && e.email?.sent === true) return false;
-      if (dayFilter && toLocalKey(new Date(e.timestamp)) !== dayFilter) return false;
+      if (dayFilter && !eventOverlapsDay(e, dayFilter)) return false;
       if (search) {
         const hay = [
           e.message, e.streamName, e.diagnosis?.causeLabel,
@@ -715,7 +649,6 @@
     });
 
     renderUptimeStat();
-    renderRoundupScope();
     renderSummary();
     renderActiveFilterNote();
 
@@ -1020,13 +953,18 @@
 
   function renderSummary() {
     const UNCONFIRMED = new Set(['brief_outage', 'probe_error', 'blip']);
+    // Overview figures are governed only by the range control above them. The
+    // filters belong to the Event Timeline below; silently letting a cause or
+    // search filter rewrite these totals makes them disagree with the visible
+    // reconciliation block.
+    const summaryEvents = allEvents;
     // Headline counts group by what the AUDIENCE experienced, not by whether a
     // failure lasted long enough to pass our confirmation threshold. Those two
     // groupings disagree in both directions — short failures that really did
     // drop the mount, and confirmed outages Icecast proved were harmless — so
     // counting by severity put real outages under a heading the station reads
     // as "ignore me".
-    const failures = filtered.filter((e) => e.type !== 'up');
+    const failures = summaryEvents.filter((e) => e.type !== 'up');
     const felt = failures.filter(costListeners);
     const unfelt = failures.filter((e) => !costListeners(e));
     // Sustained enough that the audience is gone, vs a gap the player rode out.
@@ -1036,31 +974,30 @@
     const sigMs = lastRollup?.significantThresholdMs ?? 5 * 60 * 1000;
     const significant = felt.filter((e) => (e.durationMs || 0) >= sigMs);
     const briefFelt = felt.filter((e) => (e.durationMs || 0) < sigMs);
-    const outages = significant.length;
     const blips = unfelt.length;
-    const deadAir = filtered.filter((e) => e.severity === 'dead_air').length;
+    const deadAir = summaryEvents.filter((e) => e.severity === 'dead_air').length;
 
     // Events that could plausibly notify. An event that DID email always
     // counts, whatever its severity — the retired server-blip rule emailed
     // unconfirmed events, and excluding them produced a denominator smaller
     // than its own numerator ("54 of 36 notifiable").
-    const notifiable = filtered.filter(
+    const notifiable = summaryEvents.filter(
       (e) => !UNCONFIRMED.has(e.severity) || e.email?.sent === true,
     );
-    const emailed = filtered.filter((e) => e.email?.sent === true).length;
+    const emailed = summaryEvents.filter((e) => e.email?.sent === true).length;
     // An outage the monitor deliberately declined to email — Icecast proved the
     // mount kept serving — has a known outcome and must not be counted below as
     // one whose delivery is unknown.
     const isSuppressed = (e) => typeof e.email?.reason === 'string'
       && e.email.reason.startsWith('suppressed');
-    const suppressed = filtered.filter(isSuppressed).length;
+    const suppressed = summaryEvents.filter(isSuppressed).length;
     // Backfilled events predate delivery tracking: an alert may well have gone
     // out, we simply have no record of it. Lumping them in with genuine
     // non-delivery reads as an alerting failure that never happened.
     const untracked = notifiable.filter((e) => e.email?.sent == null && !isSuppressed(e)).length;
     // Delivery we know happened but never logged live — flagged so the tile
     // never passes reconstruction off as a measured send.
-    const reconstructedSends = filtered.filter(
+    const reconstructedSends = summaryEvents.filter(
       (e) => e.email?.sent === true && e.email?.deliveryReconstructed,
     ).length;
 
@@ -1071,29 +1008,17 @@
     // and still serving the mount, so counting them as downtime contradicts a
     // verdict we already reached about them.
     //
-    // Computed here from the FILTERED events rather than read from the rollup,
-    // so the tile still answers for whatever the timeline is showing. The store
-    // runs the same merge for the roundup email.
+    // Computed from every event in the selected period. Timeline filters below
+    // do not change these Overview totals. The store runs the same merge for
+    // the roundup email.
     const downEvents = felt.filter((e) => e.durationMs);
     const streamDowntimeMs = downEvents.reduce((a, e) => a + e.durationMs, 0);
     const downtimeMs = mergeIntervals(downEvents);
 
-    $('#stat-outages').textContent = outages;
-    // Say how many streams it touched, not how many rows are in the table —
-    // "177 events in view" invited reading the whole log as damage.
-    const streamsHit = new Set(significant.map((e) => e.streamId)).size;
-    $('#stat-outages-detail').textContent = outages
-      ? `over ${fmtDuration(sigMs)} · ${streamsHit} stream${streamsHit === 1 ? '' : 's'} affected`
-      : 'no sustained loss of audience';
-
-    const briefEl = $('#stat-brief');
-    if (briefEl) {
-      briefEl.textContent = briefFelt.length;
-      const longest = briefFelt.reduce((a, e) => Math.max(a, e.durationMs || 0), 0);
-      $('#stat-brief-detail').textContent = briefFelt.length
-        ? `under ${fmtDuration(sigMs)} · longest ${fmtDuration(longest)}`
-        : 'short gaps — players usually rebuffer';
-    }
+    $('#stat-outages').textContent = felt.length;
+    $('#stat-outages-detail').textContent = felt.length
+      ? `stream interruption records = ${significant.length} sustained (${fmtDuration(sigMs)}+) + ${briefFelt.length} brief. One incident affecting two streams creates two records.`
+      : 'stream interruption records; no listener-impacting failures in this period.';
 
     const blipsDetail = $('#stat-blips-detail');
     if (blipsDetail) {
@@ -1111,8 +1036,8 @@
     // This tile counts a DIFFERENT population from every other one on the page:
     // outage alerts AND their "back online" counterparts. Unstated, 92 sitting
     // beside "9 outages" reads as impossible. So it says which is which.
-    const downAlerts = filtered.filter((e) => e.email?.sent === true && e.type !== 'up').length;
-    const upAlerts = filtered.filter((e) => e.email?.sent === true && e.type === 'up').length;
+    const downAlerts = summaryEvents.filter((e) => e.email?.sent === true && e.type !== 'up').length;
+    const upAlerts = summaryEvents.filter((e) => e.email?.sent === true && e.type === 'up').length;
     $('#stat-emailed').textContent = emailed;
     let emailedDetail = upAlerts
       ? `${downAlerts} outage + ${upAlerts} all-clear`
@@ -1123,7 +1048,7 @@
     // bug, so when they differ this says which is which. Only while the view is
     // unfiltered — the rollup describes the whole period, not a subset.
     const messages = lastRollup?.alerts?.messages;
-    if (messages != null && messages !== emailed && filtered.length === allEvents.length) {
+    if (messages != null && messages !== emailed) {
       emailedDetail += ` · ${messages} email${messages === 1 ? '' : 's'} sent`;
     }
     if (suppressed) emailedDetail += ` · ${suppressed} suppressed as harmless`;
@@ -1134,19 +1059,24 @@
       ? 'summary-detail partial'
       : 'summary-detail';
     $('#stat-downtime').textContent = downtimeMs ? fmtDuration(downtimeMs) : '0s';
+    const streamTimeEl = $('#stat-streamtime');
+    const streamTimeDetail = $('#stat-streamtime-detail');
+    if (streamTimeEl) streamTimeEl.textContent = streamDowntimeMs ? fmtDuration(streamDowntimeMs) : '0s';
+    if (streamTimeDetail) {
+      streamTimeDetail.textContent = streamDowntimeMs > downtimeMs
+        ? `each affected stream counted separately · ${fmtDuration(streamDowntimeMs - downtimeMs)} more than elapsed because streams overlapped`
+        : 'each affected stream counted separately';
+    }
     const dtDetail = $('#stat-downtime-detail');
     if (dtDetail) {
       // Say what is down. Narrowed to one stream, "at least one stream" is a
       // strange way to describe the only stream in view.
-      const selId = $('#f-stream').value;
-      const subject = selId
-        ? `${streams.find((s) => s.id === selId)?.name || 'this stream'} down`
-        : 'at least one stream down';
+      const subject = 'at least one monitored stream down';
       // Name the difference rather than hiding it. One server fault that took
       // two streams down for 3h35m each is 3h35m off air, not 7h10m.
       dtDetail.textContent = streamDowntimeMs > downtimeMs
-        ? `${subject} · ${fmtDuration(streamDowntimeMs)} summed across streams`
-        : subject;
+        ? `${subject} · simultaneous outages merged and counted once`
+        : `${subject} · elapsed clock time`;
     }
 
     $('#timeline-count').textContent =
@@ -1307,6 +1237,22 @@
 
   // ── Controls ────────────────────────────────────────────────────────────
   function wireControls() {
+    const infoPopovers = [...document.querySelectorAll('.info-popover')];
+    infoPopovers.forEach((popover) => {
+      popover.addEventListener('toggle', () => {
+        if (!popover.open) return;
+        infoPopovers.forEach((other) => { if (other !== popover) other.open = false; });
+      });
+    });
+    document.addEventListener('click', (event) => {
+      if (event.target.closest('.info-popover')) return;
+      infoPopovers.forEach((popover) => { popover.open = false; });
+    });
+    document.addEventListener('keydown', (event) => {
+      if (event.key !== 'Escape') return;
+      infoPopovers.forEach((popover) => { popover.open = false; });
+    });
+
     $('#f-range').onchange = () => { dayFilter = null; reload(); };
 
     document.querySelectorAll('#history-range-pills .range-pill').forEach((btn) => {
@@ -1360,6 +1306,23 @@
     const m = String(d.getMonth() + 1).padStart(2, '0');
     const day = String(d.getDate()).padStart(2, '0');
     return `${y}-${m}-${day}`;
+  }
+
+  /** A selected duration cell shows every event whose interval touched it. */
+  function eventOverlapsDay(e, day) {
+    const bucket = (stats?.daily || []).find((b) => b.day === day);
+    const dayStart = bucket?.start
+      ? new Date(bucket.start).getTime()
+      : new Date(`${day}T00:00:00`).getTime();
+    const dayEnd = bucket?.end
+      ? new Date(bucket.end).getTime()
+      : new Date(`${day}T24:00:00`).getTime();
+    const eventStart = new Date(e.timestamp).getTime();
+    if (!isFinite(eventStart)) return false;
+    const eventEnd = e.type !== 'up' && e.durationMs
+      ? eventStart + e.durationMs
+      : eventStart + 1;
+    return eventStart < dayEnd && eventEnd > dayStart;
   }
 
   function fmtDay(iso) {

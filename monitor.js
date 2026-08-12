@@ -3,7 +3,7 @@
    ───────────────────────────────────────────────────────────────────────────
    EVENT MODEL
 
-   Every failed check is recorded, permanently. Notification is decoupled from
+   Every failed check enters the long-term record. Notification is decoupled from
    recording, which is what fixes the old behaviour where an isolated failure
    painted a red mark on the dashboard but left no trace anywhere else.
 
@@ -173,7 +173,7 @@ function init() {
 
   console.log(`[Monitor] Initialized with ${streams.length} streams`);
   console.log(`[Monitor] Check interval: ${CHECK_INTERVAL}ms, Failure threshold: ${FAILURE_THRESHOLD}`);
-  console.log(`[Monitor] Retention: events forever, raw samples ${store.SAMPLE_RETENTION_DAYS}d then hourly rollups`);
+  console.log(`[Monitor] Retention: newest ${store.MAX_EVENTS} events, raw samples ${store.SAMPLE_RETENTION_DAYS}d then hourly rollups`);
 }
 
 // ── SMTP Setup ──────────────────────────────────────────────────────────────
@@ -573,7 +573,7 @@ async function runChecks() {
         // Freeze the audience cost now. Raw samples expire after a week and
         // Icecast reports no listeners for a mount that no longer exists, so
         // this figure is unrecoverable once the window closes — but the event
-        // itself is kept forever.
+        // itself remains in the long-term event record.
         const audience = store.buildAudienceImpact(
           stream.id, episode.startedAt, durationMs, settledImpact,
         );
@@ -1281,7 +1281,7 @@ function getOverallUptime(windowMs) { return store.getOverallUptime(streams.map(
 /** Uptime as the audience experienced it — probe-only failures excluded. */
 function getAudioUptime(windowMs) { return store.getAudioUptime(streams.map((s) => s.id), windowMs); }
 function getCoverageStart() { return store.getCoverageStart(streams.map((s) => s.id)); }
-function getDailyBuckets(days) { return store.getDailyBuckets(days); }
+function getDailyBuckets(days) { return store.getDailyBuckets(days, STATION_TZ); }
 function getCauseBreakdown(windowMs) { return store.getCauseBreakdown(windowMs); }
 function getStorageInfo() { return store.getStorageInfo(); }
 function getSnapshot() { return snapshot; }
@@ -1304,7 +1304,8 @@ function getConfig() {
       lastSent: store.getMeta('lastWeeklyRoundup')?.sentAt || null,
     },
     sampleRetentionDays: store.SAMPLE_RETENTION_DAYS,
-    eventRetention: 'permanent',
+    eventRetention: 'not-pruned-by-age',
+    maxEvents: store.MAX_EVENTS,
     streams: streams.map((s) => ({ id: s.id, name: s.name })),
   };
 }
@@ -1323,7 +1324,7 @@ async function sendTestAlert(toEmail) {
       <ul class="callout-text" style="margin: 0; padding-left: 20px; color: #e2e8f0 !important; font-size: 13px; line-height: 1.8;">
         <li style="color: #e2e8f0 !important;"><span style="color: #e2e8f0 !important;">🔴 <strong>Down alert</strong> after ${FAILURE_THRESHOLD} consecutive failed checks — with a root-cause diagnosis</span></li>
         <li style="color: #e2e8f0 !important;"><span style="color: #e2e8f0 !important;">🌐 <strong>Server-level alert</strong> immediately if a single failure hits every stream at once</span></li>
-        <li style="color: #e2e8f0 !important;"><span style="color: #e2e8f0 !important;">🔇 <strong>Dead Air alert</strong> when silence persists across ${SILENCE_FAILURE_THRESHOLD} 5-second probes</span></li>
+        <li style="color: #e2e8f0 !important;"><span style="color: #e2e8f0 !important;">🔇 <strong>Dead Air alert</strong> when silence persists across ${SILENCE_FAILURE_THRESHOLD} probes spaced ${diagnose.fmtDuration(SILENCE_PROBE_INTERVAL_MS)} apart</span></li>
         <li style="color: #e2e8f0 !important;"><span style="color: #e2e8f0 !important;">🟢 <strong>Recovery alert</strong> with the true outage duration</span></li>
         <li style="color: #e2e8f0 !important;"><span style="color: #e2e8f0 !important;">Checks run every ${Math.round(CHECK_INTERVAL / 1000)} seconds</span></li>
       </ul>
@@ -1332,9 +1333,9 @@ async function sendTestAlert(toEmail) {
     <div class="diag-box" style="background-color:#101a2e; border:1px solid #1e3a5f; border-radius:8px; padding:16px; margin-top:16px;">
       <p class="diag-title" style="font-weight:600; color:#7dd3fc !important; margin:0 0 8px 0; font-size:14px;"><span class="diag-title" style="color:#7dd3fc !important;">📚 Incident history</span></p>
       <ul style="margin:0; padding-left:20px; font-size:13px; line-height:1.8;">
-        <li style="color:#e2e8f0 !important;"><span style="color:#e2e8f0 !important;">Every failed check is recorded permanently — including brief ones that do not trigger an email</span></li>
+        <li style="color:#e2e8f0 !important;"><span style="color:#e2e8f0 !important;">Every failed check enters the long-term record — including brief ones that do not trigger an email</span></li>
         <li style="color:#e2e8f0 !important;"><span style="color:#e2e8f0 !important;">${storage.eventCount} event(s) currently on record${storage.oldestEvent ? `, back to ${new Date(storage.oldestEvent).toLocaleDateString('en-US')}` : ''}</span></li>
-        <li style="color:#e2e8f0 !important;"><span style="color:#e2e8f0 !important;">Per-minute telemetry kept ${storage.sampleRetentionDays} days, then compacted to hourly summaries kept forever</span></li>
+        <li style="color:#e2e8f0 !important;"><span style="color:#e2e8f0 !important;">The newest ${storage.maxEvents.toLocaleString()} events are retained; per-minute telemetry is kept ${storage.sampleRetentionDays} days, then compacted to hourly summaries</span></li>
       </ul>
     </div>`;
 
@@ -1415,7 +1416,7 @@ function buildWeeklyRoundup(rollup) {
     clean
       ? 'no outages'
       : `${c.significant} significant outage${c.significant === 1 ? '' : 's'}`,
-    rollup.downtimeMs ? `${diagnose.fmtDuration(rollup.downtimeMs)} off air` : null,
+    rollup.downtimeMs ? `${diagnose.fmtDuration(rollup.downtimeMs)} elapsed off-air window` : null,
   ].filter(Boolean);
   const subject = `📊 KPFT Weekly Stream Report — ${rangeLabel}: ${subjectFacts.join(', ')}`;
 
@@ -1429,13 +1430,14 @@ function buildWeeklyRoundup(rollup) {
   // other stations throughout is a studio problem, and the report has to say so
   // before anyone starts a conversation with the wrong department.
   const FAULT_META = {
-    kpft: { label: 'KPFT equipment', sub: 'our studio encoder or mount — Icecast was up', color: '#fbbf24' },
-    pacifica: { label: 'Pacifica server', sub: 'Icecast itself could not be reached', color: '#7dd3fc' },
-    unknown: { label: 'Cause unclear', sub: 'not enough evidence to attribute', color: '#94a3b8' },
+    kpft: { label: 'KPFT source/feed path', sub: 'Icecast answered; the monitored source or mount was absent', color: '#fbbf24' },
+    pacifica: { label: 'Pacifica/Icecast path', sub: 'Icecast was unreachable; check server, network, DNS, and TLS path', color: '#7dd3fc' },
+    unknown: { label: 'Path unclear', sub: 'not enough evidence to assign the handoff', color: '#94a3b8' },
   };
 
   const faultRows = (rollup.faultSplit || []).map((s) => {
     const m = FAULT_META[s.side] || FAULT_META.unknown;
+    const recordCount = s.streamRecords ?? s.outages;
     return `
       <tr class="row-border" style="border-bottom:1px solid #28283d;">
         <td style="padding:10px 8px; font-size:13px;">
@@ -1443,18 +1445,18 @@ function buildWeeklyRoundup(rollup) {
           <br><span class="label-col" style="color:#94a3b8 !important; font-size:11px;">${esc(m.sub)}</span>
         </td>
         <td style="padding:10px 8px; font-size:15px; font-weight:700; color:${m.color} !important; white-space:nowrap;">
-          <span style="color:${m.color} !important;">${esc(diagnose.fmtDuration(s.wallClockMs))}</span>
-          <br><span class="label-col" style="color:#94a3b8 !important; font-size:11px; font-weight:400;">off air</span>
+          <span style="color:${m.color} !important;">${recordCount} of ${c.listenerAffecting}</span>
+          <br><span class="label-col" style="color:#94a3b8 !important; font-size:11px; font-weight:400;">stream records</span>
         </td>
         <td class="label-col" style="padding:10px 8px; color:#94a3b8 !important; font-size:12px;">
-          <span class="label-col" style="color:#94a3b8 !important;">${s.outages} outage(s)<br>${s.listenersCutOff.toLocaleString()} listeners cut off<br>longest ${esc(diagnose.fmtDuration(s.longestMs))}</span>
+          <span class="label-col" style="color:#94a3b8 !important;">${esc(diagnose.fmtDuration(s.wallClockMs))} elapsed category window<br>${s.listenersCutOff.toLocaleString()} listener interruption(s)<br>longest ${esc(diagnose.fmtDuration(s.longestMs))}</span>
         </td>
       </tr>`;
   }).join('');
 
   const faultBlock = faultRows ? `
-    <h3 class="section-hdr" style="margin:22px 0 6px 0; font-size:13px; color:#cbd5e1 !important; text-transform:uppercase; letter-spacing:0.05em;"><span class="section-hdr" style="color:#cbd5e1 !important;">Where the fault was</span></h3>
-    <p class="label-col" style="margin:0 0 10px 0; font-size:11px; line-height:1.5; color:#94a3b8 !important;"><span class="label-col" style="color:#94a3b8 !important;">Decided by whether Icecast itself was reachable at the moment of failure.</span></p>
+    <h3 class="section-hdr" style="margin:22px 0 6px 0; font-size:13px; color:#cbd5e1 !important; text-transform:uppercase; letter-spacing:0.05em;"><span class="section-hdr" style="color:#cbd5e1 !important;">Which path needs attention?</span></h3>
+    <p class="label-col" style="margin:0 0 10px 0; font-size:11px; line-height:1.5; color:#94a3b8 !important;"><span class="label-col" style="color:#94a3b8 !important;">Evidence-based handoff, not proof of a particular failed device. Category time windows can overlap and must not be added.</span></p>
     <table role="presentation" width="100%" border="0" cellspacing="0" cellpadding="0">${faultRows}</table>` : '';
 
   const cells = [
@@ -1463,26 +1465,26 @@ function buildWeeklyRoundup(rollup) {
     // nothing on its own, "2.2% of all listening" is actionable.
     // Headline: people. Subheadline: their listening time, with the sentence
     // that stops it being read as clock hours.
-    statCell('Listeners Cut Off',
+    statCell('Listener Interruptions',
       a.listenersCutOff ? a.listenersCutOff.toLocaleString() : '0',
       a.listenersCutOff ? '#f87171' : '#4ade80',
-      `across ${c.listenerAffecting} interruption(s) — someone cut off twice counts twice`),
+      `across ${c.listenerAffecting} stream record(s) — the same listener interrupted twice counts twice`),
     statCell('Listening Lost',
       a.listenerHoursLost ? `${a.listenerHoursLost} listener-hours` : 'None',
       a.listenerHoursLost ? '#fbbf24' : '#4ade80',
       a.lostSharePercent != null
         ? `${a.lostSharePercent}% of all listening · person-hours, not clock time`
         : 'person-hours, not clock time'),
-    statCell('Significant Outages', String(c.significant),
+    statCell('Stream Interruptions', String(c.listenerAffecting),
       c.significant ? '#f87171' : '#4ade80',
-      `over ${diagnose.fmtDuration(rollup.significantThresholdMs)} · ${c.brief} brief interruption(s) besides`),
-    statCell('Time Off Air', diagnose.fmtDuration(rollup.downtime.wallClockMs || 0),
+      `${c.significant} sustained (${diagnose.fmtDuration(rollup.significantThresholdMs)}+) + ${c.brief} brief · per-stream records`),
+    statCell('Elapsed Off-Air Window', diagnose.fmtDuration(rollup.downtime.wallClockMs || 0),
       rollup.downtime.wallClockMs ? '#fbbf24' : '#4ade80',
       rollup.downtime.streamMs > rollup.downtime.wallClockMs
-        ? `at least one stream down · ${diagnose.fmtDuration(rollup.downtime.streamMs)} summed across streams`
-        : 'at least one stream down'),
+        ? `at least one stream down; overlaps merged · ${diagnose.fmtDuration(rollup.downtime.streamMs)} summed stream-time`
+        : 'at least one stream down; elapsed clock time'),
     statCell('Audio Uptime', rollup.uptime != null ? `${rollup.uptime}%` : '—', uptimeColor,
-      'time the streams were serving audio'),
+      'share of monitored stream-time serving audio'),
     statCell('Alert Emails Sent', String(alerts.messages), '#a78bfa',
       alerts.eventsAlerted > alerts.messages
         ? `covering ${alerts.eventsAlerted} events`
@@ -1496,12 +1498,7 @@ function buildWeeklyRoundup(rollup) {
       <tr class="row-border" style="border-bottom:1px solid #28283d;">
         <td class="val-col" style="padding:8px; color:#f8fafc !important; font-size:13px;"><span class="val-col" style="color:#f8fafc !important;">${esc(s.name)}</span></td>
         <td style="padding:8px; font-size:13px; font-weight:600; color:${upColor} !important;"><span style="color:${upColor} !important;">${up}</span></td>
-        <td class="label-col" style="padding:8px; color:#94a3b8 !important; font-size:13px;"><span class="label-col" style="color:#94a3b8 !important;">${s.outages + s.deadAir}${
-          // Without this a stream reads "0 outages" next to a non-zero downtime,
-          // which looks like an arithmetic fault rather than the truth: brief
-          // failures are counted in downtime but are not confirmed outages.
-          s.unconfirmed ? ` <span style="color:#64748b !important; font-size:11px;">+${s.unconfirmed} brief</span>` : ''
-        }</span></td>
+        <td class="label-col" style="padding:8px; color:#94a3b8 !important; font-size:13px;"><span class="label-col" style="color:#94a3b8 !important;">${s.listenerAffecting}</span></td>
         <td class="label-col" style="padding:8px; color:#94a3b8 !important; font-size:13px;"><span class="label-col" style="color:#94a3b8 !important;">${s.downtimeMs ? esc(diagnose.fmtDuration(s.downtimeMs)) : '—'}</span></td>
         <td class="label-col" style="padding:8px; color:#94a3b8 !important; font-size:13px;"><span class="label-col" style="color:#94a3b8 !important;">${s.avgListeners ?? '—'}</span></td>
         <td class="label-col" style="padding:8px; color:#94a3b8 !important; font-size:13px;"><span class="label-col" style="color:#94a3b8 !important;">${s.peakListeners ?? '—'}</span></td>
@@ -1547,8 +1544,8 @@ function buildWeeklyRoundup(rollup) {
       <tr>
         <td class="label-col" style="padding:6px 8px; border-bottom:1px solid #28283d; font-size:11px; text-transform:uppercase; letter-spacing:0.05em;"><span class="label-col" style="color:#94a3b8 !important;">Stream</span></td>
         <td class="label-col" style="padding:6px 8px; border-bottom:1px solid #28283d; font-size:11px; text-transform:uppercase; letter-spacing:0.05em;"><span class="label-col" style="color:#94a3b8 !important;">Uptime</span></td>
-        <td class="label-col" style="padding:6px 8px; border-bottom:1px solid #28283d; font-size:11px; text-transform:uppercase; letter-spacing:0.05em;"><span class="label-col" style="color:#94a3b8 !important;">Outages</span></td>
-        <td class="label-col" style="padding:6px 8px; border-bottom:1px solid #28283d; font-size:11px; text-transform:uppercase; letter-spacing:0.05em;"><span class="label-col" style="color:#94a3b8 !important;">Downtime</span></td>
+        <td class="label-col" style="padding:6px 8px; border-bottom:1px solid #28283d; font-size:11px; text-transform:uppercase; letter-spacing:0.05em;"><span class="label-col" style="color:#94a3b8 !important;">Stream records</span></td>
+        <td class="label-col" style="padding:6px 8px; border-bottom:1px solid #28283d; font-size:11px; text-transform:uppercase; letter-spacing:0.05em;"><span class="label-col" style="color:#94a3b8 !important;">Stream-time lost</span></td>
         <td class="label-col" style="padding:6px 8px; border-bottom:1px solid #28283d; font-size:11px; text-transform:uppercase; letter-spacing:0.05em;"><span class="label-col" style="color:#94a3b8 !important;">Avg listeners</span></td>
         <td class="label-col" style="padding:6px 8px; border-bottom:1px solid #28283d; font-size:11px; text-transform:uppercase; letter-spacing:0.05em;"><span class="label-col" style="color:#94a3b8 !important;">Peak listeners</span></td>
       </tr>
@@ -1565,7 +1562,7 @@ function buildWeeklyRoundup(rollup) {
       <ul style="margin:0; padding-left:18px; font-size:13px; line-height:1.6;">${notable}</ul>
     </div>` : ''}
 
-    <p class="label-col" style="margin:20px 0 0 0; font-size:11px; line-height:1.6; color:#94a3b8 !important;"><span class="label-col" style="color:#94a3b8 !important;">This is a scheduled weekly summary, not an alert — it arrives whether or not anything went wrong.<br><br><strong>Listeners cut off</strong> is a headcount taken as each outage began; someone cut off by two separate outages counts twice.<br><br><strong>Listening lost</strong> is that audience multiplied by how long they were off air, the way man-hours works — 50 people for one hour is 50 listener-hours. It is not a clock duration and cannot be compared with the times beside it.<br><br><strong>Time off air</strong> is elapsed clock time with at least one stream down; concurrent outages count once. Failures where Icecast kept serving the mount are not counted as downtime at all.</span></p>`;
+    <p class="label-col" style="margin:20px 0 0 0; font-size:11px; line-height:1.6; color:#94a3b8 !important;"><span class="label-col" style="color:#94a3b8 !important;">This is a scheduled weekly summary, not an alert — it arrives whether or not anything went wrong.<br><br><strong>Listener interruptions</strong> is a headcount taken as each outage began; someone interrupted by two separate outages counts twice.<br><br><strong>Listening lost</strong> is audience multiplied by outage duration — 50 people for one hour is 50 listener-hours. It is not clock time.<br><br><strong>Elapsed off-air window</strong> is clock time with at least one stream down; simultaneous outages count once. <strong>Summed stream-time</strong> adds each affected stream separately and is the basis of uptime. Fault-category windows can overlap and must not be added.</span></p>`;
 
   const html = buildEmailHtml({
     title: '📊 KPFT Weekly Stream Report',

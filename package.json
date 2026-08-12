@@ -1,7 +1,7 @@
 {
   "name": "icecast-monitor",
   "version": "1.0.0",
-  "description": "KPFT Icecast stream uptime monitor with email alerts",
+  "description": "KPFT Icecast stream diagnostics with listener-impact reporting and email alerts",
   "main": "server.js",
   "scripts": {
     "start": "node server.js",

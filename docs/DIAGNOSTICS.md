@@ -53,7 +53,7 @@ This is `cause: 'source_disconnected'`, and it points at the Barix encoder, the 
 
 ## 5. Confirming duration independently of polling
 
-Checks run every 60 seconds, which bounds outage-duration resolution to a minute. But Icecast stamps each mount with `stream_start_iso8601` — the moment its source connected. When a stream recovers, comparing that timestamp against the outage start gives the **true** source-side downtime.
+Checks run every `CHECK_INTERVAL_MS` (60 seconds by default), which normally bounds outage-duration resolution to a minute. But Icecast stamps each mount with `stream_start_iso8601` — the moment its source connected. When a stream recovers, comparing that timestamp against the outage start gives the **true** source-side downtime.
 
 Recovery events carry this as `sourceOutage.sourceDownLabel`. It is the most defensible number available: Icecast's own record of when the encoder came back.
 
@@ -73,7 +73,7 @@ The second is easy to under-weight: it generates no complaints and no visible di
 
 ## 7. Recording vs. alerting
 
-These are deliberately decoupled. **Every** failed check is recorded permanently; only some are worth an email.
+These are deliberately decoupled. **Every** failed check enters the long-term event record; only some are worth an email. Events are not pruned by age, but the store retains the newest `MAX_EVENTS` entries (100,000 by default) as a memory-safety ceiling.
 
 | Point in an episode | Recorded | Emails |
 |---|---|---|
@@ -88,7 +88,7 @@ and still serving the mount — does not, because nobody lost a second of audio.
 listener counts prove it.
 
 Set `ALERT_ON_HARMLESS_OUTAGE=true` to email confirmed outages regardless of impact. Everything is
-recorded permanently either way — the aggregate trend is the actionable signal, not the individual
+recorded in the long-term history either way — the aggregate trend is the actionable signal, not the individual
 event.
 
 Every event stores its delivery outcome in `email`: `sent`, `attempted` with the SMTP error, or an explicit `reason` for why no alert was warranted. A failed send is visible rather than silent.

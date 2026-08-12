@@ -14,9 +14,9 @@
   <meta http-equiv="Expires" content="0">
 
   <title>KPFT Stream Monitor — Icecast Uptime Dashboard</title>
-  <meta name="description" content="Real-time monitoring dashboard for KPFT Icecast streams. Track uptime, response times, and receive alerts when streams go down.">
+  <meta name="description" content="KPFT Icecast monitoring with root-cause diagnosis, listener-impact reporting, dead-air detection, and actionable alerts.">
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📡</text></svg>">
-  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20..48,100..700,0..1,-50..200&display=swap">
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20..48,100..700,0..1,-50..200&amp;display=swap">
   <link rel="stylesheet" href="style.css?v=dev">
 </head>
 <body>
@@ -45,11 +45,11 @@
           <span class="connection-dot"></span>
           <span id="connection-text">Connecting…</span>
         </div>
-        <a href="history.html" class="help-btn" title="Complete permanent incident history">
+        <a href="history.html" class="help-btn" title="Complete long-term incident history">
           <span class="material-symbols-outlined">history</span>
           <span>History</span>
         </a>
-        <button class="help-btn" id="help-btn" title="App Documentation & Help">
+        <button class="help-btn" id="help-btn" title="App Documentation &amp; Help">
           <span class="material-symbols-outlined">help</span>
           <span>Help</span>
         </button>
@@ -153,7 +153,7 @@
               <div class="guide-icon"><span class="material-symbols-outlined">cell_tower</span></div>
               <div>
                 <h4>Real-Time Monitoring</h4>
-                <p>Checks KPFT Main, HD2 and HD3 every 60 seconds — HTTP status, content type, and a full <strong>DNS → TCP → TLS → first byte</strong> timing breakdown, which reveals where in the chain a failure happened. Press play on any stream card to confirm by ear what the monitor is reporting.</p>
+                <p>Checks <span id="help-stream-list">KPFT Main, HD2 and HD3</span> every <span id="help-check-interval">60 seconds</span> — HTTP status, content type, and a full <strong>DNS → TCP → TLS → first byte</strong> timing breakdown, which reveals where in the chain a failure happened. Press play on any stream card to confirm by ear what the monitor is reporting.</p>
               </div>
             </div>
 
@@ -161,7 +161,7 @@
               <div class="guide-icon"><span class="material-symbols-outlined">bolt</span></div>
               <div>
                 <h4>What counts as an outage</h4>
-                <p>Two failed checks in a row is a confirmed <strong>outage</strong>. A single failed check is either a <strong>Brief Outage</strong> — the mount vanished from Icecast, so listeners really were cut off — or a <strong>Probe Anomaly</strong>, where Icecast stayed reachable and kept serving the mount and only this monitor's own connection failed. Everything is recorded permanently either way.</p>
+                <p><span id="help-failure-threshold">2</span> consecutive failed checks confirm an <strong>outage</strong>. A failure that clears sooner is either a <strong>Brief Outage</strong> — the mount vanished and listeners were cut off — or a <strong>Probe Anomaly</strong>, where Icecast kept serving the mount and only this monitor's connection failed. Both remain in the long-term record.</p>
               </div>
             </div>
 
@@ -169,7 +169,7 @@
               <div class="guide-icon"><span class="material-symbols-outlined">volume_off</span></div>
               <div>
                 <h4>Silence &amp; Dead Air Detection</h4>
-                <p>Catches the case where the stream is connected but silent. To avoid false alarms during speech pauses, suspected silence triggers rapid 5-second re-probes; any detected audio instantly resets the count. Dead air is only declared after sustained silence.</p>
+                <p>Catches the case where the stream is connected but silent. To avoid false alarms during speech pauses, suspected silence triggers re-probes every <span id="help-silence-interval">5 seconds</span>; any detected audio instantly resets the count. Dead air is declared after <span id="help-silence-threshold">3</span> consecutive silent probes.</p>
               </div>
             </div>
 
@@ -177,15 +177,15 @@
               <div class="guide-icon"><span class="material-symbols-outlined">mail</span></div>
               <div>
                 <h4>Actionable Email Alerts</h4>
-                <p>Alerts lead with the root cause and list specific things to check. A failure hitting every stream at once is server-level by definition and alerts immediately. Each event also records <strong>whether its alert actually sent</strong> — a failed delivery is visible rather than silent.</p>
+                <p>Alerts lead with the root cause, listener reach, and specific things to check. <span id="help-alert-policy">After the confirmation threshold, an outage emails only when listeners were affected or Icecast was unreachable and impact could not be ruled out.</span> Simultaneous failures are correlated to distinguish a KPFT source/feed-path problem from a Pacifica/Icecast-path problem, and consolidated into one message. This assigns the side to investigate; it does not prove which physical device failed. Each event records <strong>whether its alert actually sent</strong>.</p>
               </div>
             </div>
 
             <div class="guide-item">
               <div class="guide-icon"><span class="material-symbols-outlined">history</span></div>
               <div>
-                <h4>Permanent History</h4>
-                <p>Incidents are kept forever, not wiped after 24 hours. Open <a href="history.html" style="color: var(--primary-light);">History</a> for the full timeline with filters, an outage heatmap, a root-cause breakdown, and a drill-down on every event showing its evidence and timings.</p>
+                <h4>Long-Term History</h4>
+                <p>Incidents are not pruned after 24 hours or by age. The newest <span id="help-event-limit">100,000</span> events are retained as a safety limit. Open <a href="history.html" style="color: var(--primary-light);">History</a> for filters, an outage heatmap, root-cause breakdowns, listener-impact reporting, and the evidence behind every event.</p>
               </div>
             </div>
 
@@ -193,7 +193,15 @@
               <div class="guide-icon"><span class="material-symbols-outlined">group</span></div>
               <div>
                 <h4>Listener Impact</h4>
-                <p>Live listener counts come straight from Icecast. When a mount disappears the count correctly drops to zero rather than holding its last value — so the real audience loss during an outage is visible instead of hidden.</p>
+                <p>Live listener counts come straight from Icecast. <strong>Listeners cut off</strong> is the audience present when each interruption began; someone affected twice counts twice. <strong>Listening lost</strong> combines that reach with duration. Audio uptime excludes probe failures where Icecast proves the mount kept playing.</p>
+              </div>
+            </div>
+
+            <div class="guide-item">
+              <div class="guide-icon"><span class="material-symbols-outlined">summarize</span></div>
+              <div>
+                <h4>Weekly Roundup</h4>
+                <p id="help-roundup-policy">When enabled, a scheduled weekly report summarizes audio uptime, listener impact, downtime, fault ownership, and alert delivery. It arrives even after a quiet week, confirming that monitoring is still active.</p>
               </div>
             </div>
 

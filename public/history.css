@@ -211,33 +211,84 @@ a.help-btn { text-decoration: none; }
   .ih-dur, .ih-cause { grid-column: 1 / -1; font-size: 0.78rem; }
 }
 
-/* ── Section explainers ────────────────────────────────────────────────────── */
-/* One quiet sentence per section saying what KIND of number is in it. The page
-   mixes headcounts, clock time and person-hours; unlabelled, a reader assumes
-   they share a unit and tries to reconcile figures that cannot be compared. */
-.section-note {
-  max-width: 78ch;
-  margin: -6px 0 14px;
-  font-size: 0.78rem;
-  line-height: 1.6;
-  color: var(--text-tertiary);
-}
-.section-note strong { color: var(--text-secondary); font-weight: 600; }
+/* ── Compact section explainers ────────────────────────────────────────────── */
+/* Explanations stay attached to the number or section they define without
+   consuming a full text row. Native details/summary keeps them keyboard and
+   screen-reader accessible; the card overlays content instead of reflowing it. */
+.ih-label,
+.section-subhead,
+.section-title { position: relative; }
 
-.ih-note {
-  margin-top: 16px;
-  padding-top: 12px;
-  border-top: 1px solid var(--border);
-  font-size: 0.76rem;
-  line-height: 1.6;
+.info-popover {
+  display: inline-flex;
+  margin-left: 1px;
+  text-transform: none;
+  letter-spacing: normal;
+}
+
+.info-popover summary {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  margin: -4px 0;
+  border: 0;
+  border-radius: 50%;
   color: var(--text-tertiary);
-  max-width: 72ch;
+  cursor: pointer;
+  list-style: none;
+  transition: color var(--transition), background var(--transition);
+}
+.info-popover summary::-webkit-details-marker { display: none; }
+.info-popover summary:hover,
+.info-popover summary:focus-visible,
+.info-popover[open] summary {
+  color: var(--primary-light);
+  background: rgba(124, 106, 239, 0.12);
+  outline: none;
+}
+.info-popover summary:focus-visible {
+  box-shadow: 0 0 0 2px var(--surface-0), 0 0 0 4px var(--primary);
+}
+.info-popover summary .material-symbols-outlined {
+  color: currentColor;
+  font-size: 17px;
+}
+
+.info-popover-card {
+  position: absolute;
+  z-index: 40;
+  top: calc(100% + 7px);
+  left: 0;
+  width: min(500px, calc(100vw - 32px));
+  padding: 13px 15px;
+  border: 1px solid var(--border-hover);
+  border-radius: var(--radius-md);
+  background: var(--surface-3);
+  box-shadow: var(--shadow-lg);
+  color: var(--text-secondary);
+  font-size: 0.79rem;
+  font-weight: 400;
+  line-height: 1.55;
+  letter-spacing: 0;
+  text-align: left;
+  text-transform: none;
+}
+.info-popover-card strong { color: var(--text-primary); font-weight: 650; }
+
+@media (hover: hover) {
+  .info-popover:not([open]):hover > .info-popover-card { display: block; }
+}
+
+@media (max-width: 560px) {
+  .info-popover-card { width: calc(100vw - 32px); }
+  .ih-label .info-popover-card { left: -18px; }
 }
 
 /* ── Subheadline: listening time lost ──────────────────────────────────────── */
 /* Directly under the headline it restates, because it is the second question a
-   manager asks — and carrying its own explanation, because the unit is the one
-   that gets misread as clock time. */
+   manager asks. The unit definition sits in the adjacent info popover. */
 .ih-secondary {
   margin-top: 14px;
   padding-top: 14px;
@@ -250,6 +301,62 @@ a.help-btn { text-decoration: none; }
   color: var(--text-primary);
 }
 .ihs-text { font-size: 0.86rem; color: var(--text-secondary); }
+
+/* ── Reconciliation: three large numbers, three different units ──────────── */
+.metric-reconciliation {
+  background: var(--surface-1);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: 16px 20px;
+  margin-bottom: 24px;
+}
+.mr-title {
+  margin-bottom: 12px;
+  color: var(--text-secondary);
+  font-size: 0.74rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+.mr-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0;
+}
+.mr-item { padding: 0 18px; border-left: 1px solid var(--border); }
+.mr-item:first-child { padding-left: 0; border-left: 0; }
+.mr-item:last-child { padding-right: 0; }
+.mr-value {
+  color: var(--text-primary);
+  font-size: 1.35rem;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+.mr-value.up { color: var(--status-up); }
+.mr-value.down { color: var(--status-down); }
+.mr-value.neutral { color: var(--text-primary); }
+.mr-label { margin-top: 2px; color: var(--text-secondary); font-size: 0.78rem; font-weight: 600; }
+.mr-note { margin-top: 5px; color: var(--text-tertiary); font-size: 0.72rem; line-height: 1.45; }
+.mr-note.partial { color: var(--warn); }
+.mr-equation {
+  margin-top: 13px;
+  padding-top: 11px;
+  border-top: 1px solid var(--border);
+  color: var(--text-secondary);
+  font-size: 0.78rem;
+  line-height: 1.5;
+}
+.mr-equation strong { color: var(--text-primary); }
+
+@media (max-width: 700px) {
+  .mr-grid { grid-template-columns: 1fr; gap: 12px; }
+  .mr-item, .mr-item:first-child, .mr-item:last-child {
+    padding: 0 0 12px;
+    border-left: 0;
+    border-bottom: 1px solid var(--border);
+  }
+  .mr-item:last-child { padding-bottom: 0; border-bottom: 0; }
+}
 
 /* ── Where the fault was ───────────────────────────────────────────────────── */
 .fault-split {
@@ -269,7 +376,7 @@ a.help-btn { text-decoration: none; }
 .fs-card.kpft { border-left-color: var(--warn); }
 .fs-card.pacifica { border-left-color: var(--info); }
 
-.fs-head { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
+.fs-head { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-bottom: 10px; }
 .fs-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--text-tertiary); }
 .fs-card.kpft .fs-dot { background: var(--warn); }
 .fs-card.pacifica .fs-dot { background: var(--info); }
@@ -295,6 +402,24 @@ a.help-btn { text-decoration: none; }
   color: var(--text-tertiary);
   margin-bottom: 10px;
 }
+
+.fs-owner {
+  margin-left: auto;
+  padding: 2px 8px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  color: var(--text-tertiary);
+  font-size: 0.67rem;
+  white-space: nowrap;
+}
+.fs-overlap-note {
+  grid-column: 1 / -1;
+  margin-top: -4px;
+  color: var(--text-tertiary);
+  font-size: 0.76rem;
+  line-height: 1.5;
+}
+.fs-overlap-note strong { color: var(--text-secondary); }
 
 .fs-facts {
   display: flex;
@@ -361,77 +486,6 @@ a.help-btn { text-decoration: none; }
   .section-subhead-note { display: none; }
 }
 
-/* ── Period roundup ────────────────────────────────────────────────────────── */
-/* Sits BELOW the tiles and reads them back as a sentence.
-   Styled as a note, not an alarm. It describes a window that has already
-   closed, so a red emergency treatment would be wrong even in a terrible week —
-   the live dashboard is where urgency belongs. A quiet period earns a green
-   icon; everything else stays neutral and simply states the facts. */
-.overview-summary {
-  display: flex;
-  gap: 14px;
-  align-items: flex-start;
-  background: var(--surface-1);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-lg);
-  padding: 18px 20px;
-  margin-bottom: 28px;
-  box-shadow: var(--shadow-sm);
-}
-
-/* Tighten the 32px the tile grid leaves behind: the sentence belongs to the
-   tiles above it, and a full gap reads as an unrelated section. */
-.summary-bar + .overview-summary { margin-top: -14px; }
-
-.os-icon {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 34px;
-  height: 34px;
-  border-radius: var(--radius-sm);
-  background: var(--primary-surface);
-  color: var(--primary-light);
-  flex-shrink: 0;
-}
-.overview-summary.clean .os-icon {
-  background: var(--status-up-surface);
-  color: var(--status-up);
-}
-.os-icon .material-symbols-outlined { font-size: 20px; }
-
-.os-body { min-width: 0; }
-
-.os-headline {
-  font-size: 0.95rem;
-  line-height: 1.5;
-  color: var(--text-primary);
-  font-weight: 500;
-}
-
-.os-detail {
-  margin-top: 5px;
-  font-size: 0.8rem;
-  line-height: 1.55;
-  color: var(--text-secondary);
-}
-
-.os-scope {
-  margin-top: 8px;
-  padding-top: 8px;
-  border-top: 1px solid var(--border);
-  font-size: 0.78rem;
-  line-height: 1.5;
-  color: var(--primary-light);
-}
-
-@media (max-width: 640px) {
-  .overview-summary { padding: 14px; gap: 11px; }
-  .os-icon { width: 28px; height: 28px; }
-  .os-icon .material-symbols-outlined { font-size: 17px; }
-  .os-headline { font-size: 0.88rem; }
-}
-
 /* ── Generic panel ─────────────────────────────────────────────────────────── */
 .panel {
   background: var(--surface-1);
@@ -495,7 +549,7 @@ a.help-btn { text-decoration: none; }
 .hm-cell.placeholder:hover { transform: none; box-shadow: none; }
 .hm-cell.selected { box-shadow: 0 0 0 2px var(--primary-light); }
 
-/* Severity-weighted intensity ramp */
+/* Elapsed off-air duration: <5m, <1h, <6h, and 6h+. */
 .hm-cell.l1 { background: #3b2f52; }
 .hm-cell.l2 { background: #6b3350; }
 .hm-cell.l3 { background: #a83a4a; }
@@ -521,8 +575,6 @@ a.help-btn { text-decoration: none; }
 .legend-cell.l2 { background: #6b3350; }
 .legend-cell.l3 { background: #a83a4a; }
 .legend-cell.l4 { background: #ef4444; }
-.legend-spacer { flex: 1; min-width: 12px; }
-
 /* ── Root cause bars ───────────────────────────────────────────────────────── */
 .causes-list { display: flex; flex-direction: column; gap: 12px; }
 .cause-row {
@@ -1002,13 +1054,6 @@ a.help-btn { text-decoration: none; }
   width: 0;
   height: 0;
   border-radius: 0;
-}
-
-.audience-legend .alg-note {
-  flex-basis: 100%;
-  color: var(--text-tertiary);
-  opacity: 0.8;
-  font-style: italic;
 }
 
 /* Count beside a merged tick — the honest alternative to silently drawing one

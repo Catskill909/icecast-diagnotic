@@ -1,10 +1,8 @@
 # 📡 KPFT Icecast Stream Monitor & Diagnostic Tool
 
-Monitors KPFT (Pacifica Foundation) Icecast live streams and — the point of the tool — **diagnoses which end broke**: the Barix encoder at the studio, or the Icecast server.
+Monitors KPFT (Pacifica Foundation) Icecast live streams and — the point of the tool — **identifies which side of the handoff needs attention**: KPFT's source/feed path or the Pacifica/Icecast path.
 
-A bare "stream is down" alert leaves you guessing who to call. This correlates connection-layer timings, Icecast's live mount inventory, and cross-stream behaviour to name the cause, and keeps a permanent record so patterns are visible over months rather than hours.
-
-![Dashboard Preview](docs/dashboard_preview.png)
+A bare "stream is down" alert leaves you guessing who to call. This correlates connection-layer timings, Icecast's live mount inventory, and cross-stream behaviour to name the cause, and keeps a long-term record so patterns are visible over months rather than hours.
 
 ---
 
@@ -49,7 +47,7 @@ Observed on 2026-08-04/05: a Barix dropout took KPFT Main from 66 listeners to 1
                 │                 brief → confirmed outage → recovery  │
                 │                 decides what is worth emailing       │
                 │                          │                           │
-                │  store.js    ── events.json   (permanent, forever)   │
+                │  store.js    ── events.json   (long-term event log)  │
                 │                 samples.json  (7d raw → hourly)      │
                 │                          │                           │
                 │  server.js   ── Express API + static SPA             │
@@ -57,7 +55,7 @@ Observed on 2026-08-04/05: a Barix dropout took KPFT Main from 66 listeners to 1
                                 │                      │
                                 ▼                      ▼
                 ┌───────────────────────┐  ┌───────────────────────────┐
-                │   Dashboard (live)    │  │  History (permanent)      │
+                │   Dashboard (live)    │  │  History (long-term)      │
                 │  status, listeners,   │  │  heatmap, filters,        │
                 │  uptime bars          │  │  per-event drill-down     │
                 └───────────────────────┘  └───────────────────────────┘
@@ -77,16 +75,16 @@ If you are an AI assistant or developer picking up this project, here is the ess
 - **`server.js`**: Express server entrypoint. Serves static files from `public/` and the API.
 - **`monitor.js`**: Check engine. Owns the check cycle, the episode/event lifecycle, the silence engine, and Nodemailer alerts.
 - **`diagnose.js`**: Root-cause diagnosis engine. Instrumented stream probe (DNS/TCP/TLS/TTFB timings), Icecast mount-inventory snapshot, and the classifier that turns a transport error into an actionable cause.
-- **`store.js`**: Persistence. Splits the permanent event record from rolling telemetry; handles atomic writes, hourly compaction, and legacy migration.
+- **`store.js`**: Persistence. Splits the long-term event record from rolling telemetry; handles atomic writes, hourly compaction, and legacy migration.
 - **`public/index.html` / `app.js`**: Live dashboard.
-- **`public/history.html` / `history.js` / `history.css`**: Permanent incident history — heatmap, listener-audience chart, filters, per-event drill-down.
+- **`public/history.html` / `history.js` / `history.css`**: Long-term incident history — heatmap, listener-audience chart, filters, per-event drill-down.
 - **`scripts/backfill-audience.js`**: Reporting/repair tool for the `audience` block. **Not normally needed** — `store.load()` backfills automatically at every startup, before `prune()` runs. Use this to preview the numbers (dry-run by default) or to repair after a manual data edit. Safe to re-run; it never overwrites a measured figure.
 - **`public/style.css`**: Dark Material Design 3 theme system using CSS variables.
 - **`Dockerfile`**: Production build on `node:20-alpine` with `curl` for Coolify health probes.
 
 ### Event Model (important)
 
-Notification is decoupled from recording. **Every failed check is recorded permanently**; only some of them email.
+Notification is decoupled from recording. **Every failed check enters the long-term event record**; only some of them email. Events are not pruned by age, but only the newest `MAX_EVENTS` entries are retained (100,000 by default).
 
 An *episode* runs from a stream's first failed check to its recovery. Within one episode:
 
@@ -126,16 +124,15 @@ Two audiences read the same pages, and the layout is built around that:
 
 **The metric hierarchy is fixed and deliberate:**
 
-1. **Listeners cut off** — a headcount. The headline, always.
-2. **Listening lost** — listener-hours. The subheadline, always with its explanation.
-3. **Where the fault was** — KPFT equipment vs Pacifica server.
-4. **Stream downtime** — clock time, for engineers.
+1. **Share of possible listening delivered** — a proportion with a meaningful scale.
+2. **Listener interruptions** — repeatable exposure, not a unique-person count.
+3. **Which path needs attention** — KPFT source/feed vs Pacifica/Icecast, with evidence limits.
+4. **Broadcast-time measures** — elapsed and summed stream-time shown together and qualified.
 5. Everything else — monitoring detail.
 
-**The rule that keeps it readable: a headcount, a clock duration and a person-hours figure
-never appear in the same row or the same tile group.** They measure different things, and
-formatted alike they invite a reader to reconcile numbers that cannot be compared — which is
-exactly how "3h 35m … 100.9 listener-hours" came to read as four days of downtime.
+**The rule that keeps it readable: a headcount, a clock duration and a person-hours figure are
+never presented without their unit and counting rule.** When they appear together, the page
+explicitly reconciles them and warns which values cannot be added.
 
 ### What an alert says about the audience
 
@@ -180,21 +177,22 @@ The curve is used only when the profile has at least 12 populated hours, and the
 factor is clamped to 0.2×–5× so one freak reading at the moment of failure cannot multiply a
 long extrapolation. Failing either guard, the flat figure stands.
 
-#### Where the fault was
+#### Which path needs attention
 
-`faultSplit` attributes every listener-affecting outage to the equipment that failed, decided
-by whether Icecast itself answered at the moment of failure:
+`faultSplit` assigns every listener-affecting outage to the side of the handoff indicated by
+Icecast reachability at the moment of failure. It does **not** prove which physical device,
+service, or network hop failed:
 
 | `side` | Means |
 |---|---|
-| `kpft` | Icecast was **reachable and serving other mounts** — our source encoder or mount dropped |
-| `pacifica` | Icecast itself could **not be reached** |
-| `unknown` | not enough evidence to attribute |
+| `kpft` | Icecast was **reachable** but the monitored source/mount was absent — inspect the KPFT source/feed path |
+| `pacifica` | Icecast could **not be reached** — inspect the Pacifica/Icecast server, network, DNS, and TLS path |
+| `unknown` | not enough evidence to assign the handoff; investigate jointly |
 
-This is the single most consequential field in the record. On the first production week it read
-19h 26m of KPFT encoder dropouts against 3h 46m of Pacifica server trouble — a conclusion no
-aggregate downtime figure can produce, and the difference between an engineer looking at the
-studio Barix and a pointless conversation with Pacifica.
+This is the action-routing field in the record. Its category windows can overlap: if the KPFT
+source path is already down when the Icecast path becomes unreachable, both categories accrue
+time. Therefore category hours must **never** be added to derive total elapsed downtime.
+Each entry's `streamRecords` is the clear-name count; `outages` remains as a compatibility alias.
 
 #### Time off air vs. stream-hours
 
@@ -202,10 +200,11 @@ Two different questions, and only one of them is what "how long were we down" me
 
 | Figure | Field | Meaning |
 |---|---|---|
-| **Time off air** | `downtime.wallClockMs` | elapsed time with *at least one* stream down; concurrent outages merged and counted once |
-| Stream-hours | `downtime.streamMs` | per-stream durations added together — the figure that reconciles with the uptime percentage |
+| **Elapsed off-air window** | `downtime.wallClockMs` / `downtime.elapsedOffAirMs` | elapsed time with *at least one* stream down; concurrent outages merged and counted once |
+| Summed stream-time | `downtime.streamMs` / `downtime.summedStreamMs` | per-stream durations added together — the figure that reconciles with the uptime percentage |
+| Fault-category overlap | `downtime.categoryOverlapMs` | category time occurring concurrently; explains why `faultSplit` durations do not add to elapsed time |
 
-On the production record these read 19h 52m and 1d 4h for the same period. The gap is one
+On the production record these read about 19h 28m and 1d 3h for the same period. The gap is one
 Icecast fault that took two streams down together: 3h35m off air, but 7h10m of stream-hours.
 Reporting the sum as though it were elapsed time overstated the outage by nearly half, so the
 tile leads with wall-clock and names the summed figure beside it.
@@ -269,15 +268,15 @@ Configure these environment variables in your deployment environment (e.g. Cooli
 PORT=3000
 
 # ── SMTP Email Config ────────────────────────────────
-SMTP_HOST=mail.hype.net
+SMTP_HOST=smtp.example.com
 SMTP_PORT=587
-SMTP_USER=paul@hype.net
+SMTP_USER=monitor@example.com
 SMTP_PASS=YourPasswordHere
-SMTP_FROM="KPFT Stream Monitor <paul@hype.net>"
+SMTP_FROM="KPFT Stream Monitor <monitor@example.com>"
 
 # ── Alert Recipients ─────────────────────────────────
-ALERT_EMAILS=gm@kpft.org,omaclay@gmail.com
-ALERT_CC=paul@hype.net
+ALERT_EMAILS=manager@example.com,engineer@example.com
+ALERT_CC=monitor-owner@example.com
 
 # ── Dashboard Link in Emails ─────────────────────────
 DASHBOARD_URL=https://kpft-icecast.supersoul.top
@@ -287,6 +286,9 @@ CHECK_INTERVAL_MS=60000         # Routine check interval (default: 60000ms / 1 m
 FAILURE_THRESHOLD=2             # Consecutive failures before sending server DOWN alert
 SILENCE_PROBE_INTERVAL_MS=5000   # Rapid probe interval during silence evaluation (default: 5s)
 SILENCE_FAILURE_THRESHOLD=3      # Consecutive silent probes before confirming Dead Air (default: 3)
+REQUEST_TIMEOUT_MS=15000         # Individual stream-probe timeout
+ICECAST_STATUS_TIMEOUT_MS=10000  # Icecast inventory request timeout
+SAVE_INTERVAL_MS=60000           # Periodic persistence flush interval
 
 # ── Alert Noise Control ──────────────────────────────
 # Escape hatch: email EVERY confirmed outage, including ones Icecast proves did
@@ -306,15 +308,20 @@ WEEKLY_ROUNDUP_EMAILS=          # falls back to ALERT_EMAILS when empty
 STATION_TZ=America/Chicago      # timezone for all email timestamps + schedule
 
 # ── Retention ────────────────────────────────────────
-# Events are ALWAYS permanent. This controls only the per-check telemetry
-# behind uptime figures: raw samples kept this many days, then compacted into
-# hourly summaries kept forever.
+# Events are not pruned by age, but the newest MAX_EVENTS are retained. Raw
+# samples behind uptime figures are kept this many days, then compacted into
+# long-term hourly summaries.
 SAMPLE_RETENTION_DAYS=7
+MAX_EVENTS=100000               # Memory-safety ceiling for the event log
 DATA_DIR=/app/data              # MUST be a persistent volume in production
+SEED_FILE=/app/seed/historical-events.json  # Optional one-time historical import
 
 # ── Diagnostics ──────────────────────────────────────
 ICECAST_STATUS_URL=https://streams.pacifica.org:9000/status-json.xsl
 SIBLING_MOUNTS=/live_128,/live_64,/HD3,/HD3_128,/HD3_64,/classic_country
+
+# Optional JSON array replacing the three default streams
+# STREAMS=[{"id":"main","name":"Main","url":"https://example.com/main"}]
 ```
 
 ---
@@ -323,9 +330,9 @@ SIBLING_MOUNTS=/live_128,/live_64,/HD3,/HD3_128,/HD3_64,/classic_country
 
 **Uptime and the event log come from different sources.** Uptime percentages and the 24h bars are computed from per-check *samples*; the incident timeline comes from *events*. They are stored separately, so it is possible to restore one without the other and see a reassuring 100% on a day that contained real outages. If uptime looks implausibly clean, check `sampleCount` in `/api/stats`.
 
-**Unconfirmed failures are not noise, they are just not urgent.** A single failed check that self-clears is recorded permanently but never emails — by the time anyone reads an alert it is already over. The value is in the aggregate: if *Connection reset by server* climbs week over week in the Root Causes panel, that is evidence worth taking to Pacifica, and far more persuasive than an anecdote. Note the split: a `probe_error` says more about the path between the monitor and Pacifica than about KPFT's streams, so do not cite it as station downtime.
+**Unconfirmed failures are not noise, they are just not urgent.** A single failed check that self-clears enters the long-term record but never emails — by the time anyone reads an alert it is already over. The value is in the aggregate: if *Connection reset by server* climbs week over week in the Root Causes panel, that is evidence worth taking to Pacifica, and far more persuasive than an anecdote. Note the split: a `probe_error` says more about the path between the monitor and Pacifica than about KPFT's streams, so do not cite it as station downtime.
 
-**Listener-minutes are the honest unit of harm.** `9 outages` and `35 minutes down` both understate a midday failure and overstate a 4am one. Each resolved event freezes an `audience` block — the listener count Icecast reported immediately before the mount vanished, multiplied by the outage length. It is captured at resolution time because it cannot be recovered later: Icecast only reports an audience while the mount exists, and raw samples compact after `SAMPLE_RETENTION_DAYS`. Events proven to have no listener impact are charged **zero**, never their audience.
+**Listener-minutes are the honest unit of harm.** `9 outages` and `35 minutes down` both understate a midday failure and overstate a 4am one. Each resolved event freezes an `audience` block using the pre-failure listener count. Outages up to one hour use audience × duration; longer outages use the stream's hour-of-day audience curve when enough history exists, falling back to the flat calculation otherwise. Events proven to have no listener impact are charged **zero**. The block is frozen at recovery because the raw measurements compact after `SAMPLE_RETENTION_DAYS`.
 
 **Listener counts during an outage.** When a mount vanishes, listeners correctly read **0** — the mount cannot serve anyone because it no longer exists. Earlier builds carried the last known count forward, which made outages appear to retain their full audience and hid the real loss. Counts are only carried forward when Icecast itself is unreachable and the true figure is genuinely unknown.
 
@@ -344,7 +351,7 @@ Returns real-time status of all monitored streams, including listener counts, re
 Returns the rolling 24-hour check history per stream plus the last 24h of events. Kept for dashboard back-compatibility — use `/api/events` for the full record.
 
 ### `GET /api/events`
-The **permanent** event log, never pruned by age. Each event carries its root-cause diagnosis, connection timings, Icecast state at the time of failure, resolution duration, and the email delivery outcome.
+The long-term event log. It is not pruned by age, but retains the newest `MAX_EVENTS` entries. Each event carries its root-cause diagnosis, connection timings, Icecast state at the time of failure, resolution duration, and the email delivery outcome.
 
 Query params: `days`, `since`, `until`, `streamId`, `type`, `severity` (`outage`/`brief_outage`/`probe_error`/`dead_air`/`recovery`, plus legacy `blip`), `cause`, `scope` (`stream`/`station`/`server`), `emailed` (`true`/`false`), `limit`, `offset`, `order`.
 
@@ -361,6 +368,13 @@ Full detail for a single event.
 
 ### `GET /api/stats?days=30`
 Aggregates for the history view: per-stream uptime and counts, daily buckets for the heatmap, root-cause breakdown, and storage info.
+
+Each daily bucket includes `impactMs` (elapsed off-air time, overlaps merged) and `streamMs`
+(affected streams summed separately), spread across every station-local day the outage touched.
+`dailyTimeZone` names that timezone. Probe-only failures do not color the off-air calendar.
+
+### `GET /api/uptime?days=1`
+Returns audience-experienced `uptime`, which excludes probe-only failures where Icecast kept serving the mount, plus the raw sample-based `probeUptime`. It also reports the actual history coverage so the UI can label partial ranges.
 
 ### `GET /api/samples/:streamId?hours=24`
 Raw per-check telemetry plus hourly rollups for one stream.
@@ -389,9 +403,9 @@ Period totals in numbers **and in one English sentence** — outage counts, down
 delivery, listeners cut off, listening lost, per-stream breakdown, top causes and the two
 most notable incidents.
 
-The sentence in `narrative` is composed server-side and used **verbatim** by both the
-history page's Overview line and the weekly roundup email, so the dashboard and the inbox
-cannot describe the same week differently.
+The sentence in `narrative` is composed server-side for the weekly roundup email and for API
+consumers that need a plain-English summary. The History page renders the same underlying
+fields as explicitly qualified metrics rather than restating them in a second summary card.
 
 Two counts are deliberately kept apart and must not be conflated:
 
@@ -399,8 +413,10 @@ Two counts are deliberately kept apart and must not be conflated:
 |---|---|
 | `alerts.messages` | emails actually sent — one consolidated message can cover three streams |
 | `alerts.eventsAlerted` | events that were covered by an alert |
-| `audience.listenersCutOff` | audience summed **per incident** — someone cut off three times counts three times |
-| `audience.listenerMinutesLost` | reach × duration; the figure to lead with |
+| `interruptions.streamRecords` | one record per affected stream; one incident affecting two streams creates two records |
+| `interruptions.sustainedStreamRecords` + `.briefStreamRecords` | reconciliation of the stream-record total at the five-minute threshold |
+| `audience.listenerInterruptions` / `listenersCutOff` | audience summed **per interruption** — someone cut off three times counts three times |
+| `audience.listenerMinutesLost` | audience × duration; always show it with its share of possible listening |
 
 `coverageMs` is how much of the window the monitor actually watched. When it falls below
 95% of the window, both the page and the email say so rather than quoting a partial period
@@ -474,7 +490,7 @@ curl -s 'http://localhost:3000/api/events?severity=outage&limit=1' | jq -r '.eve
 4. **Healthcheck URL**: `http://localhost:3000/health` (uses `curl -f`)
 5. **Persistent Storage** ⚠️ **required**: Mount a persistent volume at container path `/app/data`.
 
-   Incident history is retained **permanently** and lives in `/app/data/events.json`. Without a persistent volume, every redeploy silently resets the entire record to zero — the container filesystem does not survive a rebuild. Verify with:
+   Incident history lives in `/app/data/events.json`, is not pruned by age, and retains the newest `MAX_EVENTS` entries. Without a persistent volume, every redeploy silently resets the entire record to zero — the container filesystem does not survive a rebuild. Verify with:
 
    ```bash
    curl -s https://<your-host>/api/stats?days=1 | jq .storage
@@ -482,7 +498,7 @@ curl -s 'http://localhost:3000/api/events?severity=outage&limit=1' | jq -r '.eve
    ```
 
    Two files are written there:
-   - `events.json` — the permanent incident record (small; ~400 bytes/event)
+   - `events.json` — the long-term incident record (small; ~400 bytes/event; newest `MAX_EVENTS` retained)
    - `samples.json` — rolling telemetry, 7 days raw then hourly rollups (~4 MB at 3 streams)
 
 ---

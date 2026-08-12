@@ -3,16 +3,15 @@
    ───────────────────────────────────────────────────────────────────────────
    Two independent files, on purpose:
 
-     data/events.json   Every outage, recovery and dead-air event.
-                        RETAINED FOREVER. Small (~400 bytes each) — a decade of
-                        incidents is a few megabytes.
+     data/events.json   Every outage, recovery and dead-air event. Events are
+                        not pruned by age; the newest MAX_EVENTS are retained.
 
      data/samples.json  Per-check telemetry powering the uptime bars.
                         Raw samples kept SAMPLE_RETENTION_DAYS (default 7),
-                        then compacted into hourly rollups kept forever.
+                        then compacted into long-term hourly rollups.
 
    Splitting them means a large or corrupted sample file can never take the
-   permanent incident record down with it. Both are written atomically
+   long-term incident record down with it. Both are written atomically
    (temp file + rename) so a crash mid-write cannot truncate them.
    ═══════════════════════════════════════════════════════════════════════════ */
 
@@ -36,12 +35,12 @@ const MAX_EVENTS = parseInt(process.env.MAX_EVENTS, 10) || 100000;
 
 // Severities for a failure that never reached FAILURE_THRESHOLD. 'blip' is the
 // retired name for both and still sits in stored history, so every count has to
-// keep recognising it — events are permanent and are never rewritten.
+// keep recognising it — retained events are never rewritten.
 const UNCONFIRMED_SEVERITIES = new Set(['brief_outage', 'probe_error', 'blip']);
 const isUnconfirmedSeverity = (s) => UNCONFIRMED_SEVERITIES.has(s);
 
 // ── State ───────────────────────────────────────────────────────────────────
-let events = [];             // permanent incident record, oldest → newest
+let events = [];             // long-term incident record, oldest → newest
 let samples = {};            // { [streamId]: [ sample ] }  raw, rolling window
 let rollups = {};            // { [streamId]: [ hourlyRollup ] }  permanent
 let streamStatusCache = {};  // last known status, for warm restarts
@@ -98,7 +97,7 @@ function load(streamIds) {
     streamStatusCache = ev.streamStatus || {};
     appliedSeeds = Array.isArray(ev.appliedSeeds) ? ev.appliedSeeds : [];
     meta = ev.meta && typeof ev.meta === 'object' ? ev.meta : {};
-    console.log(`[Store] Loaded ${events.length} permanent event(s)`);
+    console.log(`[Store] Loaded ${events.length} retained event(s)`);
   }
 
   const sm = readJson(SAMPLES_FILE);
@@ -119,7 +118,7 @@ function load(streamIds) {
   }
 
   // One-time migration off the old combined history.json. Its incidents are
-  // rescued into the permanent record rather than being lost to the old 24h
+  // rescued into the long-term record rather than being lost to the old 24h
   // prune the next time it runs.
   if (!ev && !sm) {
     const legacy = readJson(LEGACY_FILE);
@@ -308,7 +307,7 @@ function applySeed() {
   }
 }
 
-// ── Events (permanent) ──────────────────────────────────────────────────────
+// ── Events (long-term, bounded by MAX_EVENTS) ───────────────────────────────
 function addEvent(evt) {
   const event = {
     id: makeEventId(evt.timestamp, evt.streamId || 'all'),
@@ -439,7 +438,7 @@ function getHourOfDayProfile(streamId) {
  * This is the one measurement that cannot be recovered later: Icecast only
  * reports listeners while the mount exists, and raw samples are compacted after
  * SAMPLE_RETENTION_DAYS. So it has to be captured at resolution time and frozen
- * onto the permanent event record.
+ * onto the long-term event record.
  *
  *   confidence 'measured' → a real pre-outage sample was found
  *   confidence 'modelled' → estimated from this stream's hour-of-day profile
@@ -1066,28 +1065,108 @@ function getSummary(streamIds, windowMs) {
   return out;
 }
 
-/** Per-day outage counts for the calendar heatmap. */
-function getDailyBuckets(days) {
+const dayFormatters = new Map();
+
+function zonedDayKey(ms, timeZone) {
+  let fmt = dayFormatters.get(timeZone);
+  if (!fmt) {
+    fmt = new Intl.DateTimeFormat('en-US', {
+      timeZone, year: 'numeric', month: '2-digit', day: '2-digit',
+    });
+    dayFormatters.set(timeZone, fmt);
+  }
+  const p = Object.fromEntries(fmt.formatToParts(new Date(ms)).map((x) => [x.type, x.value]));
+  return `${p.year}-${p.month}-${p.day}`;
+}
+
+function addCalendarDay(day, amount = 1) {
+  const [y, m, d] = day.split('-').map(Number);
+  const next = new Date(Date.UTC(y, m - 1, d + amount));
+  return next.toISOString().slice(0, 10);
+}
+
+/** Convert station-local midnight to an instant, including DST transitions. */
+function zonedMidnightMs(day, timeZone) {
+  const [y, m, d] = day.split('-').map(Number);
+  const wanted = Date.UTC(y, m - 1, d);
+  let guess = wanted;
+  const fmt = new Intl.DateTimeFormat('en-US', {
+    timeZone, year: 'numeric', month: '2-digit', day: '2-digit',
+    hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23',
+  });
+  for (let i = 0; i < 3; i++) {
+    const p = Object.fromEntries(fmt.formatToParts(new Date(guess)).map((x) => [x.type, x.value]));
+    const represented = Date.UTC(+p.year, +p.month - 1, +p.day, +p.hour, +p.minute, +p.second);
+    guess += wanted - represented;
+  }
+  return guess;
+}
+
+/** Per-day counts plus elapsed listener-impacting off-air time for the heatmap. */
+function getDailyBuckets(days, timeZone = 'UTC') {
   const out = new Map();
   const cutoff = Date.now() - days * 24 * 60 * 60 * 1000;
 
+  const bucket = (day) => {
+    if (!out.has(day)) {
+      const startMs = zonedMidnightMs(day, timeZone);
+      const endMs = zonedMidnightMs(addCalendarDay(day), timeZone);
+      out.set(day, {
+        day, start: new Date(startMs).toISOString(), end: new Date(endMs).toISOString(),
+        outages: 0, blips: 0, briefOutages: 0, probeErrors: 0,
+        deadAir: 0, recoveries: 0, total: 0, impactStarts: 0, impactMs: 0, streamMs: 0,
+        _impactIntervals: [],
+      });
+    }
+    return out.get(day);
+  };
+
   for (const e of events) {
     const t = new Date(e.timestamp).getTime();
-    if (t < cutoff) continue;
-    const day = new Date(e.timestamp).toISOString().slice(0, 10);
-    if (!out.has(day)) {
-      out.set(day, { day, outages: 0, blips: 0, briefOutages: 0, probeErrors: 0, deadAir: 0, recoveries: 0, total: 0 });
+    if (!isFinite(t)) continue;
+
+    if (t >= cutoff) {
+      const b = bucket(zonedDayKey(t, timeZone));
+      b.total++;
+      if (e.severity === 'outage') b.outages++;
+      else if (e.severity === 'dead_air') b.deadAir++;
+      else if (e.severity === 'recovery') b.recoveries++;
+      else if (isUnconfirmedSeverity(e.severity)) {
+        b.blips++;
+        if (e.severity === 'probe_error') b.probeErrors++;
+        else b.briefOutages++;
+      }
+      if (e.type !== 'up' && costListeners(e)) b.impactStarts++;
     }
-    const b = out.get(day);
-    b.total++;
-    if (e.severity === 'outage') b.outages++;
-    else if (e.severity === 'dead_air') b.deadAir++;
-    else if (e.severity === 'recovery') b.recoveries++;
-    else if (isUnconfirmedSeverity(e.severity)) {
-      b.blips++;
-      if (e.severity === 'probe_error') b.probeErrors++;
-      else b.briefOutages++;
+
+    // Spread real off-air time across every station-local date it touched.
+    // `impactMs` merges simultaneous streams; `streamMs` adds them separately.
+    if (e.type === 'up' || !e.durationMs || !costListeners(e)) continue;
+    let cursor = Math.max(t, cutoff);
+    const eventEnd = Math.min(Date.now(), t + e.durationMs);
+    if (eventEnd <= cursor) continue;
+    while (cursor < eventEnd) {
+      const day = zonedDayKey(cursor, timeZone);
+      const b = bucket(day);
+      const next = zonedMidnightMs(addCalendarDay(day), timeZone);
+      const end = Math.min(eventEnd, next);
+      b.streamMs += end - cursor;
+      b._impactIntervals.push([cursor, end]);
+      cursor = end;
     }
+  }
+
+  for (const b of out.values()) {
+    b._impactIntervals.sort((a, z) => a[0] - z[0]);
+    let start = null;
+    let end = null;
+    for (const [s, e] of b._impactIntervals) {
+      if (start === null) { start = s; end = e; }
+      else if (s <= end) end = Math.max(end, e);
+      else { b.impactMs += end - start; start = s; end = e; }
+    }
+    if (start !== null) b.impactMs += end - start;
+    delete b._impactIntervals;
   }
 
   return [...out.values()].sort((a, b) => a.day.localeCompare(b.day));
@@ -1284,17 +1363,16 @@ function groupIncidents(list) {
 }
 
 /**
- * Whose equipment failed.
+ * Which side of the station-to-Icecast handoff the evidence points to.
  *
  * The single most important fact when this record is sent to Pacifica: an
- * 18-hour HD2 dropout with the Icecast server serving 11 other mounts happily
- * is a KPFT studio problem, and reporting it as "the server was down" is both
- * wrong and embarrassing. Icecast's own reachability decides it.
+ * Reachability can identify the path that needs attention, but it cannot prove
+ * which physical device, network hop, or service failed.
  */
 function faultSide(e) {
   const ice = e.diagnosis?.icecast || {};
-  if (ice.reachable === false) return 'pacifica';   // the server itself was unreachable
-  if (ice.reachable === true) return 'kpft';        // server fine, our mount/source gone
+  if (ice.reachable === false) return 'pacifica';   // Pacifica/Icecast path unreachable
+  if (ice.reachable === true) return 'kpft';        // Icecast answered; our mount/source absent
   return 'unknown';
 }
 
@@ -1314,10 +1392,9 @@ function fmtMs(ms) {
 const PERIOD_LABELS = { 1: 'Last 24 hours', 7: 'Last 7 days', 30: 'Last 30 days', 90: 'Last 90 days', 365: 'Last year' };
 
 /**
- * The rollup stated as English, built HERE so the history page and the weekly
- * email say the same thing in the same words. Composing this sentence twice —
- * once in browser JS, once in the mailer — is how the dashboard and the inbox
- * end up quietly disagreeing about the same week.
+ * The rollup stated as English for the weekly email and API consumers. It is
+ * built here, beside the numeric contract, so no second implementation can
+ * quietly redefine the same period.
  */
 function narrate(r) {
   const c = r.counts;
@@ -1343,7 +1420,7 @@ function narrate(r) {
       : 'No outages at all — every stream held for the whole period.';
   } else if (r.topIncidents.length) {
     const top = r.topIncidents[0];
-    headline = `Listeners lost audio for ${fmtMs(r.downtimeMs)} in total. `
+    headline = `At least one monitored stream was off air for ${fmtMs(r.downtimeMs)} elapsed time (overlaps counted once). `
       + `The longest was ${top.streams.join(' and ')}, off air ${fmtMs(top.durationMs)}`
       + (top.cause ? ` — ${top.cause.toLowerCase()}` : '') + '.';
   } else {
@@ -1351,7 +1428,7 @@ function narrate(r) {
   }
 
   const bits = [];
-  if (r.uptime != null) bits.push(`${r.uptime}% of the time all streams were serving audio`);
+  if (r.uptime != null) bits.push(`${r.uptime}% of monitored stream-time delivered audio`);
   if (delivered != null) bits.push(`${delivered}% of listening delivered`);
   // Stated as what it is — a monitoring artefact — rather than as "unconfirmed
   // blips", which sounds like outages we failed to pin down.
@@ -1378,10 +1455,9 @@ function narrate(r) {
 /**
  * Everything needed to state "what happened over this period" in one sentence.
  *
- * ONE function, deliberately, because three places have to agree: the Overview
- * line on the history page, the weekly roundup email, and anything added later.
- * Two implementations of "how many outages last week" is two answers, and the
- * one in the inbox is the one nobody can check against the dashboard.
+ * ONE function, deliberately, because the History metrics, weekly roundup, and
+ * future consumers must all derive from the same totals. Two implementations
+ * of "how many outages last week" is two different answers waiting to happen.
  *
  * Two counting subtleties are surfaced rather than smoothed over:
  *
@@ -1445,16 +1521,16 @@ function getPeriodRollup(streamIds, windowMs) {
   // leads with totals instead of naming these is hiding its own answer.
   const incidents = groupIncidents(significant);
 
-  // WHO HAS TO FIX IT. The question a station manager forwards and an engineer
-  // acts on, and the one thing the record can answer that nobody's memory can:
-  // Icecast's own reachability at the moment of failure separates a KPFT studio
-  // fault from a Pacifica server fault. On the first production week this was
-  // 19.4h of KPFT encoder dropouts against 3.8h of server trouble — a
-  // conclusion no amount of aggregate downtime could have shown.
+  // WHO HAS TO ACT. Reachability at the moment of failure separates the KPFT
+  // source/feed path from the Pacifica/Icecast path. It does not prove which
+  // individual device or network hop failed, so callers must retain that
+  // narrower wording.
   const faultSplit = ['kpft', 'pacifica', 'unknown'].map((side) => {
     const mine = impactful.filter((e) => faultSide(e) === side);
     return {
       side,
+      streamRecords: mine.length,
+      // Back-compatible alias; these are per-stream records, not grouped incidents.
       outages: mine.length,
       wallClockMs: mergedDowntimeMs(mine),
       listenersCutOff: mine.reduce((a, e) => a + (e.audience?.listenersBefore || 0), 0),
@@ -1569,7 +1645,15 @@ function getPeriodRollup(streamIds, windowMs) {
       unconfirmed: unconfirmed.length,
       recoveries: inWindow.filter((e) => e.severity === 'recovery').length,
       ongoing,
-      streamsAffected: new Set(failures.map((e) => e.streamId)).size,
+      streamsAffected: new Set(impactful.map((e) => e.streamId)).size,
+    },
+    interruptions: {
+      // One record per affected stream. A single incident that drops Main and
+      // HD3 therefore contributes two records.
+      streamRecords: impactful.length,
+      sustainedStreamRecords: significant.length,
+      briefStreamRecords: brief.length,
+      groupedSustainedIncidents: incidents.length,
     },
     // Elapsed time at least one stream was down — what a person means by "how
     // long were we down". The summed figure is kept alongside it because that
@@ -1578,6 +1662,13 @@ function getPeriodRollup(streamIds, windowMs) {
     downtime: {
       wallClockMs,
       streamMs,
+      // Clear-name aliases for new consumers. The older keys remain stable.
+      elapsedOffAirMs: wallClockMs,
+      summedStreamMs: streamMs,
+      categoryOverlapMs: Math.max(
+        0,
+        faultSplit.reduce((sum, side) => sum + side.wallClockMs, 0) - wallClockMs,
+      ),
       excludedMs: harmless.reduce((a, e) => a + (e.durationMs || 0), 0),
       excludedEvents: harmless.length,
       worstStream,
@@ -1598,6 +1689,8 @@ function getPeriodRollup(streamIds, windowMs) {
     },
     audience: {
       listenersCutOff,
+      // This is repeatable interruption exposure, not distinct people.
+      listenerInterruptions: listenersCutOff,
       listenerMinutesLost: audience.listenerMinutesLost,
       listenerHoursLost: audience.listenerHoursLost,
       // The largest audience any single failure took off the air — a plain
@@ -1709,6 +1802,7 @@ function getStorageInfo() {
     eventsBytes: stat(EVENTS_FILE),
     samplesBytes: stat(SAMPLES_FILE),
     eventCount: events.length,
+    maxEvents: MAX_EVENTS,
     sampleCount: Object.values(samples).reduce((a, b) => a + b.length, 0),
     rollupCount: Object.values(rollups).reduce((a, b) => a + b.length, 0),
     sampleRetentionDays: SAMPLE_RETENTION_DAYS,
@@ -1728,4 +1822,5 @@ module.exports = {
   getAudienceContext, getHourOfDayProfile, buildAudienceImpact, deriveListenerImpact,
   getListenerSeries, getAudienceSummary, chooseBucketMs,
   SAMPLE_RETENTION_DAYS,
+  MAX_EVENTS,
 };

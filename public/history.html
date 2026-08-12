@@ -14,9 +14,9 @@
   <meta http-equiv="Expires" content="0">
 
   <title>Incident History — KPFT Stream Monitor</title>
-  <meta name="description" content="Complete permanent incident history for KPFT Icecast streams with root-cause diagnosis.">
+  <meta name="description" content="Long-term incident history for KPFT Icecast streams with root-cause diagnosis and listener-impact reporting.">
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📡</text></svg>">
-  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20..48,100..700,0..1,-50..200&display=swap">
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20..48,100..700,0..1,-50..200&amp;display=swap">
   <link rel="stylesheet" href="style.css?v=dev">
   <link rel="stylesheet" href="history.css?v=dev">
 </head>
@@ -40,7 +40,7 @@
         <div class="logo">📡</div>
         <div>
           <div class="header-title">Incident History</div>
-          <div class="header-subtitle" id="retention-note">Complete permanent record</div>
+          <div class="header-subtitle" id="retention-note">Complete long-term record</div>
         </div>
       </div>
       <div class="header-right">
@@ -85,81 +85,93 @@
     <div class="impact-hero fade-in" id="impact-hero">
       <div class="ih-top">
         <div class="ih-main">
-          <div class="ih-label">Listeners cut off</div>
+          <div class="ih-label">
+            Share of possible listening delivered
+            <details class="info-popover">
+              <summary aria-label="Explain listener-impact figures" title="Explain these figures">
+                <span class="material-symbols-outlined" aria-hidden="true">info</span>
+              </summary>
+              <div class="info-popover-card">
+                <strong>Listening delivered</strong> compares estimated listening actually heard with
+                listening that would likely have happened without an outage. <strong>Listener-hours</strong>
+                multiplies audience by duration: 50 people missing one hour is 50 listener-hours. It is
+                audience volume, not clock time.
+              </div>
+            </details>
+          </div>
           <div class="ih-value" id="ih-value">—</div>
           <div class="ih-sub" id="ih-sub"></div>
         </div>
         <div class="ih-side">
           <div class="ih-stat">
             <div class="ih-stat-value" id="ih-peak">—</div>
-            <div class="ih-stat-label">at the worst single moment</div>
+            <div class="ih-stat-label">listeners affected at the worst single moment</div>
           </div>
           <div class="ih-stat">
             <div class="ih-stat-value" id="ih-incidents-count">—</div>
-            <div class="ih-stat-label">outages that reached listeners</div>
+            <div class="ih-stat-label">stream interruption records</div>
           </div>
           <div class="ih-stat">
             <div class="ih-stat-value" id="ih-streams">—</div>
-            <div class="ih-stat-label">streams affected</div>
+            <div class="ih-stat-label">distinct streams affected</div>
           </div>
         </div>
       </div>
 
-      <!-- Subheadline: the same loss expressed as listening time, with the
-           sentence that stops it being read as clock hours. -->
+      <!-- Repeatable audience exposure, kept separate from clock durations. -->
       <div class="ih-secondary" id="ih-secondary"></div>
 
-      <div class="ih-note" id="ih-note"></div>
     </div>
 
-    <!-- WHO HAS TO FIX IT — the block a station manager forwards. -->
+    <!-- The explicit bridge between the large totals. These are deliberately
+         visible: the qualification is part of the number, not optional help. -->
+    <div class="metric-reconciliation fade-in" id="metric-reconciliation">
+      <div class="mr-title">How the large totals relate</div>
+      <div class="mr-grid">
+        <div class="mr-item">
+          <div class="mr-value" id="stat-uptime">—</div>
+          <div class="mr-label">monitored stream-time uptime</div>
+          <div class="mr-note" id="stat-uptime-detail">All monitored stream-time combined; probe-only failures excluded.</div>
+        </div>
+        <div class="mr-item">
+          <div class="mr-value" id="stat-downtime">—</div>
+          <div class="mr-label">elapsed off-air time</div>
+          <div class="mr-note" id="stat-downtime-detail">At least one monitored stream was off air; simultaneous outages count once.</div>
+        </div>
+        <div class="mr-item">
+          <div class="mr-value" id="stat-streamtime">—</div>
+          <div class="mr-label">summed stream-time lost</div>
+          <div class="mr-note" id="stat-streamtime-detail">Each affected stream is counted separately; this is the basis of audio uptime.</div>
+        </div>
+        <div class="mr-item">
+          <div class="mr-value" id="mr-listener-hours">—</div>
+          <div class="mr-label">listener-hours lost</div>
+          <div class="mr-note">Estimated audience × outage duration; this is not elapsed clock time.</div>
+        </div>
+      </div>
+      <div class="mr-equation" id="mr-equation">
+        <strong id="stat-outages">—</strong>
+        <span id="stat-outages-detail">stream interruption records</span>
+      </div>
+    </div>
+
+    <!-- WHO HAS TO ACT — the block a station manager forwards. -->
     <div class="section-subhead">
       <span class="material-symbols-outlined">build</span>
-      Where the fault was
-      <span class="section-subhead-note">decided by whether Icecast itself was reachable</span>
-    </div>
-    <div class="section-note">
-      Every outage traced to the equipment that failed. <strong>KPFT equipment</strong> means our
-      studio encoder dropped while Pacifica's Icecast server was up and serving other stations.
-      <strong>Pacifica server</strong> means the server itself could not be reached.
+      Which path needs attention?
+      <details class="info-popover">
+        <summary aria-label="Explain fault ownership" title="Explain fault ownership">
+          <span class="material-symbols-outlined" aria-hidden="true">info</span>
+        </summary>
+        <div class="info-popover-card">
+          This is an evidence-based handoff, not proof that a particular box failed.
+          <strong>KPFT source/feed path</strong> means Icecast answered but the monitored source or
+          mount was absent. <strong>Pacifica/Icecast path</strong> means the monitor could not reach
+          Icecast; the server, network, DNS, or TLS path may need investigation.
+        </div>
+      </details>
     </div>
     <div class="fault-split" id="fault-split"></div>
-    </div>
-
-    <!-- SECTION 2 — clock time. Deliberately its own block: a duration and a
-         headcount in the same tile row is what made this page unreadable. -->
-    <div class="section-subhead">
-      <span class="material-symbols-outlined">schedule</span>
-      Stream downtime
-      <span class="section-subhead-note">clock time the streams were off air</span>
-    </div>
-    <div class="section-note">
-      How long each stream was actually silent, on the clock. These are hours of
-      <strong>broadcast time</strong> — nothing here is multiplied by the number of listeners.
-    </div>
-
-    <div class="summary-bar fade-in">
-      <div class="summary-card">
-        <div class="summary-label">Audio Uptime</div>
-        <div class="summary-value neutral" id="stat-uptime">—</div>
-        <div class="summary-detail" id="stat-uptime-detail">across all streams</div>
-      </div>
-      <div class="summary-card">
-        <div class="summary-label">Time Off Air</div>
-        <div class="summary-value neutral" id="stat-downtime">—</div>
-        <div class="summary-detail" id="stat-downtime-detail">at least one stream down</div>
-      </div>
-      <div class="summary-card">
-        <div class="summary-label">Significant Outages</div>
-        <div class="summary-value down" id="stat-outages">—</div>
-        <div class="summary-detail" id="stat-outages-detail">in range</div>
-      </div>
-      <div class="summary-card">
-        <div class="summary-label">Brief Interruptions</div>
-        <div class="summary-value neutral" id="stat-brief">—</div>
-        <div class="summary-detail" id="stat-brief-detail">short gaps — players usually rebuffer</div>
-      </div>
-    </div>
 
     <!-- Every outage that reached a listener, longest first. -->
     <div class="section-subhead">
@@ -178,7 +190,16 @@
     <div class="section-subhead">
       <span class="material-symbols-outlined">troubleshoot</span>
       Monitoring detail
-      <span class="section-subhead-note">recorded in full — none of this reached a listener unless noted</span>
+      <details class="info-popover">
+        <summary aria-label="Explain monitoring detail" title="Explain monitoring detail">
+          <span class="material-symbols-outlined" aria-hidden="true">info</span>
+        </summary>
+        <div class="info-popover-card">
+          These figures describe monitor and connection health. They are recorded in full, but did
+          not reach a listener unless noted. Probe anomalies belong here rather than in station
+          downtime because Icecast kept serving the mount.
+        </div>
+      </details>
     </div>
     <div class="summary-bar summary-bar-minor fade-in">
       <div class="summary-card">
@@ -198,24 +219,20 @@
       </div>
     </div>
 
-    <!-- The tiles above, read back as a sentence. Informational by design: it
-         summarises a period that has already happened, so it must not look like
-         a live alarm however bad the numbers in it are. -->
-    <div class="overview-summary fade-in" id="overview-summary" style="display:none;">
-      <div class="os-icon" id="os-icon">
-        <span class="material-symbols-outlined">summarize</span>
-      </div>
-      <div class="os-body">
-        <div class="os-headline" id="os-headline"></div>
-        <div class="os-detail" id="os-detail"></div>
-        <div class="os-scope" id="os-scope" style="display:none;"></div>
-      </div>
-    </div>
-
     <!-- Audience over time, with the outages that interrupted it -->
     <div class="section-title">
       <span class="material-symbols-outlined">group</span>
       Listener Audience
+      <details class="info-popover">
+        <summary aria-label="Explain the listener audience chart" title="Explain this chart">
+          <span class="material-symbols-outlined" aria-hidden="true">info</span>
+        </summary>
+        <div class="info-popover-card">
+          Shows listeners online and the peak within each time bucket. Outages lasting only minutes
+          can be narrower than one pixel across a multi-day range, so fixed markers keep them visible;
+          hover a marker for details.
+        </div>
+      </details>
       <span class="section-hint" id="audience-hint"></span>
     </div>
 
@@ -227,14 +244,24 @@
         <span class="alg"><i class="swatch tick"></i>Confirmed outage</span>
         <span class="alg"><i class="swatch brief"></i>Brief outage — under the confirmation threshold</span>
         <span class="alg"><i class="swatch probe"></i>Probe anomaly — no listener impact</span>
-        <span class="alg alg-note">Outages lasting minutes are narrower than a pixel across a multi-day range — hover any mark for its detail.</span>
       </div>
     </div>
 
     <!-- Heatmap -->
     <div class="section-title">
       <span class="material-symbols-outlined">calendar_month</span>
-      Outage Density
+      Off-Air Duration by Day
+      <details class="info-popover">
+        <summary aria-label="Explain the outage density chart" title="Explain this chart">
+          <span class="material-symbols-outlined" aria-hidden="true">info</span>
+        </summary>
+        <div class="info-popover-card">
+          Darker days contain more elapsed time with at least one monitored stream off air. An
+          outage is spread across every calendar day it touched, so a day-long outage no longer
+          appears as a single start marker. Times use the station's timezone. Select a day to see
+          events that overlapped it.
+        </div>
+      </details>
       <span class="section-hint" id="heatmap-range"></span>
     </div>
     <div class="panel heatmap-panel fade-in">
@@ -243,15 +270,13 @@
         <div class="heatmap" id="heatmap"></div>
       </div>
       <div class="heatmap-legend">
-        <span class="legend-label">Fewer</span>
+        <span class="legend-label">None</span>
         <span class="legend-cell l0"></span>
         <span class="legend-cell l1"></span>
         <span class="legend-cell l2"></span>
         <span class="legend-cell l3"></span>
         <span class="legend-cell l4"></span>
-        <span class="legend-label">More</span>
-        <span class="legend-spacer"></span>
-        <span class="legend-label">Click a day to filter the timeline</span>
+        <span class="legend-label">6h+</span>
       </div>
     </div>
 
@@ -332,7 +357,7 @@
     </div>
 
     <footer class="footer">
-      KPFT Icecast Stream Monitor · Incidents retained permanently · Powered by Pacifica Foundation
+      KPFT Icecast Stream Monitor · Long-term incident history · Powered by Pacifica Foundation
     </footer>
   </div>
 </div>

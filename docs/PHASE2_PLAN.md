@@ -1,10 +1,12 @@
 # KPFT Icecast Diagnostic — Phase 2 Planning & Audit Document
 
-> **Status: complete — retained as a historical record.**
-> Everything below shipped. The system has since gained root-cause diagnosis,
-> permanent incident retention, and email delivery tracking, none of which are
-> described here. For current behaviour see [`../README.md`](../README.md), and
-> for the diagnosis engine see [`DIAGNOSTICS.md`](DIAGNOSTICS.md).
+> **Status: archived proposal — not a current specification.**
+> The major Phase 2 capabilities shipped, but some proposed details changed or
+> were not implemented. The system has also gained root-cause diagnosis,
+> long-term incident retention, listener-impact reporting, weekly roundups, and
+> email delivery tracking, none of which are fully described here. For current
+> behaviour see [`../README.md`](../README.md), and for the diagnosis engine see
+> [`DIAGNOSTICS.md`](DIAGNOSTICS.md).
 
 This document outlines the technical audit and implementation plan for Phase 2 enhancements to the KPFT Icecast Stream Monitor.
 
@@ -98,28 +100,28 @@ This document outlines the technical audit and implementation plan for Phase 2 e
 
 ### Backend
 
-#### [MODIFY] [monitor.js](file:///Users/paulhenshaw/Desktop/icecast-diagnose/monitor.js)
+#### [MODIFY] [`monitor.js`](../monitor.js)
 - Integrate `/status-json.xsl` fetch during check cycle.
 - Add audio buffer chunk analyzer for silence detection (`checkAudioSilence`).
 - Store `listeners`, `listener_peak`, `title`, and `bitrate` in `streamStatus`.
 - Trigger `sendAlert` for `'silence'` state transitions.
 
-#### [MODIFY] [server.js](file:///Users/paulhenshaw/Desktop/icecast-diagnose/server.js)
+#### [MODIFY] [`server.js`](../server.js)
 - Expose new stats fields in `/api/status`.
 
 ---
 
 ### Frontend & UI
 
-#### [MODIFY] [public/index.html](file:///Users/paulhenshaw/Desktop/icecast-diagnose/public/index.html)
+#### [MODIFY] [`public/index.html`](../public/index.html)
 - Add total network listeners card to Summary Bar.
 - Add HTML5 `<audio>` container template for stream cards.
 
-#### [MODIFY] [public/style.css](file:///Users/paulhenshaw/Desktop/icecast-diagnose/public/style.css)
+#### [MODIFY] [`public/style.css`](../public/style.css)
 - Styles for live audio player widget, play button, animated sound waves visualizer.
 - Badge styles for listeners, bitrate, and dead air status.
 
-#### [MODIFY] [public/app.js](file:///Users/paulhenshaw/Desktop/icecast-diagnose/public/app.js)
+#### [MODIFY] [`public/app.js`](../public/app.js)
 - Render listener counts, bitrate, and show metadata.
 - Implement HTML5 audio play/pause state handling for preview player.
 
@@ -132,8 +134,8 @@ This document outlines the technical audit and implementation plan for Phase 2 e
 # Verify status API returns listener stats and metadata
 curl -s https://kpft-icecast.supersoul.top/api/status | jq .
 
-# Test silence detection function on local audio sample
-npm test
+# This historical plan predates an automated test suite. Validate current JS syntax:
+node --check diagnose.js
 ```
 
 ### Manual Verification

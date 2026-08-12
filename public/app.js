@@ -19,9 +19,10 @@
   async function boot() {
     try {
       // Fetch initial status in parallel
-      const [statusRes, historyRes] = await Promise.all([
+      const [statusRes, historyRes, configRes] = await Promise.all([
         fetch('/api/status').then((r) => r.json()),
         fetch('/api/history').then((r) => r.json()),
+        fetch('/api/config').then((r) => (r.ok ? r.json() : null)).catch(() => null),
       ]);
 
       history = historyRes.history || {};
@@ -39,7 +40,7 @@
       isFirstLoad = false;
 
       // Setup Help Modal
-      setupHelpModal();
+      setupHelpModal(configRes);
       setupUptimeRangePills();
 
       // Start polling
@@ -52,7 +53,7 @@
   }
 
   // ── Help Modal ───────────────────────────────────────────────────────────
-  function setupHelpModal() {
+  function setupHelpModal(config) {
     const modal = $('#help-modal');
     const openBtn = $('#help-btn');
     const closeBtn = $('#modal-close-btn');
@@ -70,6 +71,38 @@
     modal.onclick = (e) => {
       if (e.target === modal) close();
     };
+
+    if (!config) return;
+    const setText = (selector, value) => {
+      const el = $(selector);
+      if (el && value != null) el.textContent = value;
+    };
+    const intervalLabel = (ms) => {
+      if (!Number.isFinite(ms)) return null;
+      if (ms % 60000 === 0) return `${ms / 60000} minute${ms === 60000 ? '' : 's'}`;
+      return `${ms / 1000} seconds`;
+    };
+    const names = (config.streams || []).map((stream) => stream.name).filter(Boolean);
+    setText('#help-stream-list', names.length > 1
+      ? `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}`
+      : names[0]);
+    setText('#help-check-interval', intervalLabel(config.checkInterval));
+    setText('#help-failure-threshold', config.failureThreshold);
+    setText('#help-silence-interval', intervalLabel(config.silenceProbeInterval));
+    setText('#help-silence-threshold', config.silenceFailureThreshold);
+    setText('#help-event-limit', Number.isFinite(config.maxEvents)
+      ? config.maxEvents.toLocaleString()
+      : null);
+
+    const policy = config.alertOnHarmlessOutage
+      ? 'After the confirmation threshold, every confirmed outage emails, including failures that Icecast proves had no listener impact.'
+      : 'After the confirmation threshold, an outage emails only when listeners were affected or Icecast was unreachable and impact could not be ruled out.';
+    setText('#help-alert-policy', policy);
+
+    const roundup = config.weeklyRoundup;
+    if (roundup?.enabled === false) {
+      setText('#help-roundup-policy', 'The scheduled weekly report is currently disabled. Incident alerts and the History page continue to operate normally.');
+    }
   }
 
   async function poll() {
@@ -561,8 +594,8 @@
           .join('')}
       </div>
       ${hidden > 0
-        ? `<div class="incidents-more"><a href="history.html">View all ${sorted.length} events from the last 24h, plus the full permanent history →</a></div>`
-        : '<div class="incidents-more"><a href="history.html">Open the full permanent incident history →</a></div>'}
+        ? `<div class="incidents-more"><a href="history.html">View all ${sorted.length} events from the last 24h, plus the full long-term history →</a></div>`
+        : '<div class="incidents-more"><a href="history.html">Open the full long-term incident history →</a></div>'}
     `;
 
     wireIncidentRows(container);
