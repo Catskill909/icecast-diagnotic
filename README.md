@@ -193,6 +193,9 @@ This is the action-routing field in the record. Its category windows can overlap
 source path is already down when the Icecast path becomes unreachable, both categories accrue
 time. Therefore category hours must **never** be added to derive total elapsed downtime.
 Each entry's `streamRecords` is the clear-name count; `outages` remains as a compatibility alias.
+The GM-facing History cards therefore omit aggregate category hours: they split the interruption
+records by action owner and show only the longest single interruption. The overlap field remains
+available to engineers and API consumers.
 
 #### Time off air vs. stream-hours
 
@@ -400,8 +403,8 @@ listener cost is gone for good — the totals are a floor.
 
 ### `GET /api/rollup?days=7`
 Period totals in numbers **and in one English sentence** — outage counts, downtime, alert
-delivery, listeners cut off, listening lost, per-stream breakdown, top causes and the two
-most notable incidents.
+delivery, listener interruptions, listening lost, per-stream breakdown, top causes and the
+sustained incidents.
 
 The sentence in `narrative` is composed server-side for the weekly roundup email and for API
 consumers that need a plain-English summary. The History page renders the same underlying

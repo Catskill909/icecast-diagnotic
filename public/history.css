@@ -193,6 +193,10 @@ a.help-btn { text-decoration: none; }
 }
 .ih-more:hover { background: var(--surface-3); color: var(--text-primary); border-color: var(--border-hover); }
 
+.ih-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+.ih-actions .ih-more { margin-top: 0; }
+.ih-timeline-link { color: var(--primary-light); }
+
 @media (max-width: 760px) {
   .impact-hero { padding: 18px; }
   .ih-top { gap: 16px; }
@@ -361,10 +365,15 @@ a.help-btn { text-decoration: none; }
 /* ── Where the fault was ───────────────────────────────────────────────────── */
 .fault-split {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  width: 100%;
   gap: 16px;
   margin-bottom: 28px;
 }
+
+/* If an unknown third path exists, give it the full final row instead of
+   leaving a narrow orphan card. */
+.fault-split > .fs-card:nth-last-child(2):nth-child(odd) { grid-column: 1 / -1; }
 
 .fs-card {
   background: var(--surface-1);
@@ -412,14 +421,19 @@ a.help-btn { text-decoration: none; }
   font-size: 0.67rem;
   white-space: nowrap;
 }
-.fs-overlap-note {
+.fs-reading-note {
   grid-column: 1 / -1;
   margin-top: -4px;
   color: var(--text-tertiary);
   font-size: 0.76rem;
   line-height: 1.5;
 }
-.fs-overlap-note strong { color: var(--text-secondary); }
+.fs-reading-note strong { color: var(--text-secondary); }
+
+@media (max-width: 700px) {
+  .fault-split { grid-template-columns: 1fr; }
+  .fault-split > .fs-card { grid-column: auto; }
+}
 
 .fs-facts {
   display: flex;

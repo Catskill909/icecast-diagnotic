@@ -126,17 +126,17 @@
     <!-- The explicit bridge between the large totals. These are deliberately
          visible: the qualification is part of the number, not optional help. -->
     <div class="metric-reconciliation fade-in" id="metric-reconciliation">
-      <div class="mr-title">How the large totals relate</div>
+      <div class="mr-title" id="mr-title">How the large totals relate</div>
       <div class="mr-grid">
         <div class="mr-item">
           <div class="mr-value" id="stat-uptime">—</div>
           <div class="mr-label">monitored stream-time uptime</div>
-          <div class="mr-note" id="stat-uptime-detail">All monitored stream-time combined; probe-only failures excluded.</div>
+          <div class="mr-note" id="stat-uptime-detail">The monitor watches three audio streams, not three servers.</div>
         </div>
         <div class="mr-item">
           <div class="mr-value" id="stat-downtime">—</div>
           <div class="mr-label">elapsed off-air time</div>
-          <div class="mr-note" id="stat-downtime-detail">At least one monitored stream was off air; simultaneous outages count once.</div>
+          <div class="mr-note" id="stat-downtime-detail">At least one of the three monitored streams was off air; simultaneous stream outages count once.</div>
         </div>
         <div class="mr-item">
           <div class="mr-value" id="stat-streamtime">—</div>
@@ -290,7 +290,7 @@
     </div>
 
     <!-- Filters -->
-    <div class="section-title">
+    <div class="section-title" id="event-timeline-section">
       <span class="material-symbols-outlined">history</span>
       Event Timeline
       <span class="section-hint" id="timeline-count"></span>

@@ -1449,14 +1449,14 @@ function buildWeeklyRoundup(rollup) {
           <br><span class="label-col" style="color:#94a3b8 !important; font-size:11px; font-weight:400;">stream records</span>
         </td>
         <td class="label-col" style="padding:10px 8px; color:#94a3b8 !important; font-size:12px;">
-          <span class="label-col" style="color:#94a3b8 !important;">${esc(diagnose.fmtDuration(s.wallClockMs))} elapsed category window<br>${s.listenersCutOff.toLocaleString()} listener interruption(s)<br>longest ${esc(diagnose.fmtDuration(s.longestMs))}</span>
+          <span class="label-col" style="color:#94a3b8 !important;">${s.listenersCutOff.toLocaleString()} listener interruption(s)<br>longest single interruption ${esc(diagnose.fmtDuration(s.longestMs))}</span>
         </td>
       </tr>`;
   }).join('');
 
   const faultBlock = faultRows ? `
     <h3 class="section-hdr" style="margin:22px 0 6px 0; font-size:13px; color:#cbd5e1 !important; text-transform:uppercase; letter-spacing:0.05em;"><span class="section-hdr" style="color:#cbd5e1 !important;">Which path needs attention?</span></h3>
-    <p class="label-col" style="margin:0 0 10px 0; font-size:11px; line-height:1.5; color:#94a3b8 !important;"><span class="label-col" style="color:#94a3b8 !important;">Evidence-based handoff, not proof of a particular failed device. Category time windows can overlap and must not be added.</span></p>
+    <p class="label-col" style="margin:0 0 10px 0; font-size:11px; line-height:1.5; color:#94a3b8 !important;"><span class="label-col" style="color:#94a3b8 !important;">These cards divide the ${c.listenerAffecting} listener-impacting stream records by the path that needs investigation. They do not claim a particular device failed.</span></p>
     <table role="presentation" width="100%" border="0" cellspacing="0" cellpadding="0">${faultRows}</table>` : '';
 
   const cells = [
@@ -1481,8 +1481,8 @@ function buildWeeklyRoundup(rollup) {
     statCell('Elapsed Off-Air Window', diagnose.fmtDuration(rollup.downtime.wallClockMs || 0),
       rollup.downtime.wallClockMs ? '#fbbf24' : '#4ade80',
       rollup.downtime.streamMs > rollup.downtime.wallClockMs
-        ? `at least one stream down; overlaps merged · ${diagnose.fmtDuration(rollup.downtime.streamMs)} summed stream-time`
-        : 'at least one stream down; elapsed clock time'),
+        ? `at least one of ${rollup.perStream.length} monitored streams down; overlaps merged · ${diagnose.fmtDuration(rollup.downtime.streamMs)} summed stream-time`
+        : `at least one of ${rollup.perStream.length} monitored streams down; elapsed clock time`),
     statCell('Audio Uptime', rollup.uptime != null ? `${rollup.uptime}%` : '—', uptimeColor,
       'share of monitored stream-time serving audio'),
     statCell('Alert Emails Sent', String(alerts.messages), '#a78bfa',
@@ -1562,7 +1562,7 @@ function buildWeeklyRoundup(rollup) {
       <ul style="margin:0; padding-left:18px; font-size:13px; line-height:1.6;">${notable}</ul>
     </div>` : ''}
 
-    <p class="label-col" style="margin:20px 0 0 0; font-size:11px; line-height:1.6; color:#94a3b8 !important;"><span class="label-col" style="color:#94a3b8 !important;">This is a scheduled weekly summary, not an alert — it arrives whether or not anything went wrong.<br><br><strong>Listener interruptions</strong> is a headcount taken as each outage began; someone interrupted by two separate outages counts twice.<br><br><strong>Listening lost</strong> is audience multiplied by outage duration — 50 people for one hour is 50 listener-hours. It is not clock time.<br><br><strong>Elapsed off-air window</strong> is clock time with at least one stream down; simultaneous outages count once. <strong>Summed stream-time</strong> adds each affected stream separately and is the basis of uptime. Fault-category windows can overlap and must not be added.</span></p>`;
+    <p class="label-col" style="margin:20px 0 0 0; font-size:11px; line-height:1.6; color:#94a3b8 !important;"><span class="label-col" style="color:#94a3b8 !important;">This is a scheduled weekly summary, not an alert — it arrives whether or not anything went wrong.<br><br><strong>Listener interruptions</strong> is a headcount taken as each outage began; someone interrupted by two separate outages counts twice.<br><br><strong>Listening lost</strong> is audience multiplied by outage duration — 50 people for one hour is 50 listener-hours. It is not clock time.<br><br><strong>Elapsed off-air window</strong> is clock time with at least one of the ${rollup.perStream.length} monitored audio streams down; simultaneous stream outages count once. These are streams on the Icecast service, not ${rollup.perStream.length} separate servers. <strong>Summed stream-time</strong> adds each affected stream separately and is the basis of uptime. The path cards divide interruption records; they are not downtime totals.</span></p>`;
 
   const html = buildEmailHtml({
     title: '📊 KPFT Weekly Stream Report',

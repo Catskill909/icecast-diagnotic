@@ -209,12 +209,6 @@
     // manager remembers; a total on its own gives neither of them anything.
     const host = $('#ih-incidents');
     if (!host) return;
-    if (!top.length) {
-      host.innerHTML = r.otherIncidents?.count
-        ? `<div class="ih-rest">${r.otherIncidents.count} brief interruption${r.otherIncidents.count === 1 ? '' : 's'}, none longer than ${fmtDuration(r.otherIncidents.longestMs)}.</div>`
-        : '';
-      return;
-    }
 
     // Which side of the handoff the evidence points to. Reachability identifies
     // a path, not a particular physical device, so the labels stay deliberately
@@ -225,11 +219,24 @@
       unknown: { label: 'cause unclear', cls: 'unknown' },
     };
 
-    // A week shows nine of these; a year could show hundreds. Cap the default
-    // view and let it be opened — truncating silently is what made the old
-    // three-of-nine list feel disconnected from the totals above it.
+    // Lead with sustained, grouped incidents. The explicit expansion below
+    // exposes every listener-impacting stream record, including brief ones.
     const CAP = 8;
-    const visible = incidentsExpanded ? top : top.slice(0, CAP);
+    const impactful = allEvents
+      .filter((e) => e.type !== 'up' && costListeners(e))
+      .map((e) => ({
+        timestamp: e.timestamp,
+        streams: [e.streamName || e.streamId],
+        durationMs: e.durationMs || 0,
+        cause: e.diagnosis?.causeLabel || e.message,
+        fault: e.diagnosis?.icecast?.reachable === true
+          ? 'kpft'
+          : e.diagnosis?.icecast?.reachable === false ? 'pacifica' : 'unknown',
+        listenersTunedIn: e.audience?.listenersBefore || 0,
+        eventIds: [e.id],
+      }))
+      .sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
+    const visible = incidentsExpanded ? impactful : top.slice(0, CAP);
 
     const rows = visible.map((i) => {
       const when = new Date(i.timestamp).toLocaleString('en-US', {
@@ -251,27 +258,32 @@
         </div>`;
     }).join('');
 
-    // Counted in the SAME unit as the tile that reports them — brief events,
-    // never mixed with hidden incident groups. Previously this line silently
-    // added 5 unshown outages to 36 brief events and tied to the total by luck.
-    const rest = r.otherIncidents?.count
-      ? `<div class="ih-rest">Plus ${r.otherIncidents.count} brief interruption${
+    const rest = !impactful.length
+      ? '<div class="ih-rest">No listener-impacting interruptions were recorded in this period.</div>'
+      : !incidentsExpanded && r.otherIncidents?.count
+        ? `<div class="ih-rest">Plus ${r.otherIncidents.count} brief interruption${
         r.otherIncidents.count === 1 ? '' : 's'} under ${fmtDuration(r.significantThresholdMs || 300000)}${
         r.otherIncidents.longestMs ? `, the longest ${fmtDuration(r.otherIncidents.longestMs)}` : ''}.</div>`
-      : '';
+        : `<div class="ih-rest">Each row covers one interruption from failure through recovery. ` +
+          `The technical timeline also retains separate recovery/all-clear entries and monitoring-only anomalies.</div>`;
 
-    const moreBtn = top.length > CAP
+    const collapsedCount = Math.min(CAP, top.length);
+    const moreBtn = impactful.length > collapsedCount
       ? `<button class="ih-more" id="ih-more">${incidentsExpanded
-        ? `Show fewer — top ${CAP} only`
-        : `Show all ${top.length} incidents (${top.length - CAP} more)`}</button>`
+        ? 'Show sustained incidents only'
+        : `Show all ${impactful.length} listener-impacting stream records`}</button>`
       : '';
+    const timelineBtn = `<button class="ih-more ih-timeline-link" id="ih-timeline-link">` +
+      `Open technical timeline — ${allEvents.length} down, recovery, and monitoring entries</button>`;
 
-    host.innerHTML = rows + moreBtn + rest;
+    host.innerHTML = rows + rest + `<div class="ih-actions">${moreBtn}${timelineBtn}</div>`;
 
     const btn = $('#ih-more');
     if (btn) {
       btn.onclick = () => { incidentsExpanded = !incidentsExpanded; renderImpactHero(); };
     }
+    const timelineLink = $('#ih-timeline-link');
+    if (timelineLink) timelineLink.onclick = openTechnicalTimeline;
 
     // Each row opens the full diagnosis — evidence, remediation, Icecast state
     // — in the timeline below, reusing the drill-down that already exists
@@ -289,10 +301,26 @@
       // at the same second, so "9 outages" and "8 incidents" are both true and
       // the difference has to be visible rather than look like an error.
       const sigCount = r.counts?.significant ?? top.length;
-      countNote.textContent = sigCount === top.length
-        ? `all ${top.length} sustained incident${top.length === 1 ? '' : 's'}, longest first`
-        : `${sigCount} sustained stream records grouped into ${top.length} incidents; some hit two streams at once`;
+      countNote.textContent = incidentsExpanded
+        ? `all ${impactful.length} listener-impacting stream records, newest first`
+        : sigCount === top.length
+          ? `${top.length} sustained incident${top.length === 1 ? '' : 's'}, longest first`
+          : `${sigCount} sustained stream records grouped into ${top.length} incidents; some hit two streams at once`;
     }
+  }
+
+  /** Reset timeline-only filters and move directly to the complete technical log. */
+  function openTechnicalTimeline() {
+    $('#f-stream').value = '';
+    $('#f-severity').value = '';
+    $('#f-cause').value = '';
+    $('#f-email').value = '';
+    $('#f-search').value = '';
+    dayFilter = null;
+    renderHeatmap();
+    renderCauses();
+    applyFilters();
+    $('#event-timeline-section').scrollIntoView({ behavior: 'smooth', block: 'start' });
   }
 
   /** Put the unit and counting rule directly beside each large duration. */
@@ -301,6 +329,8 @@
     if (!el || !lastRollup) return;
     const r = lastRollup;
     const a = r.audience || {};
+    const title = $('#mr-title');
+    if (title) title.textContent = `How totals across ${streams.length} monitored stream${streams.length === 1 ? '' : 's'} relate`;
     $('#stat-downtime').textContent = fmtDuration(r.downtime?.wallClockMs || 0);
     $('#stat-streamtime').textContent = fmtDuration(r.downtime?.streamMs || 0);
     $('#mr-listener-hours').textContent = `${(a.listenerHoursLost || 0).toLocaleString()} listener-hours`;
@@ -402,22 +432,19 @@
           <div class="fs-time">${recordCount} of ${lastRollup.counts?.listenerAffecting || recordCount}</div>
           <div class="fs-time-label">listener-impacting stream records</div>
           <div class="fs-facts">
-            <span><strong>${esc(fmtDuration(s.wallClockMs))}</strong> elapsed category window</span>
             <span><strong>${s.listenersCutOff.toLocaleString()}</strong> listener interruptions</span>
-            <span>longest <strong>${esc(fmtDuration(s.longestMs))}</strong></span>
+            <span>longest single interruption <strong>${esc(fmtDuration(s.longestMs))}</strong></span>
           </div>
           <div class="fs-sub">${esc(m.sub)}</div>
         </div>`;
     }).join('');
 
-    const categoryMs = split.reduce((sum, s) => sum + (s.wallClockMs || 0), 0);
-    const overlapMs = Math.max(0, categoryMs - (lastRollup.downtime?.wallClockMs || 0));
-    if (overlapMs > 0) {
-      host.insertAdjacentHTML('beforeend',
-        `<div class="fs-overlap-note"><strong>Do not add the category hours.</strong> ` +
-        `${esc(fmtDuration(overlapMs))} occurred while more than one path category was failing at the same time; ` +
-        `the overall elapsed off-air window remains ${esc(fmtDuration(lastRollup.downtime.wallClockMs))}.</div>`);
-    }
+    const recordEquation = split.map((s) => s.streamRecords ?? s.outages).join(' + ');
+    host.insertAdjacentHTML('beforeend',
+      `<div class="fs-reading-note"><strong>How to read this:</strong> the cards divide all ` +
+      `${lastRollup.counts?.listenerAffecting || 0} stream interruption records by the path that needs investigation ` +
+      `(${recordEquation} = ${lastRollup.counts?.listenerAffecting || 0}). ` +
+      `Only the longest single interruption is shown here; every duration is available under What happened.</div>`);
   }
 
   // ── Uptime tile ─────────────────────────────────────────────────────────
@@ -440,7 +467,9 @@
     // Audio uptime — probe-only failures are not charged to the station.
     const streamId = null;
     const percent = lastRollup?.uptime ?? lastUptime?.uptime;
-    const scope = 'all monitored stream-time combined';
+    const streamNames = streams.map((s) => s.name).join(', ');
+    const scope = `${streams.length} monitored audio stream${streams.length === 1 ? '' : 's'} ` +
+      `(${streamNames}) combined — not ${streams.length} server${streams.length === 1 ? '' : 's'}`;
 
     if (percent == null) {
       valueEl.textContent = '—';
@@ -1064,14 +1093,15 @@
     if (streamTimeEl) streamTimeEl.textContent = streamDowntimeMs ? fmtDuration(streamDowntimeMs) : '0s';
     if (streamTimeDetail) {
       streamTimeDetail.textContent = streamDowntimeMs > downtimeMs
-        ? `each affected stream counted separately · ${fmtDuration(streamDowntimeMs - downtimeMs)} more than elapsed because streams overlapped`
-        : 'each affected stream counted separately';
+        ? `each of the ${streams.length} streams counted separately · ${fmtDuration(streamDowntimeMs - downtimeMs)} more than elapsed because stream outages overlapped`
+        : `each of the ${streams.length} streams counted separately`;
     }
     const dtDetail = $('#stat-downtime-detail');
     if (dtDetail) {
       // Say what is down. Narrowed to one stream, "at least one stream" is a
       // strange way to describe the only stream in view.
-      const subject = 'at least one monitored stream down';
+      const names = streams.map((s) => s.name.replace(/^KPFT\s+/i, '')).join(', ');
+      const subject = `at least one of ${streams.length} monitored streams (${names}) down`;
       // Name the difference rather than hiding it. One server fault that took
       // two streams down for 3h35m each is 3h35m off air, not 7h10m.
       dtDetail.textContent = streamDowntimeMs > downtimeMs
