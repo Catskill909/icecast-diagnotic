@@ -1520,11 +1520,64 @@ code.inline {
   .header-right { width: 100%; justify-content: flex-start; flex-wrap: wrap; }
   .streams-grid { grid-template-columns: 1fr; }
   .summary-bar { grid-template-columns: repeat(2, 1fr); }
-  .stream-metrics { grid-template-columns: repeat(3, 1fr); gap: 8px; }
+
+  /* There are four metrics. Three columns strands "Failures" alone on a second
+     row; two divides them 2 + 2 and leaves each label room to stay on one line. */
+  .stream-metrics { grid-template-columns: repeat(2, 1fr); gap: 14px 8px; }
   .metric-value { font-size: 16px; }
-  .incident { flex-wrap: wrap; }
+
+  /* An incident head is one flex row: icon, message, then up to three chips and
+     a chevron — all of which are flex-shrink:0. A phone line cannot hold them,
+     and because the message column is the only flexible one (and carries
+     min-width:0) it absorbed the entire shortfall and collapsed to a few pixels
+     wide, breaking the text one word per line.
+
+     The chips are separate siblings with no wrapper to move as a unit, so the
+     line break is forced with a full-width pseudo-item and explicit ordering:
+     everything ordered below it stays on line one, everything above drops
+     beneath. That yields the same shape the history page uses at this width —
+     icon, message and chevron on top, chips below. */
+  .incident-head {
+    flex-wrap: wrap;
+    gap: 5px 10px;
+    padding: 12px 14px;
+  }
+  .incident-icon { order: 1; }
+  .incident-content { order: 2; }
+  .incident-chevron { order: 3; }
+  .incident-head::before {
+    content: '';
+    order: 4;
+    flex: 0 0 100%;
+    height: 0;
+  }
+  .incident-badge,
+  .incident-mail { order: 5; }
+
+  .incident-body { padding: 16px 14px; }
+
+  /* Key and value side by side leaves neither enough room to read at this
+     width, and long values were breaking mid-word to fit. */
+  .kv-row { flex-direction: column; gap: 2px; }
+  .kv-val { text-align: left; }
 }
 
 @media (max-width: 480px) {
+  .app { padding: 0 12px; }
   .summary-bar { grid-template-columns: 1fr; }
+  .header-title { font-size: 19px; }
+
+  /* 28px of padding each side costs a sixth of the screen on a phone. */
+  .stream-card { padding: 20px 18px; }
+  .summary-card { padding: 16px 18px; }
+
+  /* The status pill and the stream name compete for one line once the name is
+     long; let the pill drop below rather than squeeze the name. */
+  .stream-header { flex-wrap: wrap; gap: 10px; }
+  .stream-info { min-width: 0; }
+
+  .modal-overlay { padding: 10px; }
+  .modal-card { max-height: 96vh; }
+  .modal-header { padding: 16px; }
+  .modal-body { padding: 14px; }
 }

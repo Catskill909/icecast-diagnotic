@@ -898,10 +898,14 @@ a.help-btn { text-decoration: none; }
 @media (max-width: 780px) {
   .evt-head {
     grid-template-columns: 30px 1fr auto;
+    /* The timestamp is white-space:nowrap and runs to about 68px ("7:08:20 PM").
+       Sharing the 30px icon track it cannot shrink to fit, so it overflowed
+       across the badges beside it. It takes a row of its own instead. */
     grid-template-areas:
-      "icon main chevron"
-      "time badges badges";
-    row-gap: 8px;
+      "icon   main   chevron"
+      "time   time   time"
+      "badges badges badges";
+    row-gap: 6px;
   }
   .evt-icon { grid-area: icon; }
   .evt-time { grid-area: time; }
