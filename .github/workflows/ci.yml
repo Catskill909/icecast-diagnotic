@@ -42,7 +42,14 @@ jobs:
         # Nothing else exercises this file — Coolify builds the Dockerfile
         # directly — so without this it would stay untested until an affiliate
         # cloned the repo and hit the typo themselves.
-        run: docker compose config --quiet
+        #
+        # The .env copy is the documented first install step. Compose requires
+        # the file and fails loudly without it, which is the right behaviour for
+        # a real user — so CI follows the same path a user does, and validating
+        # afterwards also proves .env.example itself parses as an env file.
+        run: |
+          cp .env.example .env
+          docker compose config --quiet
 
       - name: Boot the container and check it stays up
         run: |
