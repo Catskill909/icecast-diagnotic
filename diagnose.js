@@ -499,11 +499,11 @@ function parseIcecastStatus(body) {
  * keeps the complete mount list — including other Pacifica stations — so we can
  * answer "is it just us, or is it the whole server?"
  */
-function fetchIcecastSnapshotOnce() {
+function fetchIcecastSnapshotOnce(statusUrl = ICECAST_STATUS_URL) {
   return new Promise((resolve) => {
     const start = Date.now();
-    const statusClient = ICECAST_STATUS_URL.startsWith('http:') ? http : https;
-    const req = statusClient.get(ICECAST_STATUS_URL, { timeout: STATUS_TIMEOUT }, (res) => {
+    const statusClient = statusUrl.startsWith('http:') ? http : https;
+    const req = statusClient.get(statusUrl, { timeout: STATUS_TIMEOUT }, (res) => {
       let body = '';
       res.on('data', (c) => { body += c; });
       res.on('end', () => {
@@ -599,11 +599,11 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
  * inside one check cycle, and still ends in 'unknown' — so a real server outage
  * alerts exactly as it always did.
  */
-async function fetchIcecastSnapshot() {
+async function fetchIcecastSnapshot(statusUrl = ICECAST_STATUS_URL) {
   let last = null;
   let made = 0;
   for (let attempt = 1; attempt <= STATUS_ATTEMPTS; attempt++) {
-    last = await fetchIcecastSnapshotOnce();
+    last = await fetchIcecastSnapshotOnce(statusUrl);
     made = attempt;
     // A reachable server is the answer, however many tries it took.
     if (last.reachable) break;

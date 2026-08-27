@@ -4,6 +4,9 @@ const path = require('path');
 const monitor = require('./monitor');
 const auth = require('./auth');
 const redact = require('./redact');
+const discover = require('./discover');
+const safeUrl = require('./safe-url');
+const diagnose = require('./diagnose');
 
 const app = express();
 const PORT = parseInt(process.env.PORT, 10) || 3000;
@@ -185,6 +188,49 @@ app.get('/api/stations', (req, res) => {
   // — which can carry credentials — are never in it, and any field added to the
   // configuration later is withheld until someone decides otherwise.
   res.json(auth.currentSession(req) ? config : redact.publicStationConfig(config));
+});
+
+// ── Station Discovery ───────────────────────────────────────────────────────
+// Paste one URL — a status document or any stream on the same server — and get
+// back every mount that server is serving, grouped into the channels a listener
+// would recognise, with live listener counts.
+//
+// Authenticated, and not only because it writes nothing: it makes THIS SERVER
+// fetch an address someone else chose. Every such fetch goes through safe-url,
+// which resolves the hostname and refuses private and reserved ranges — a
+// hostname resolving to 127.0.0.1 passes any check that reads only the URL.
+app.post('/api/stations/discover', auth.requireAuth, async (req, res) => {
+  const raw = typeof req.body?.url === 'string' ? req.body.url : '';
+  if (!raw.trim()) return res.status(400).json({ error: 'Provide a URL' });
+
+  const derived = discover.toStatusUrl(raw);
+  if (!derived.ok) return res.status(400).json({ error: derived.reason });
+
+  try {
+    // Structural validation happened above; this is the resolution check.
+    await safeUrl.assertPublicHost(derived.url.hostname);
+  } catch (err) {
+    return res.status(400).json({ error: err.message });
+  }
+
+  const snapshot = await diagnose.fetchIcecastSnapshot(derived.url.href);
+  if (!snapshot.reachable) {
+    // The upstream body is never echoed back — it is a response from a server
+    // the caller chose, and returning it verbatim is half of what makes SSRF
+    // worth exploiting.
+    return res.status(502).json({
+      error: 'Could not read an Icecast status document from that address',
+      detail: snapshot.fetchError,
+      statusUrl: derived.url.href,
+    });
+  }
+
+  res.json({
+    statusUrl: derived.url.href,
+    derivedFrom: derived.derivedFrom || null,
+    repairedJson: !!snapshot.repairedJson,
+    ...discover.summarise(snapshot),
+  });
 });
 
 // Applies stored configuration to the running monitor without a redeploy.
