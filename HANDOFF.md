@@ -205,9 +205,10 @@ architecture.
 - **Escape helpers escape quotes.** They are used inside HTML attributes, and
   one renders Icecast metadata that a third party controls. Do not replace them
   with the DOM textContent trick — that is the bug that was there.
-- **Before the add-station flow ships, read [`docs/SECURITY.md`](docs/SECURITY.md) §7.**
-  Fetching a user-supplied URL server-side is SSRF unless the address is
-  validated after DNS resolution.
+- **The add-station flow must fetch through `safe-url.js`.** It is built and
+  tested ahead of the feature; its tests are the specification. Calling
+  `assertFetchable(url)` before any server-side fetch of a user-supplied address
+  is the whole requirement, and redirects must be re-checked the same way.
 - - **Do not trust a green `npm test` as proof of deployability.** The tests pass
   on a machine where every file exists.
 

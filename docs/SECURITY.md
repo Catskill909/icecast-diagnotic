@@ -17,8 +17,8 @@ Every finding below was fixed the same day unless marked otherwise.
 | 3 | XSS via Icecast metadata in HTML attributes | **Medium** | ✅ Fixed |
 | 4 | No Content-Security-Policy or hardening headers | Medium | ✅ Fixed |
 | 5 | Upstream administrator address in stored advice text | Low | ✅ Fixed |
-| 6 | `nodemailer` advisories | Low (not exposed) | ⬜ Upgrade pending |
-| 7 | SSRF once station URLs become user-supplied | **Not yet real** | ⬜ Design note |
+| 6 | `nodemailer` advisories | Low (not exposed) | ✅ Upgraded to 9.x |
+| 7 | SSRF once station URLs become user-supplied | **Not yet real** | ✅ Guard built ahead of the feature |
 | 8 | Reads are unauthenticated by design | Accepted | — |
 
 Checked and found sound: path traversal, credential logging, response size
@@ -103,9 +103,11 @@ Checked feature by feature: the app uses **none** of the affected paths —
 no `jsonTransport`, no OAuth2, no `raw:`, no direct `addressparser`. Real
 exposure is effectively nil.
 
-**Recommendation:** upgrade to `nodemailer@9` anyway, as a scheduled change with
-a test alert afterwards rather than an emergency. Running a version with known
-advisories is a bad habit even when the specific paths are unused.
+**Done 2026-08-27.** Upgraded to `nodemailer@9.0.5`; `npm audit` reports zero
+vulnerabilities. Five tests render real messages through an in-memory transport
+using the exact option objects the app builds, because a major version bump can
+change option shapes and the failure mode is silent until an alert does not
+arrive at 3am.
 
 ## 7. SSRF — not yet real, but design it in now
 
@@ -118,7 +120,15 @@ Without controls it can be pointed at `http://169.254.169.254/` (cloud metadata)
 `http://localhost:*`, or private ranges, and the response is rendered back to
 the person who asked.
 
-Required before that ships:
+**Done 2026-08-27, ahead of the feature.** `safe-url.js` implements the checks
+below, with 16 tests written as the specification for the add-station flow. The
+tests that matter are the bypasses: a hostname resolving to loopback, an IPv4
+address wearing an IPv6 costume (`::ffff:127.0.0.1`), and adjacent public ranges
+that must NOT be blocked. One known limit is recorded in the module: resolving
+and then connecting leaves a DNS-rebinding window, narrow for an
+operator-initiated one-shot request.
+
+Requirements implemented:
 
 - Reject non-`http(s)` schemes.
 - Resolve the hostname and refuse loopback, link-local, and RFC1918 addresses —
