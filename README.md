@@ -1,5 +1,8 @@
 # 📡 KPFT Icecast Stream Monitor & Diagnostic Tool
 
+> **New to this codebase?** Start with **[HANDOFF.md](HANDOFF.md)** — the data flow,
+> the decisions behind it, and the traps, in one page.
+
 Monitors KPFT (Pacifica Foundation) Icecast live streams and — the point of the tool — **identifies which side of the handoff needs attention**: KPFT's source/feed path or the Pacifica/Icecast path.
 
 A bare "stream is down" alert leaves you guessing who to call. This correlates connection-layer timings, Icecast's live mount inventory, and cross-stream behaviour to name the cause, and keeps a long-term record so patterns are visible over months rather than hours.

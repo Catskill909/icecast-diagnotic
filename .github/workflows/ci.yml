@@ -1,0 +1,83 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# CI — prove the thing we actually ship is deployable.
+#
+# The unit tests all pass on a machine where every file exists. That is not the
+# artifact that runs in production: on 2026-08-27 a new module was added and not
+# copied into the image, and `npm test` was perfectly green while the container
+# would have died on startup with "Cannot find module".
+#
+# So this builds the image and boots it. That is the check that would have
+# caught it, and it cannot be skipped or forgotten the way a local step can.
+# ─────────────────────────────────────────────────────────────────────────────
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    name: Unit tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - run: npm ci --omit=dev || npm install --omit=dev
+      - run: npm test
+
+  image:
+    name: Image builds and boots
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build the image
+        run: docker build -t icecast-monitor:ci .
+
+      - name: Validate docker-compose.yml
+        # Nothing else exercises this file — Coolify builds the Dockerfile
+        # directly — so without this it would stay untested until an affiliate
+        # cloned the repo and hit the typo themselves.
+        run: docker compose config --quiet
+
+      - name: Boot the container and check it stays up
+        run: |
+          docker run -d --name ci-monitor \
+            -p 3000:3000 \
+            -e DATA_DIR=/app/data \
+            -e CHECK_INTERVAL_MS=600000 \
+            -e WEEKLY_ROUNDUP=false \
+            icecast-monitor:ci
+
+          # Poll rather than sleep-and-hope: a crash-on-startup shows up as the
+          # container no longer running, which is reported explicitly below.
+          for i in $(seq 1 20); do
+            if curl -fsS http://localhost:3000/health > /dev/null 2>&1; then
+              echo "✓ container healthy after ${i} attempt(s)"
+              curl -s http://localhost:3000/health
+              echo
+              exit 0
+            fi
+            if [ -z "$(docker ps -q -f name=ci-monitor)" ]; then
+              echo "✗ container exited during startup:"
+              docker logs ci-monitor
+              exit 1
+            fi
+            sleep 2
+          done
+
+          echo "✗ container never became healthy:"
+          docker logs ci-monitor
+          exit 1
+
+      - name: Show startup log
+        if: always()
+        run: docker logs ci-monitor 2>&1 | head -40
+
+      - name: Clean up
+        if: always()
+        run: docker rm -f ci-monitor || true
