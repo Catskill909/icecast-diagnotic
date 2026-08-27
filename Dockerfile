@@ -27,6 +27,7 @@ COPY monitor.js ./
 COPY diagnose.js ./
 COPY store.js ./
 COPY auth.js ./
+COPY redact.js ./
 COPY scripts/ ./scripts/
 COPY seed/ ./seed/
 COPY public/ ./public/

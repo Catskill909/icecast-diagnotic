@@ -296,7 +296,28 @@ forgets to set a password gets a broken button, not a silent hole.
 |---|---|
 | `/api/test-alert`, `/api/weekly-roundup` | **Authenticated** — both send mail |
 | `POST /api/login`, `/api/logout`, `GET /api/me` | Public |
+| `/api/events`, `/api/stations`, `/api/diagnostics` | Public, but **redacted** — see below |
 | Everything else | Public, as before |
+
+### What anonymous callers are not shown
+
+Reading is open, but stored records are richer than what should be published.
+Public responses go through [`redact.js`](redact.js):
+
+| Withheld from anonymous callers | Why |
+|---|---|
+| `event.email.recipients` / `cc` | These are people. Replaced by `recipientCount`, so the history page can still say an alert reached three people without naming them |
+| `event.email.messageId` | Embeds the sending domain and reads as an address; nothing renders it |
+| `diagnosis.icecast.admin` | The Icecast server's published contact address |
+| `host.statusUrl` | May carry credentials — `https://user:pass@host/admin/stats.xml` |
+| Anything not on the station-config allowlist | Per-station recipients and thresholds are withheld **before** they exist |
+
+Authenticated administrators see the full records, including who was notified.
+
+**Station configuration is projected by allowlist, not blocklist.** A blocklist
+protects the fields someone remembered; the next field leaks silently and nothing
+fails. A field wrongly withheld is a bug report — a field wrongly published
+cannot be recalled.
 
 **What the gate is and is not.** It is one shared credential, an scrypt password
 hash, constant-time comparison, rate limiting with lockout, and a signed

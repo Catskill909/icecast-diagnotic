@@ -193,9 +193,13 @@ architecture.
 - **The Dockerfile lists files individually.** A new module must be added to it
   or the container dies on startup. CI now builds and boots the image, so this
   is caught — but only if CI is kept.
-- **`/api/stations` is public.** Harmless today (stream URLs are public anyway).
-  **It will leak alert email addresses the moment recipients move into the
-  config.** Guard it before that happens.
+- **Public responses go through `redact.js`.** Anonymous callers get projections,
+  not stored records. This is not decoration: on 2026-08-27 `/api/events` was
+  serving real staff addresses to anyone who found the URL, because the delivery
+  record names every recipient and the endpoint returned stored events verbatim.
+  **Station configuration is projected by ALLOWLIST** — per-station recipients
+  added later are withheld automatically, without anyone remembering to come
+  back. Adding a field to a public response means checking `redact.js` first.
 - **Protected routes fail closed.** With no `ADMIN_PASSWORD_HASH` they return
   503, not 200. That is deliberate.
 - **Do not trust a green `npm test` as proof of deployability.** The tests pass
@@ -233,6 +237,10 @@ count could be zero — zero survives everything.
    though the app's own `SIBLING_MOUNTS` corroborates it.
 4. Do we have Icecast *admin* credentials for the Pacifica host? Unlocks
    per-listener geography and session data.
-5. **Did the retry actually reduce alert noise?** 32% of events were `unknown`
+5. Should the public dashboard require login at all? Reading is open by
+   deliberate choice, and `redact.js` keeps identities out of it — but the
+   simpler answer for a station that does not want its incident history public
+   is to gate reads too. One middleware line, not yet a decision.
+6. **Did the retry actually reduce alert noise?** 32% of events were `unknown`
    before it. Re-measure after a week of production data — around 2026-09-03 —
    rather than assuming.

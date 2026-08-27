@@ -3,6 +3,7 @@ const express = require('express');
 const path = require('path');
 const monitor = require('./monitor');
 const auth = require('./auth');
+const redact = require('./redact');
 
 const app = express();
 const PORT = parseInt(process.env.PORT, 10) || 3000;
@@ -109,7 +110,10 @@ app.get('/api/config', (req, res) => {
 app.get('/api/stations', (req, res) => {
   const config = monitor.getStationConfig();
   if (!config) return res.status(503).json({ error: 'Configuration not initialised yet' });
-  res.json(config);
+  // Anonymous callers get an allowlisted view. Alert recipients and status URLs
+  // — which can carry credentials — are never in it, and any field added to the
+  // configuration later is withheld until someone decides otherwise.
+  res.json(auth.currentSession(req) ? config : redact.publicStationConfig(config));
 });
 
 // ── Permanent Event Log ─────────────────────────────────────────────────────
@@ -143,6 +147,10 @@ app.get('/api/events', (req, res) => {
     order: q.order === 'asc' ? 'asc' : 'desc',
   });
 
+  // The delivery record on each event names every person alerted. That is worth
+  // keeping — it answers "who was told" — but it must not be served to anyone
+  // who finds the URL. Authenticated administrators still see it in full.
+  if (!auth.currentSession(req)) result.events = redact.publicEvents(result.events);
   res.json(result);
 });
 
@@ -150,7 +158,7 @@ app.get('/api/events/:id', (req, res) => {
   const { events } = monitor.getEvents({});
   const event = events.find((e) => e.id === req.params.id);
   if (!event) return res.status(404).json({ error: 'Event not found' });
-  res.json(event);
+  res.json(auth.currentSession(req) ? event : redact.publicEvent(event));
 });
 
 // ── Aggregate Statistics ────────────────────────────────────────────────────
@@ -236,8 +244,7 @@ app.get('/api/diagnostics', (req, res) => {
   if (!snapshot) {
     return res.status(503).json({ error: 'No Icecast snapshot yet — first check cycle has not completed' });
   }
-  res.json({
-    icecast: {
+  const icecast = {
       reachable: snapshot.reachable,
       fetchError: snapshot.fetchError,
       serverId: snapshot.serverId,
@@ -248,7 +255,9 @@ app.get('/api/diagnostics', (req, res) => {
       mountCount: snapshot.mountCount,
       responseTime: snapshot.responseTime,
       fetchedAt: snapshot.fetchedAt,
-    },
+  };
+  res.json({
+    icecast: auth.currentSession(req) ? icecast : redact.publicIcecast(icecast),
     mounts: Object.values(snapshot.mounts || {}),
     streams: monitor.getStatus(),
   });
