@@ -222,12 +222,18 @@ uptime monitor — which is the thing we are trying not to be.
 |---|---|---|
 | ✅ Full `status-json.xsl` | 4 | WFMU (2.4.4, **38 mounts**), Pacifica (2.4.3), CanStream UK (2.4.0-**kh22**), KBOO (2.4.99.2) |
 | ⚠️ HTML `status.xsl` only | 2 | Radio Paradise (mounts + listener counts scrapeable), WERU |
-| ❌ Nothing readable | 4 | WNYC, KCRW, Zeno, SomaFM |
-| ⬜ Not actually tested | 2 | KEXP, WWOZ — these returned DNS failures because the URLs guessed here were wrong, not because no endpoint exists |
+| ❌ Nothing readable | 6 | WNYC, KCRW, Zeno, SomaFM, KEXP, WWOZ |
 
-**Roughly a third to a half expose what we need** — 4 of the 10 hosts actually
-reached, 6 of 10 counting the HTML-scrapeable pair. This is a small, hand-picked
-sample chosen to span hosting styles, not a survey; treat the ratio as indicative. The split is not random: stations
+**A third expose what we need** — 4 of 12, or 6 of 12 counting the HTML-scrapeable
+pair. This is a small, hand-picked sample chosen to span hosting styles, not a
+survey; treat the ratio as indicative rather than measured.
+
+> An earlier draft recorded KEXP and WWOZ as untested, because the first attempt
+> used stream-specific CDN hostnames that failed DNS — a wrong method, not a
+> result. Retested against their real hosts: KEXP redirects and its stream host
+> presents a certificate for another name; WWOZ returns 404. Neither exposes a
+> status endpoint, so the original count stands, now on evidence rather than a
+> failed lookup. The split is not random: stations
 running their own Icecast box expose the endpoint; stations behind a streaming
 CDN or hosting provider expose nothing. Small affiliates skew toward the second
 group, because outsourcing is exactly what a station without an engineer does.
@@ -435,13 +441,15 @@ sent over 22 days.
 **Status of the three proposed remedies:**
 
 - ✅ **Retry the status fetch** before declaring it unreachable — **done**.
-- ⬜ Consider whether a *brief* `unknown` should alert at all, or whether it
-  should wait for a second consecutive unknown. Not done: the retry should
-  remove most of the volume, so this is worth re-measuring before adding a
-  second suppression mechanism on top.
-- ⬜ Probe the status endpoint from a second network path, which would settle the
-  "is it them or our connection" question outright. Still the strongest fix,
-  and still Phase 4.
+- ⏸ **Blocked on data, deliberately.** Whether a *brief* `unknown` should alert
+  at all, or wait for a second consecutive unknown. The retry above targets the
+  same cohort, so how much noise is left is an empirical question — adding a
+  second suppression mechanism before measuring the first risks silencing real
+  outages to fix a problem already solved. Re-measure around **2026-09-03**.
+- 📋 **Phase 4 feature.** Probing the status endpoint from a second network path,
+  which would settle "is it them or our connection" outright rather than
+  inferring it. The strongest available fix and the largest; scheduled, not
+  outstanding.
 
 **Re-measure before doing more.** The retry lands on the same 32% cohort; how
 much of it survives is an empirical question, and the answer should come from a
