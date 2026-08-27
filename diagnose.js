@@ -20,11 +20,22 @@ const http = require('http');
 const ICECAST_STATUS_URL =
   process.env.ICECAST_STATUS_URL || 'https://streams.pacifica.org:9000/status-json.xsl';
 const STATUS_TIMEOUT = parseInt(process.env.ICECAST_STATUS_TIMEOUT_MS, 10) || 10000;
+// How many times to ask Icecast before believing it is unreachable, and how long
+// to wait between asks. See fetchIcecastSnapshot() for why a single failed fetch
+// is not evidence of anything.
+const STATUS_ATTEMPTS = Math.max(1, parseInt(process.env.ICECAST_STATUS_ATTEMPTS, 10) || 3);
+const STATUS_RETRY_DELAY_MS = Math.max(0, parseInt(process.env.ICECAST_STATUS_RETRY_MS, 10) || 2000);
 const REQUEST_TIMEOUT = parseInt(process.env.REQUEST_TIMEOUT_MS, 10) || 15000;
 
 // Mount pathnames belonging to the station we monitor. Used to tell a
 // station-wide source failure apart from a whole-server failure: if OUR mounts
 // vanish while other Pacifica stations keep streaming, the fault is local.
+// Name used when describing this station's own mounts in operator-facing
+// evidence text. Configurable because the sibling mounts are configurable —
+// hardcoding one station's call sign here made every other station's
+// diagnosis read as if it belonged to KPFT.
+const STATION_LABEL = process.env.STATION_LABEL || 'station';
+
 const SIBLING_MOUNT_PATTERNS = (process.env.SIBLING_MOUNTS ||
   '/live_128,/live_64,/HD3,/HD3_128,/HD3_64,/classic_country')
   .split(',')
@@ -400,13 +411,91 @@ function analyzeAudioChunk(buffer) {
   return { isSilent, energy: Math.round(avgDiff * 100) / 100 };
 }
 
+// ── Icecast status document parsing ─────────────────────────────────────────
+/**
+ * Icecast 2.4.x emits INVALID JSON when a mount has no metadata: it writes a
+ * bare `-` where a string belongs — `"title": - ,`. Observed live on
+ * stream.pacificaservice.org (Icecast 2.4.4), which serves ~28 Pacifica
+ * affiliates, and possible on any mount of any 2.4.x server the moment a source
+ * connects without a title.
+ *
+ * A strict parse throws, and the caller used to report that as `reachable:
+ * false` — which is wrong in the way that matters most. A malformed reply is
+ * positive proof Icecast is UP and answering. Reporting it as unreachable flips
+ * every listener-impact verdict to 'unknown', and an 'unknown' verdict alerts,
+ * so one station's empty title tag silently disables the impact gate for every
+ * stream on that server.
+ *
+ * A minus sign not followed by a digit is never valid JSON, so this repair
+ * cannot corrupt a well-formed document.
+ */
+function repairIcecastJson(body) {
+  return body.replace(/:\s*-\s*(?=[,}\]])/g, ':""');
+}
+
+/**
+ * Parses an Icecast status document, repairing the malformation above when
+ * present. Returns null only when the document is genuinely unusable —
+ * which is the one case that still counts as "no inventory".
+ */
+function parseIcecastStatus(body) {
+  let parsed = null;
+  let repaired = false;
+  try {
+    parsed = JSON.parse(body);
+  } catch {
+    try {
+      parsed = JSON.parse(repairIcecastJson(body));
+      repaired = true;
+    } catch {
+      return null;
+    }
+  }
+
+  const stats = parsed?.icestats;
+  if (!stats) return null;
+
+  const raw = stats.source || [];
+  const sourceArray = Array.isArray(raw) ? raw : [raw];
+  const mounts = {};
+
+  sourceArray.forEach((src) => {
+    if (!src || !src.listenurl) return;
+    let pathname;
+    try {
+      pathname = new URL(src.listenurl).pathname;
+    } catch {
+      return;
+    }
+    mounts[pathname] = {
+      pathname,
+      listenurl: src.listenurl,
+      listeners: src.listeners || 0,
+      listenerPeak: src.listener_peak || 0,
+      // A repaired title is an empty string, not a lie about what is playing.
+      title: src.title || src.server_name || '',
+      serverName: src.server_name || '',
+      serverDescription: src.server_description || '',
+      genre: src.genre || '',
+      bitrate: src.bitrate || src['ice-bitrate'] || 0,
+      sampleRate: src.samplerate || src['ice-samplerate'] || 0,
+      channels: src.channels || src['ice-channels'] || 0,
+      serverType: src.server_type || '',
+      streamStart: src.stream_start_iso8601 || src.stream_start || '',
+      isSibling: SIBLING_MOUNT_PATTERNS.includes(pathname),
+    };
+  });
+
+  return { stats, mounts, mountCount: Object.keys(mounts).length, repaired };
+}
+
 // ── Icecast Server Snapshot ─────────────────────────────────────────────────
 /**
  * Fetches the full Icecast mount inventory. Unlike a simple stats fetch, this
  * keeps the complete mount list — including other Pacifica stations — so we can
  * answer "is it just us, or is it the whole server?"
  */
-function fetchIcecastSnapshot() {
+function fetchIcecastSnapshotOnce() {
   return new Promise((resolve) => {
     const start = Date.now();
     const statusClient = ICECAST_STATUS_URL.startsWith('http:') ? http : https;
@@ -425,57 +514,11 @@ function fetchIcecastSnapshot() {
             mountCount: 0,
           });
         }
-        try {
-          const parsed = JSON.parse(body);
-          const stats = parsed?.icestats || {};
-          const raw = stats.source || [];
-          const sourceArray = Array.isArray(raw) ? raw : [raw];
-          const mounts = {};
-
-          sourceArray.forEach((src) => {
-            if (!src || !src.listenurl) return;
-            let pathname;
-            try {
-              pathname = new URL(src.listenurl).pathname;
-            } catch {
-              return;
-            }
-            mounts[pathname] = {
-              pathname,
-              listenurl: src.listenurl,
-              listeners: src.listeners || 0,
-              listenerPeak: src.listener_peak || 0,
-              title: src.title || src.server_name || '',
-              serverName: src.server_name || '',
-              serverDescription: src.server_description || '',
-              genre: src.genre || '',
-              bitrate: src.bitrate || src['ice-bitrate'] || 0,
-              sampleRate: src.samplerate || src['ice-samplerate'] || 0,
-              channels: src.channels || src['ice-channels'] || 0,
-              serverType: src.server_type || '',
-              streamStart: src.stream_start_iso8601 || src.stream_start || '',
-              isSibling: SIBLING_MOUNT_PATTERNS.includes(pathname),
-            };
-          });
-
-          resolve({
-            reachable: true,
-            fetchError: null,
-            fetchErrorCode: null,
-            fetchedAt: new Date().toISOString(),
-            responseTime: Date.now() - start,
-            serverId: stats.server_id || '',
-            host: stats.host || '',
-            admin: stats.admin || '',
-            location: stats.location || '',
-            serverStart: stats.server_start_iso8601 || stats.server_start || '',
-            mounts,
-            mountCount: Object.keys(mounts).length,
-          });
-        } catch (e) {
-          resolve({
+        const doc = parseIcecastStatus(body);
+        if (!doc) {
+          return resolve({
             reachable: false,
-            fetchError: `Malformed status JSON: ${e.message}`,
+            fetchError: 'Malformed status JSON could not be parsed or repaired',
             fetchErrorCode: 'EPARSE',
             fetchedAt: new Date().toISOString(),
             responseTime: Date.now() - start,
@@ -483,6 +526,25 @@ function fetchIcecastSnapshot() {
             mountCount: 0,
           });
         }
+
+        const { stats, mounts, mountCount, repaired } = doc;
+        resolve({
+          reachable: true,
+          fetchError: null,
+          fetchErrorCode: null,
+          // Surfaced rather than silently swallowed: a server emitting broken
+          // JSON is a real fault worth reporting to whoever runs it.
+          repairedJson: repaired,
+          fetchedAt: new Date().toISOString(),
+          responseTime: Date.now() - start,
+          serverId: stats.server_id || '',
+          host: stats.host || '',
+          admin: stats.admin || '',
+          location: stats.location || '',
+          serverStart: stats.server_start_iso8601 || stats.server_start || '',
+          mounts,
+          mountCount,
+        });
       });
     });
 
@@ -511,6 +573,46 @@ function fetchIcecastSnapshot() {
   });
 }
 
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+/**
+ * Fetches the Icecast inventory, retrying transient failures before concluding
+ * the server is unreachable.
+ *
+ * WHY THIS EXISTS. Icecast is the witness the whole alert policy depends on:
+ * reachable + mount present means nobody lost audio, and no email is sent. When
+ * the status fetch fails we lose that witness, listenerImpact becomes 'unknown',
+ * and 'unknown' alerts. So a single dropped connection between this monitor and
+ * Pacifica — which costs listeners nothing — used to page people.
+ *
+ * The production record made the case: of 443 events, 141 (32%) carried an
+ * 'unknown' verdict, and of the 170 fetch failures behind them 131 were
+ * one-second socket hang-ups and 35 were timeouts. Those are transient network
+ * conditions on OUR side, not Icecast outages.
+ *
+ * A genuine outage survives a retry; a hiccup does not. That is the whole idea.
+ * A truly unreachable server still costs only STATUS_ATTEMPTS x timeout, well
+ * inside one check cycle, and still ends in 'unknown' — so a real server outage
+ * alerts exactly as it always did.
+ */
+async function fetchIcecastSnapshot() {
+  let last = null;
+  let made = 0;
+  for (let attempt = 1; attempt <= STATUS_ATTEMPTS; attempt++) {
+    last = await fetchIcecastSnapshotOnce();
+    made = attempt;
+    // A reachable server is the answer, however many tries it took.
+    if (last.reachable) break;
+    // A parseable-but-broken document is not a transport failure; retrying it
+    // would return the identical bytes. Fail fast rather than burn the cycle.
+    if (last.fetchErrorCode === 'EPARSE') break;
+    if (attempt < STATUS_ATTEMPTS) await sleep(STATUS_RETRY_DELAY_MS);
+  }
+  // `attempts` is what was actually spent, so a retry that rescued the cycle is
+  // visible rather than inferred.
+  return { ...last, attempts: made };
+}
+
 // ── Helpers ─────────────────────────────────────────────────────────────────
 function mountPathFor(stream) {
   try {
@@ -518,6 +620,44 @@ function mountPathFor(stream) {
   } catch {
     return null;
   }
+}
+
+/**
+ * Every mount path belonging to one channel, primary (the probed URL) first.
+ *
+ * Icecast publishes each bitrate variant of a channel as its own mount, so
+ * "KPFT Main" is /live_128 AND /live_64. Treating the probed mount as the whole
+ * channel undercounts the audience — for KPFT that hid roughly half of it.
+ */
+function channelMountPaths(stream) {
+  const primary = mountPathFor(stream);
+  const extra = Array.isArray(stream?.mounts) ? stream.mounts : [];
+  return [...new Set([primary, ...extra].filter(Boolean))];
+}
+
+/**
+ * The channel's audience: listeners summed across every variant Icecast is
+ * currently serving.
+ *
+ *   present === 0            → the whole channel is off air
+ *   present < total          → some variants are down; the channel still plays
+ *
+ * `present` is what separates "one encoder dropped" from "the channel is gone",
+ * which are the same event today and should not be.
+ */
+function channelAudience(snapshot, stream) {
+  const paths = channelMountPaths(stream);
+  let listeners = 0;
+  let peak = 0;
+  let present = 0;
+  for (const p of paths) {
+    const m = snapshot?.mounts?.[p];
+    if (!m) continue;
+    present += 1;
+    listeners += m.listeners || 0;
+    peak += m.listenerPeak || 0;
+  }
+  return { listeners, peak, present, total: paths.length };
 }
 
 /** Exact-pathname mount lookup. Substring matching would confuse /HD3 with /HD3_128. */
@@ -658,7 +798,7 @@ function classify({ stream, result, snapshot, prevSnapshot, cycle = [], deadAir 
       if (siblingsPresent === 0 && SIBLING_MOUNT_PATTERNS.length > 0) {
         evidence.push('ALL KPFT mounts are absent — the station\'s entire source feed has dropped, not just this one stream.');
       } else if (siblingsPresent > 0) {
-        evidence.push(`${siblingsPresent} other KPFT mount(s) are still connected — this is an isolated per-mount source failure.`);
+        evidence.push(`${siblingsPresent} other ${STATION_LABEL} mount(s) are still connected — this is an isolated per-mount source failure.`);
       }
       if (foreignHealthy) {
         evidence.push(`${foreignMounts.length} mount(s) from other Pacifica stations are streaming normally — the fault is on the KPFT side, not Pacifica's server.`);
@@ -833,6 +973,10 @@ module.exports = {
   probeStream,
   analyzeAudioChunk,
   fetchIcecastSnapshot,
+  channelMountPaths,
+  channelAudience,
+  parseIcecastStatus,
+  repairIcecastJson,
   classify,
   deriveSourceOutage,
   findMount,

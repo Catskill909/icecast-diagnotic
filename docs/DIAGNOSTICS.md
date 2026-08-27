@@ -23,6 +23,23 @@ Every check gathers three independent pieces of evidence, and the classifier onl
 
 **b. Icecast's own mount inventory.** `/status-json.xsl` is fetched every cycle and kept in full — all 15 mounts across all five Pacifica stations, not just KPFT's. This answers "does Icecast think this mount exists?" and "is the rest of the server healthy?"
 
+The fetch is retried `ICECAST_STATUS_ATTEMPTS` times (default 3, `ICECAST_STATUS_RETRY_MS`
+apart) before Icecast is declared unreachable. This matters because an
+unreachable verdict forces `listenerImpact` to `unknown`, and `unknown` emails: a
+single dropped connection between the monitor and Pacifica used to page people
+for something no listener experienced. In the production record 131 of 170 fetch
+failures were one-second socket hang-ups. A sustained outage survives every
+retry and still alerts. An unparseable document is *not* retried — the bytes
+would be identical.
+
+The document is parsed tolerantly. Icecast 2.4.x emits **invalid JSON** when a mount has no title metadata — it writes a bare `-` where a string belongs. A strict parse throws, and reporting that as `reachable: false` would be wrong in the way that matters most: a malformed reply is positive proof Icecast is up and answering. Because an unreachable verdict forces `listenerImpact` to `unknown`, and `unknown` alerts, one station's empty title tag would otherwise silently disable the impact gate for every stream on the server. The malformation is repaired before parsing, and `snapshot.repairedJson` records when that happened. Observed live on `stream.pacificaservice.org` (Icecast 2.4.4); never yet on `streams.pacifica.org`.
+
+**b-2. Channel audience.** Each bitrate variant of a channel is a separate
+Icecast mount, so listener counts are summed across a channel's `mounts` list
+rather than read from the probed mount alone. `variantsPresent` distinguishes a
+channel that is off air (`0`) from one that lost a single encoder but is still
+playing (`0 < present < total`).
+
 **c. Cross-stream correlation.** All three KPFT streams are checked in the same cycle. One stream failing is a stream problem; all three failing in the same second is not a coincidence.
 
 ## 3. The decisive rule

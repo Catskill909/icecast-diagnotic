@@ -251,7 +251,34 @@ reachable and the mount kept serving, so nobody lost a second of audio.
 
 The classifier correlates three independent signals: connection-layer timings, the Icecast `/status-json.xsl` mount inventory, and cross-stream correlation within the same cycle.
 
+The status fetch is **retried** before Icecast is declared unreachable. Icecast is
+the witness the alert gate depends on, so a failed fetch forces `listenerImpact` to
+`unknown` — which emails. A one-second network hiccup between the monitor and
+Pacifica costs listeners nothing, yet used to page people; a genuine outage
+survives three tries and still alerts exactly as before.
+
+The status document is parsed **tolerantly**: Icecast 2.4.x emits invalid JSON when a mount has no title metadata, and treating that as an unreachable server would force every `listenerImpact` verdict to `unknown` — which alerts. The malformation is repaired before parsing and flagged as `repairedJson`. See [`docs/DIAGNOSTICS.md`](docs/DIAGNOSTICS.md).
+
 The key distinction it draws: **an Icecast mount returning HTTP 404 means the server is healthy and the source encoder dropped off.** That is a studio problem (check the Barix), not a server problem. Because other Pacifica stations share the host, the engine can also confirm whether a fault is KPFT-specific or server-wide — and `stream_start_iso8601` gives the exact source reconnect moment, yielding a true outage duration independent of the polling interval.
+
+### Channels and their mounts
+
+Icecast publishes each bitrate variant of a channel as its own mount, so **KPFT
+Main is both `/live_128` and `/live_64`**. Each monitored stream therefore declares
+a `mounts` list, and **listener counts are summed across the whole channel**.
+Reading only the probed mount reported a fraction of the real audience —
+measured live at 57 of 88 listeners, with 35% of the audience invisible.
+
+| Channel | Probed mount | Other variants |
+|---|---|---|
+| KPFT Main | `/live_128` | `/live_64` |
+| KPFT HD2 | `/HD3_128` | `/HD3`, `/HD3_64` |
+| KPFT HD3 | `/classic_country` | — |
+
+Probing and dead-air detection still run against the primary mount alone, so a
+channel produces one alert, not one per variant. Samples additionally carry
+`variantsPresent` / `variantsTotal`: `present === 0` is a channel outage, while
+`0 < present < total` is a degraded channel still playing for most of its audience.
 
 ### Streams Monitored
 | Name | Mount Point | M3U Source | Default URL |
@@ -320,8 +347,11 @@ DATA_DIR=/app/data              # MUST be a persistent volume in production
 SEED_FILE=/app/seed/historical-events.json  # Optional one-time historical import
 
 # ── Diagnostics ──────────────────────────────────────
+ICECAST_STATUS_ATTEMPTS=3        # Tries before believing Icecast is unreachable
+ICECAST_STATUS_RETRY_MS=2000     # Wait between those tries
 ICECAST_STATUS_URL=https://streams.pacifica.org:9000/status-json.xsl
 SIBLING_MOUNTS=/live_128,/live_64,/HD3,/HD3_128,/HD3_64,/classic_country
+STATION_LABEL=KPFT              # Station name used in operator-facing evidence text
 
 # Optional JSON array replacing the three default streams
 # STREAMS=[{"id":"main","name":"Main","url":"https://example.com/main"}]

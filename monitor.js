@@ -41,18 +41,23 @@ const DEFAULT_STREAMS = [
     id: 'kpft-main',
     name: 'KPFT Main',
     url: 'https://streams.pacifica.org:9000/live_128',
+    // Every bitrate variant of this channel. Listener counts are summed across
+    // them; the probe still runs against `url` alone.
+    mounts: ['/live_128', '/live_64'],
     m3u: 'https://docs.pacifica.org/kpft/kpft.m3u',
   },
   {
     id: 'kpft-hd2',
     name: 'KPFT HD2',
     url: 'https://streams.pacifica.org:9000/HD3_128',
+    mounts: ['/HD3_128', '/HD3', '/HD3_64'],
     m3u: 'https://docs.pacifica.org/kpft/kpft_hd2.m3u',
   },
   {
     id: 'kpft-hd3',
     name: 'KPFT HD3',
     url: 'https://streams.pacifica.org:9000/classic_country',
+    mounts: ['/classic_country'],
     m3u: 'https://docs.pacifica.org/kpft/kpft_hd3.m3u',
   },
 ];
@@ -375,6 +380,8 @@ async function runChecks() {
     const wasDown = prev.status === 'down';
     const isDown = result.status === 'down';
     const mount = diagnose.findMount(snap, stream);
+    // The channel as a whole: every bitrate variant, summed.
+    const audience = diagnose.channelAudience(snap, stream);
 
     // ── Silence tracking (only meaningful while the stream is reachable) ────
     const st = silenceState[stream.id];
@@ -419,12 +426,21 @@ async function runChecks() {
       // listeners had stayed connected, hiding the real audience loss. Only
       // carry forward when Icecast itself is unreachable and the count is
       // genuinely unknown.
-      listeners: mount
-        ? mount.listeners
+      // Summed across every bitrate variant of this channel, not just the
+      // probed mount — see diagnose.channelAudience(). Reading one mount
+      // reported a fraction of the real audience and understated every
+      // listener-loss figure derived from it.
+      listeners: audience.present > 0
+        ? audience.listeners
         : snap.reachable
         ? 0
         : prev.listeners ?? 0,
-      listenerPeak: mount?.listenerPeak ?? prev.listenerPeak ?? 0,
+      listenerPeak: audience.present > 0 ? audience.peak : prev.listenerPeak ?? 0,
+      // How many of the channel's variants Icecast is serving. present === 0 is
+      // a channel outage; 0 < present < total is a degraded channel that is
+      // still playing for most of its audience.
+      variantsPresent: audience.present,
+      variantsTotal: audience.total,
       title: mount?.title || prev.title || '',
       bitrate: mount?.bitrate || prev.bitrate || 128,
       streamStart: mount?.streamStart || prev.streamStart || '',
