@@ -199,7 +199,12 @@ Reviewed end to end on 2026-08-27; findings and reasoning in
    no password configured means 503, not 200.
 3. **Escape helpers escape quotes.** They are used inside HTML attributes, and one
    renders Icecast metadata that a third party controls.
-4. **Any server-side fetch of a user-supplied URL goes through `safe-url.js`.**
+4. **No page carries inline script.** The CSP is `script-src 'self'` with no
+   `'unsafe-inline'`. Adding an inline `<script>` to a page will silently stop it
+   working; put it in a file.
+5. **Reads are public by default, gateable by setting.**
+   `REQUIRE_LOGIN_FOR_READ=true` puts everything behind the session.
+6. **Any server-side fetch of a user-supplied URL goes through `safe-url.js`.**
    Built ahead of the add-station flow; its tests are that feature's spec.
 
 ## 7. Traps
@@ -261,10 +266,6 @@ count could be zero — zero survives everything.
    though the app's own `SIBLING_MOUNTS` corroborates it.
 4. Do we have Icecast *admin* credentials for the Pacifica host? Unlocks
    per-listener geography and session data.
-5. Should the public dashboard require login at all? Reading is open by
-   deliberate choice, and `redact.js` keeps identities out of it — but the
-   simpler answer for a station that does not want its incident history public
-   is to gate reads too. One middleware line, not yet a decision.
-6. **Did the retry actually reduce alert noise?** 32% of events were `unknown`
+5. **Did the retry actually reduce alert noise?** 32% of events were `unknown`
    before it. Re-measure after a week of production data — around 2026-09-03 —
    rather than assuming.

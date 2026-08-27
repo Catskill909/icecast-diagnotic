@@ -302,7 +302,7 @@ forgets to set a password gets a broken button, not a silent hole.
 | `/api/test-alert`, `/api/weekly-roundup` | **Authenticated** — both send mail |
 | `POST /api/login`, `/api/logout`, `GET /api/me` | Public |
 | `/api/events`, `/api/stations`, `/api/diagnostics` | Public, but **redacted** — see below |
-| Everything else | Public, as before |
+| Everything else | Public by default; set `REQUIRE_LOGIN_FOR_READ=true` to gate reads too |
 
 ### What anonymous callers are not shown
 

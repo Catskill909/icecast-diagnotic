@@ -20,11 +20,17 @@ app.use((req, res, next) => {
   // stolen data somewhere.
   res.setHeader('Content-Security-Policy', [
     "default-src 'self'",
-    // 'unsafe-inline' is required: the pages carry inline <script> and style
-    // attributes. It weakens the policy but still blocks loading script from
-    // another origin, which is how an injection usually escalates.
-    "script-src 'self' 'unsafe-inline'",
+    // No 'unsafe-inline'. Every page loads its script from a file, so an
+    // injected <script> does not execute even if one is somehow rendered —
+    // which is the difference between an escaping bug being a defect and being
+    // an account takeover.
+    "script-src 'self'",
+    // Split so scripts stay strict while nine inline style attributes in the
+    // dashboard markup keep working. Style injection is defacement; script
+    // injection is the one worth spending strictness on.
     "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
+    "style-src-elem 'self' https://fonts.googleapis.com",
+    "style-src-attr 'unsafe-inline'",
     "font-src 'self' https://fonts.gstatic.com",
     "img-src 'self' data:",
     // The dashboard's preview player streams audio straight from Icecast, which
@@ -53,6 +59,33 @@ app.use((req, res, next) => {
     res.setHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
   }
   next();
+});
+
+// Reading is public by default: the dashboard is meant to be openable, and
+// redact.js keeps identities out of every public response. A station that would
+// rather its incident history were not readable by anyone with the URL sets
+// REQUIRE_LOGIN_FOR_READ=true and everything except the login page and the
+// health check needs a session.
+//
+// Written as a setting rather than left as an open question, because "we should
+// decide about this someday" is how a deployment ends up more open than its
+// operator believes.
+const REQUIRE_LOGIN_FOR_READ =
+  String(process.env.REQUIRE_LOGIN_FOR_READ ?? '').trim().toLowerCase() === 'true';
+
+const ALWAYS_PUBLIC = new Set(['/login.html', '/login.css', '/login.js', '/health', '/robots.txt']);
+
+app.use((req, res, next) => {
+  if (!REQUIRE_LOGIN_FOR_READ) return next();
+  if (ALWAYS_PUBLIC.has(req.path)) return next();
+  if (req.path === '/api/login' || req.path === '/api/logout' || req.path === '/api/me') return next();
+  if (auth.currentSession(req)) return next();
+  // A browser asking for a page is sent to sign in; anything else gets a 401 it
+  // can act on rather than an HTML page it cannot parse.
+  if (req.method === 'GET' && (req.headers.accept || '').includes('text/html')) {
+    return res.redirect('/login.html?next=' + encodeURIComponent(req.originalUrl));
+  }
+  return res.status(401).json({ error: 'Authentication required' });
 });
 
 // ── Serve Static Frontend (Cache Busting for Dev) ───────────────────────────
@@ -140,7 +173,7 @@ app.get('/api/config', (req, res) => {
   res.json(monitor.getConfig());
 });
 
-// ── Station Configuration (read-only for now) ───────────────────────────────
+// ── Station Configuration ───────────────────────────────────────────────────
 // The station/channel/host tree the monitor is running from. Configuration now
 // lives in the store rather than in environment variables, so this is the
 // authoritative answer to "what is being monitored" — and it is the API the

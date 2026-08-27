@@ -81,10 +81,16 @@ next one is too.
 The app set only `X-Robots-Tag`. Added CSP, `X-Content-Type-Options`,
 `X-Frame-Options`, `Referrer-Policy`, `Permissions-Policy`, and HSTS on https.
 
-The CSP allows `'unsafe-inline'` for scripts because the pages carry inline
-`<script>`. That is a real weakness and worth removing later by moving scripts to
-files; it still blocks loading script from another origin, which is how an
-injection normally escalates.
+**Closed the same day.** `login.html` was the only page carrying an inline
+`<script>`; it now loads `login.js` and `login.css` from files, so the policy is
+`script-src 'self'` with **no `'unsafe-inline'`**. An injected `<script>` does not
+execute even if escaping somewhere fails — which is the difference between an
+escaping bug being a defect and being an account takeover.
+
+Inline *style attributes* remain permitted via `style-src-attr`: nine of them sit
+in the dashboard markup. Style injection is defacement; script injection is what
+strictness is worth spending on, and the split policy keeps scripts strict
+without a layout rewrite.
 
 ## 5. Administrator address in advice text — Low
 
@@ -143,9 +149,13 @@ Requirements implemented:
 Dashboard, history and most API endpoints are open. This is deliberate and
 predates the review; `redact.js` keeps identities out of the responses.
 
-Worth an explicit decision rather than drift: a station that does not want its
-incident history public should gate reads too. That is one middleware line, and
-it is a product decision, not a security defect.
+**Now a setting rather than an open question.** `REQUIRE_LOGIN_FOR_READ=true`
+puts the dashboard and every read endpoint behind the session; the login page and
+the health check stay reachable. It is off by default, because the dashboard is
+meant to be openable and public responses carry no personal data.
+
+Written as a switch deliberately: "we should decide about this someday" is how a
+deployment ends up more open than its operator believes.
 
 ---
 
