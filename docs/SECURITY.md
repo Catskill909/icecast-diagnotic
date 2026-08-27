@@ -1,6 +1,7 @@
 # Security review — 2026-08-27
 
-A point-by-point review of the running system, at commit `5f77aa0`. Findings are
+A point-by-point review of the running system. Reviewed at commit `5f77aa0`;
+all findings closed as of `df11e35`. Findings are
 ranked by what an attacker can reach **without any credential**, because that is
 the only tier that is exploitable from the open internet.
 
@@ -17,7 +18,7 @@ Every finding below was fixed the same day unless marked otherwise.
 | 3 | XSS via Icecast metadata in HTML attributes | **Medium** | ✅ Fixed |
 | 4 | No Content-Security-Policy or hardening headers | Medium | ✅ Fixed |
 | 5 | Upstream administrator address in stored advice text | Low | ✅ Fixed |
-| 6 | `nodemailer` advisories | Low (not exposed) | ✅ Upgraded to 9.x |
+| 6 | `nodemailer` advisories | Low (not exposed) | ✅ Upgraded to 9.0.5, audit clean |
 | 7 | SSRF once station URLs become user-supplied | **Not yet real** | ✅ Guard built ahead of the feature |
 | 8 | Reads are unauthenticated by design | Accepted | — |
 
@@ -98,7 +99,7 @@ cover events already stored.
 
 ## 6. `nodemailer` advisories — Low, not exposed
 
-`npm audit` reports one high-severity advisory against `nodemailer@6.10.1`.
+`npm audit` reported one high-severity advisory against `nodemailer@6.10.1`.
 Checked feature by feature: the app uses **none** of the affected paths —
 no `jsonTransport`, no OAuth2, no `raw:`, no direct `addressparser`. Real
 exposure is effectively nil.

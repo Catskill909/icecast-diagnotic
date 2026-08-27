@@ -713,6 +713,62 @@ misclick from removing a station.
 
 The listener-impact gate is the best idea in this codebase. Extending it:
 
+### 6.0 How mail gets sent — and why it decides portability
+
+Today every deployment carries its own SMTP credentials: `SMTP_HOST`, `PORT`,
+`USER`, `PASS`, `FROM`, plus `ALERT_EMAILS`. That is correct for one station
+running its own monitor. **It is the wrong shape for thirty-three.**
+
+Follow it through to the affiliate wave and the problem is obvious:
+
+- Every affiliate must supply working SMTP credentials before they can receive a
+  single alert. Small stations are exactly the ones least likely to have them.
+- Whoever runs the monitor ends up **holding thirty-three stations' mail
+  credentials**, which is a far worse thing to be responsible for than one.
+- A station that gets its credential wrong fails silently, in the one direction
+  that matters: alerts stop arriving, and nothing announces it.
+
+**The simplification: one send-only key at the monitor, recipients per station.**
+
+| | Sending credential | Recipients | Station must configure |
+|---|---|---|---|
+| **Today** | Per deployment, in env | Per deployment, in env | SMTP host, port, user, password |
+| **Proposed** | **One**, at the monitor | Per station, in the store | **An email address. Nothing else.** |
+
+A station adding itself supplies the thing it actually knows — who should be told
+— and nothing about mail servers. That is what makes the add-station flow a
+30-second task rather than a support conversation, and it removes the only part
+of setup that requires a station to have technical infrastructure of its own.
+
+**It also cuts the other way, toward portability.** A station that *wants* to send
+from its own domain still can: the per-deployment SMTP variables stay supported
+and take precedence when set. Self-hosters keep full control; hosted affiliates
+supply nothing. One code path, both models — which is the same trick as
+configuration seeding in §5.1.
+
+**The trade-off, honestly.** Mail arrives from the monitor's sending domain
+rather than the station's, so a GM sees the alert coming from the monitoring
+service rather than from their own station. Mitigations, in order of effort:
+
+- Set `Reply-To` to the station's own contact, so replies land in the right place.
+- Use a per-station `From` display name — *"KPFT Stream Monitor"* — over the
+  shared address, which is what a recipient actually reads.
+- If a station insists on its own domain, they configure their own SMTP, exactly
+  as today.
+
+**Prerequisite: a send-only credential, not a mailbox password.** A mailbox
+account's SMTP password usually grants read access to that mailbox too, so a
+shared one would put every station's alerts behind a credential that can also
+read someone's mail. A transactional key from Postmark, SES or Resend can only
+send, is scoped to one verified domain, and brings delivery and bounce logs —
+which finally answer *"did the GM actually receive it"*, a question this system
+cannot answer today. See [`docs/SECURITY.md`](docs/SECURITY.md).
+
+**Consequence for the roadmap:** per-station recipients move into the store
+alongside station configuration (§5.1), which is why `/api/stations` is projected
+by allowlist rather than blocklist — the recipients land in that structure, and a
+blocklist would publish them the moment they arrived.
+
 ### Recipients as a routing table, not a list
 
 Today: one `ALERT_EMAILS` env var. What staff actually need:

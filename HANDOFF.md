@@ -2,7 +2,7 @@
 
 > **Purpose.** Everything a new session, a new developer, or another model needs
 > to pick this up without reading the conversation it came from. Written
-> 2026-08-27 at commit `067c937`.
+> 2026-08-27, current as of commit `df11e35`.
 >
 > Read this first, then [`README.md`](README.md) for behaviour,
 > [`docs/DIAGNOSTICS.md`](docs/DIAGNOSTICS.md) for the classifier, and
@@ -40,8 +40,8 @@ regression, however green the tests are.**
 
 - **Live**, healthy, ~90 listeners, 3 channels, 443 events retained since
   2026-08-04.
-- **64 tests**, `npm test`, Node's built-in runner, no test framework dependency.
-- **Dependencies: express, nodemailer, dotenv.** That is the whole list, and it
+- **98 tests**, `npm test`, Node's built-in runner, no test framework dependency.
+- **Dependencies: express, nodemailer 9, dotenv.** That is the whole list, and it
   is deliberate. Crypto, testing and HTTP are all Node built-ins. Adding a
   dependency should require an argument.
 - **Deploys are MANUAL.** `git push` ships nothing. A human clicks deploy in
@@ -108,7 +108,9 @@ silently alters what lands in someone's inbox.
 | `monitor.js` | 1827 | Check cycle, episode state, email composition, weekly roundup |
 | `diagnose.js` | 987 | Probe, Icecast snapshot, **the classifier and the alert gate** |
 | `server.js` | 326 | HTTP API |
-| `auth.js` | 237 | Admin session gate |
+| `auth.js` | ~290 | Admin session gate: scrypt, signed cookie, rate limiting |
+| `redact.js` | ~130 | **Public projections.** What anonymous callers may see |
+| `safe-url.js` | ~150 | **SSRF guard** for fetching user-supplied URLs |
 | `public/` | ~2900 | Vanilla JS dashboard, history page, login. No framework |
 
 Data lives in `DATA_DIR` (`/app/data` in production, **must be a persistent
@@ -185,6 +187,21 @@ architecture.
 
 ---
 
+## 6b. Security posture
+
+Reviewed end to end on 2026-08-27; findings and reasoning in
+[`docs/SECURITY.md`](docs/SECURITY.md). Four things to carry forward:
+
+1. **Reading is public; identities are not.** Every public response goes through
+   `redact.js`. Station configuration is projected by **allowlist**, so a field
+   added later is withheld until someone decides otherwise.
+2. **Writing and sending mail require a session.** Protected routes fail closed —
+   no password configured means 503, not 200.
+3. **Escape helpers escape quotes.** They are used inside HTML attributes, and one
+   renders Icecast metadata that a third party controls.
+4. **Any server-side fetch of a user-supplied URL goes through `safe-url.js`.**
+   Built ahead of the add-station flow; its tests are that feature's spec.
+
 ## 7. Traps
 
 - **Deploys are manual.** Pushing is not shipping. Say so explicitly.
@@ -217,7 +234,7 @@ architecture.
 ## 8. Verifying a change
 
 ```bash
-npm test                                             # 64 tests
+npm test                                             # 98 tests
 node --check server.js monitor.js store.js diagnose.js auth.js
 
 # Against production
