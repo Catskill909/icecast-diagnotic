@@ -15,10 +15,21 @@
   'use strict';
 
   function esc(str) {
+    // Escapes for BOTH text and attribute contexts.
+    //
+    // This previously used the DOM trick — set textContent, read innerHTML —
+    // which escapes & < > but leaves quotes untouched. That is safe for text and
+    // unsafe inside an attribute: a value containing a double quote closes the
+    // attribute early and anything after it becomes markup. Several call sites
+    // interpolate into title="..." and data-*="...", and one of them renders
+    // Icecast metadata, which is set by whoever streams to the mount.
     if (str == null) return '';
-    const div = document.createElement('div');
-    div.textContent = String(str);
-    return div.innerHTML;
+    return String(str)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;');
   }
 
   function kvRow(key, value, cls) {

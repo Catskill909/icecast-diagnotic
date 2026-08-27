@@ -14,6 +14,44 @@ app.use(express.json({ limit: '256kb' }));
 app.use((req, res, next) => {
   // Discourage search engine indexing (unlisted site)
   res.setHeader('X-Robots-Tag', 'noindex, nofollow, noarchive, nosnippet');
+
+  // Defence in depth behind the output escaping, not instead of it. If a script
+  // ever does get injected, this is what stops it loading a payload or posting
+  // stolen data somewhere.
+  res.setHeader('Content-Security-Policy', [
+    "default-src 'self'",
+    // 'unsafe-inline' is required: the pages carry inline <script> and style
+    // attributes. It weakens the policy but still blocks loading script from
+    // another origin, which is how an injection usually escalates.
+    "script-src 'self' 'unsafe-inline'",
+    "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
+    "font-src 'self' https://fonts.gstatic.com",
+    "img-src 'self' data:",
+    // The dashboard's preview player streams audio straight from Icecast, which
+    // is a different origin.
+    "media-src 'self' https:",
+    "connect-src 'self'",
+    "object-src 'none'",
+    "base-uri 'self'",
+    "form-action 'self'",
+    // Clickjacking: nothing here should ever be framed.
+    "frame-ancestors 'none'",
+  ].join('; '));
+
+  // Stops a response being reinterpreted as a type it is not — the classic way
+  // a JSON endpoint becomes a script include.
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  // Belt and braces with frame-ancestors, for older browsers.
+  res.setHeader('X-Frame-Options', 'DENY');
+  // Keeps the dashboard URL out of Referer headers sent to other sites; this is
+  // an unlisted host and its address is not worth leaking.
+  res.setHeader('Referrer-Policy', 'no-referrer');
+  res.setHeader('Permissions-Policy', 'geolocation=(), microphone=(), camera=()');
+
+  // HSTS only over https, and only when a proxy says the original request was.
+  if (req.secure || req.headers['x-forwarded-proto'] === 'https') {
+    res.setHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
+  }
   next();
 });
 

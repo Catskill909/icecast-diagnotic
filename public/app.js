@@ -342,7 +342,7 @@
 
         <!-- Live Audio Preview Player -->
         <div class="audio-player-box">
-          <button class="play-btn" data-stream-id="${stream.id}" data-stream-url="${escapeHtml(stream.url)}" title="Toggle Preview Audio">
+          <button class="play-btn" data-stream-id="${escapeHtml(stream.id)}" data-stream-url="${escapeHtml(stream.url)}" title="Toggle Preview Audio">
             ${playBtnContent}
           </button>
           <div class="player-info">
@@ -661,10 +661,21 @@
   }
 
   function escapeHtml(str) {
-    if (!str) return '';
-    const div = document.createElement('div');
-    div.textContent = str;
-    return div.innerHTML;
+    // Escapes for BOTH text and attribute contexts.
+    //
+    // This previously used the DOM trick — set textContent, read innerHTML —
+    // which escapes & < > but leaves quotes untouched. That is safe for text and
+    // unsafe inside an attribute: a value containing a double quote closes the
+    // attribute early and anything after it becomes markup. Several call sites
+    // interpolate into title="..." and data-*="...", and one of them renders
+    // Icecast metadata, which is set by whoever streams to the mount.
+    if (str == null) return '';
+    return String(str)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;');
   }
 
   // ── Start ───────────────────────────────────────────────────────────────
