@@ -22,6 +22,12 @@ in one specific way: **it can tell the difference between "our probe failed" and
 everything below is about applying that engine to more stations and putting it in
 front of people who are not the person who built it.
 
+**Sequencing decision (2026-08-27): build the admin panel before adding the
+stations.** Adding five stations by config file builds the configuration path
+twice; building the panel first makes those five stations its test data, and the
+affiliates then arrive through the same workflow rather than a second one. See
+§5 and §10.
+
 Three findings shape the scope:
 
 | # | Finding | Consequence |
@@ -312,7 +318,31 @@ Organization  (Pacifica Foundation)
    └── Station          (KPFT Houston)          ── GM, staff, alert recipients, timezone
          └── Channel    (KPFT Main / HD2 / HD3) ── what a listener would call "a station"
                └── Mount (/live_128, /live_64)  ── a bitrate variant; what we actually probe
+                     └── on Host                ── an Icecast server; SHARED across stations
+
+Hosts are a separate, global pool rather than a property of a station:
+
+  Host  streams.pacifica.org:9000        → serves 5 stations
+  Host  stream.pacificaservice.org:9000  → serves ~28 stations
+  Host  someaffiliate.org:8000           → serves 1 station
 ```
+
+**Why hosts are their own level, and not "the station's server".** Two facts
+pull in opposite directions and only this shape satisfies both:
+
+- **Many stations share one host.** All five sister stations are on one server;
+  ~28 affiliates are on another. One snapshot fetch per *host* per cycle serves
+  every station on it — this is what makes the affiliate wave nearly free (§2.2).
+- **One station may span several hosts.** Most stations are a single stream on a
+  single server, but a minority run more than one — a separate box for an HD
+  feed, a backup server, a different provider for one channel. KPFT-shaped
+  stations are the minority case that the model must not preclude.
+
+So the fetch loop iterates **hosts**, deduplicated, and the station view
+assembles its channels from whichever hosts they happen to live on. Getting this
+wrong in either direction is expensive: assume one host per station and you
+refetch the same Pacifica server 33 times a minute; assume one host per *system*
+and a station with a second server cannot be represented at all.
 
 What this buys us:
 
@@ -468,8 +498,10 @@ better use of Phase 0 than a storage migration.
    (`streams`, `snapshot`, `episodes`, `silenceState`) become instance fields.
    Run one instance for KPFT — identical behavior, still one tenant.
 4. **Introduce the host-level snapshot cache** shared across stations.
-5. **Add config-from-database**, env vars become bootstrap defaults.
-6. **Then** the admin panel and the fleet view.
+5. **Move station config into the store**, env vars become bootstrap defaults
+   (§5.1). This is the step the admin panel actually waits on.
+6. **Then** the admin panel, the stations it adds, and the fleet view — in that
+   order (§10).
 
 Steps 2–3 are invisible to users and are where the risk lives. Do not let the
 admin panel get built first — it is the fun part and it will pull the schedule.
@@ -484,21 +516,97 @@ impact math and not find out until a weekly roundup quotes a wrong number.
 
 ## 5. The admin panel
 
-### Roles
+> **Sequencing decision (2026-08-27): the panel comes BEFORE the stations.**
+>
+> An earlier draft of this document had Phase 1 add the five sister stations via
+> a config file, with the admin panel following in Phase 2. That was wrong, for
+> a reason worth writing down: it builds the configuration path twice. Stations
+> would be hardcoded into an env array, then thrown away the moment the panel
+> needed to write them somewhere.
+>
+> Building the add-station flow first means **the five sister stations become the
+> test data for it** — the flow is dogfooded on stations we control before an
+> affiliate ever touches it. It also settles §5.1 for free: config lives in the
+> store, not in env.
+>
+> The cost is real and should be accepted knowingly: the "here is your dashboard"
+> demo to Pacifica arrives later. If that demo has near-term political value,
+> keep a throwaway env config to show it — and do not build anything on it.
 
-| Role | Can do | Who |
+### 5.0 Two panels, not one
+
+The single most useful distinction in this whole section. "Administering the
+system" and "managing my station" are different jobs, for different people, at
+different frequencies, with different risk:
+
+| | **Add a station** | **My station** |
 |---|---|---|
-| **Superadmin** | Everything, all stations, add/remove stations and users | Whoever runs the monitor |
-| **Network staff** | Read all stations, ack incidents, add annotations | Pacifica national / engineering |
-| **Station admin** | Full control of *their* station: channels, recipients, policy | Station GM / chief engineer |
-| **Station viewer** | Read-only, their station | Board ops, programming staff |
-| **Public** | Public status page only, if enabled | Listeners |
+| Who | Whoever runs the monitor; network engineering | GM, station staff |
+| How often | Once, ever | Weekly |
+| Tech level | Technical is acceptable | Must be genuinely simple |
+| Risk if wrong | Adds probe load, wrong host, wrong mounts | Low |
+| Restricted? | **Yes** | No |
 
-Auth: start with email + password and a proper session, plus per-station scoping.
-Magic-link email login is worth considering — this audience will forget passwords,
-and we already have SMTP configured and proven.
+Most GMs are not technical; some are. Designing one panel for both audiences
+means either patronising the technical ones or losing the rest. Splitting the
+surfaces means neither trade-off has to be made: **the GM-facing screen should
+not feel like an admin panel at all** — it is "my alerts" and "how are we
+doing" — while station creation stays with whoever runs the system.
 
-### Station setup — make it one paste
+This also answers "what stops a GM adding a station that isn't theirs": they
+never see that surface.
+
+### 5.1 Where configuration lives
+
+**Decided: the store is authoritative; env vars seed it on first boot.**
+
+Today every setting is a Coolify environment variable read once at startup, so
+changing one means a redeploy. An admin panel means settings change while the
+app runs. Both cannot be in charge, and leaving it ambiguous produces the
+permanent bug "I changed it in Coolify and nothing happened".
+
+| Stays in env (secrets) | Moves into the store (panel edits) |
+|---|---|
+| `SMTP_PASS` | Which stations are monitored |
+| Session secret | Alert recipients |
+| Admin password hash | Thresholds, quiet hours, timezone |
+
+Secrets never need a UI, so they never conflict. Env changes to *settings* are
+ignored after first boot, and that has to be documented where an operator will
+actually read it.
+
+**The storage already exists.** `store.getMeta()` / `setMeta()` persists across
+redeploys — it is what remembers when the weekly roundup last sent. Admin config
+can ride the same mechanism with no new infrastructure.
+
+### 5.2 Progressive disclosure
+
+One obvious path that works for everybody, with depth available underneath:
+
+- **Simple (default).** Paste a stream URL. We discover the rest. Name it, add
+  an email, done.
+- **Advanced (collapsed).** Mount grouping, failure thresholds, quiet hours,
+  dead-air sensitivity, custom status URL.
+
+The discovery flow in §5.4 is what makes the simple path honest rather than a
+stripped-down version of the real thing — a non-technical GM supplies *one*
+piece of information and everything else has a working default.
+
+### 5.3 Build order
+
+1. **Move station config into the store**, out of env. Invisible; unblocks all of it.
+2. **Login.** One admin, credentials in env. That is enough for one operator.
+3. **Add-station flow** with discovery (§5.4).
+4. **Add the five sister stations with it.** ← the dogfood moment.
+5. **Per-station alert recipients** — the first genuinely GM-facing screen.
+6. **Fleet view** (§7).
+7. **Roles and multi-user — only when a real GM asks for a login.**
+
+Step 7 is deliberately last. The role table in §5.5 is speculative while there
+is one operator, and building a permission system before it has users is how it
+ends up maintained but never exercised.
+
+### 5.4 Station setup — make it one paste
 
 The add-station flow should not be a form with 14 fields. It should be:
 
@@ -512,10 +620,49 @@ This is directly enabled by `fetchIcecastSnapshot()` — it already returns exac
 this inventory. **Discovery-driven setup is the differentiator** against every
 competitor's "paste a URL and hope."
 
-For a station with one Icecast server and one stream — the common case the user
-flagged — this is a 30-second setup with two fields filled in.
+For a station with one Icecast server and one stream — **the common case, and
+most affiliates** — this is a 30-second setup with two fields filled in.
 
-### Other admin surfaces
+**A minority of stations have more than one Icecast server**, so the flow must
+allow "add another server" and attach its mounts to the same station. Keep it
+out of the main path: one paste, then an unobtrusive *"This station has another
+server"* link. The majority never sees it; KPFT-shaped stations are not forced
+through a multi-server wizard they mostly do not need.
+
+Because hosts are a shared pool (§3.2), pasting a URL that is already monitored
+should say so and offer its existing mount inventory rather than adding a second
+copy of the same server. Anyone adding a Pacifica affiliate will hit this on
+their first attempt.
+
+Note that step 3 is exactly the channel/mount grouping in §3.2, so the data model
+and the setup UI are the same piece of work rather than two.
+
+### 5.5 Roles — designed now, built at step 7
+
+| Role | Can do | Who |
+|---|---|---|
+| **Superadmin** | Everything, all stations, add/remove stations and users | Whoever runs the monitor |
+| **Network staff** | Read all stations, ack incidents, add annotations | Pacifica national / engineering |
+| **Station admin** | Full control of *their* station: channels, recipients, policy | Station GM / chief engineer |
+| **Station viewer** | Read-only, their station | Board ops, programming staff |
+| **Public** | Public status page only, if enabled | Listeners |
+
+Auth: start with a single admin credential, then email + password with
+per-station scoping when step 7 arrives. Magic-link email login is worth
+considering — this audience will forget passwords, and SMTP is already
+configured and proven.
+
+**On a two-screen login (username, then password):** it adds no security. It is
+an identity-*routing* pattern — Google and Microsoft use it to choose an SSO
+provider — and an attacker's script posts both steps as fast as one. Done
+naively it is actively worse: if screen two only appears for valid usernames,
+it is a username enumerator. Use it if the interaction is preferred, but always
+advance to screen two, and put the real protection where it belongs: a scrypt
+password hash rather than plaintext, `crypto.timingSafeEqual` comparison, rate
+limiting and lockout, and a signed `httpOnly` / `Secure` / `SameSite=Strict`
+cookie. Node's built-in `crypto` covers all of it with no new dependencies.
+
+### 5.6 Other admin surfaces
 
 - **Alert policy per station** — threshold, quiet hours, the
   `ALERT_ON_HARMLESS_OUTAGE` escape hatch, dead-air sensitivity.
@@ -524,6 +671,41 @@ flagged — this is a 30-second setup with two fields filled in.
   work generates 3am pages and the alerts get muted permanently.
 - **Test alert / preview** — already exists as an API, needs a button.
 - **Audit log** — who changed what. Small effort, saves an argument later.
+
+### 5.7 One station screen, not one per station
+
+**Build the station view once and feed it data.** A dropdown (or ⌘K palette) in
+the header selects which station's data fills it. There is no per-station page,
+no per-station code, and no per-station maintenance — an improvement to the
+screen improves it for all of them at once, whether there are five or three
+hundred.
+
+This is why the dropdown beats tabs, and the reason is not aesthetic: tabs imply
+a fixed, small, known set. The moment the set is 33 the tab strip has to be
+replaced, and replacing navigation late means re-testing every screen that hangs
+off it.
+
+Three constraints the shared screen has to respect:
+
+1. **Render 1..N channels, never exactly 3.** KPFT has three channels; WPFW has
+   one; a typical affiliate has one. The current dashboard's three-card layout
+   encodes today's station shape and will not survive contact with the second
+   station. A single-channel station should look deliberate, not like a
+   three-column grid with two holes in it.
+2. **Every station needs its own URL** — `/station/kpft`, not a dropdown that
+   mutates hidden state. Without routing you cannot bookmark a station, send a
+   GM a link to theirs, or deep-link from an alert email to the station that
+   failed. That last one is the difference between an alert someone acts on and
+   one they have to go hunting from.
+3. **Remember the selection per viewer.** A GM opening the app should land on
+   their own station, not on whichever one sorts first.
+
+### 5.8 Reports and settings stay separate pages
+
+The history page is the best *reporting* surface in the product and is what a GM
+actually opens. Administration is rare and destructive-capable. Behind the same
+login, but not the same page — otherwise someone browsing incidents is one
+misclick from removing a station.
 
 ---
 
@@ -695,20 +877,26 @@ Low information density on purpose — its job is to be visible from across a ro
 
 ## 10. Phasing
 
+> **Revised 2026-08-27.** The admin panel now precedes the stations. Adding the
+> five sister stations by hand would build the configuration path twice and throw
+> the first one away; building the panel first makes those five stations its test
+> data. See the note at the head of §5.
+
 | Phase | Contents | Rough shape |
 |---|---|---|
-| **0 — Foundations** | Characterization tests · `StationMonitor` class · channel/mount model + audience undercount fix · `unknown`-verdict investigation (§3.4) | Invisible to users; all the risk lives here. **No storage work** |
-| **1 — Pacifica network** | Tolerant status parsing (§2.3) · host-shared snapshot · all 5 sister stations · fleet view · correlated network alerts | The demo that sells the rest |
-| **1b — Affiliate wave** | Add `stream.pacificaservice.org` · ~28 affiliates · call-sign→station grouping | Same code path; near-zero marginal cost |
-| **2b — Discovery adapters** | Tier 1–5 fallbacks · per-station degraded-monitoring policy · setup-time tier detection | Required before any off-network affiliate |
-| **2 — Admin panel** | Auth + roles · discovery-driven station setup · recipient routing · maintenance windows · audit log | Opens it up beyond one operator |
-| **3 — Staff utilities** | Public status page · monthly board report · annotations · schedule integration · escalation + ack | The features non-engineers open the app for |
-| **3b — Storage** | SQLite behind the existing `store.js` API, once mount count passes ~50 (§3.3) | Deferred deliberately; not needed before this point |
+| **0 — Foundations** | Characterization tests · `StationMonitor` class · channel/mount model (✅ done) · move station config out of env into the store | Invisible to users; all the risk lives here. **No storage migration** |
+| **1 — Minimum admin** | Single-admin login · discovery-driven add-station flow · per-station alert recipients | Deliberately small: no roles, no audit log, no maintenance windows yet |
+| **2 — The five sister stations** | Added *through the panel*, not by config file · host-shared snapshot · correlated network alerts | The dogfood moment, and the demo that sells the rest |
+| **2b — Affiliate wave** | Add `stream.pacificaservice.org` · ~28 affiliates · call-sign→station grouping | Same code path, same panel; near-zero marginal cost |
+| **3 — Fleet view & staff utilities** | Master panel · public status page · monthly board report · annotations · escalation + ack | The features non-engineers open the app for |
+| **3b — Discovery adapters** | Tier 1–5 fallbacks · per-station degraded-monitoring policy | Required before any off-network affiliate (§2.4) |
+| **3c — Roles & multi-user** | The role table in §5.5, built when a real GM asks for a login | Not before. A permission system without users is maintenance with no return |
+| **3d — Storage** | SQLite behind the existing `store.js` API, once mount count passes ~50 (§3.3) | Deferred deliberately; not needed before this point |
 | **4 — Intelligence** | Audience anomaly detection · encoder health scoring · multi-region probes · alert-fatigue analytics | The state-of-the-art part |
 
-Phase 1 is deliberately before the admin panel: five stations can be configured
-in a file, and shipping the network view early proves the value while the config
-UI is still being designed.
+**The through-line:** every phase after 1 adds stations through the same panel.
+Sister stations, affiliates on the shared host, and self-hosted affiliates are
+the same workflow with progressively weaker discovery — not three projects.
 
 ---
 
