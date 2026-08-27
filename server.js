@@ -44,6 +44,17 @@ app.get('/api/config', (req, res) => {
   res.json(monitor.getConfig());
 });
 
+// ── Station Configuration (read-only for now) ───────────────────────────────
+// The station/channel/host tree the monitor is running from. Configuration now
+// lives in the store rather than in environment variables, so this is the
+// authoritative answer to "what is being monitored" — and it is the API the
+// admin panel will later write to.
+app.get('/api/stations', (req, res) => {
+  const config = monitor.getStationConfig();
+  if (!config) return res.status(503).json({ error: 'Configuration not initialised yet' });
+  res.json(config);
+});
+
 // ── Permanent Event Log ─────────────────────────────────────────────────────
 // Every recorded event, filterable. Unlike /api/history this is never pruned
 // by age, so it can serve the full incident record back to day one.

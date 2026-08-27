@@ -261,6 +261,28 @@ The status document is parsed **tolerantly**: Icecast 2.4.x emits invalid JSON w
 
 The key distinction it draws: **an Icecast mount returning HTTP 404 means the server is healthy and the source encoder dropped off.** That is a studio problem (check the Barix), not a server problem. Because other Pacifica stations share the host, the engine can also confirm whether a fault is KPFT-specific or server-wide — and `stream_start_iso8601` gives the exact source reconnect moment, yielding a true outage duration independent of the polling interval.
 
+### Where configuration lives
+
+**Station, channel and host configuration lives in the data store, not in
+environment variables.** On the first boot against an empty volume, `STREAMS` (or
+the built-in defaults) seeds it; from then on the store is authoritative and env
+changes to `STREAMS` are ignored.
+
+This is deliberate. An admin panel changes settings while the app is running, so
+the store has to win — otherwise every redeploy would silently revert whatever an
+operator had just configured. Secrets stay in the environment, where they never
+need a UI and so never conflict.
+
+`GET /api/stations` returns the live configuration: the host pool, the stations,
+and each station's channels. To overwrite a bad seed, set `CONFIG_RESEED=true`
+and restart — wiping the volume would also destroy the incident history.
+
+**Hosts are a shared pool, not a property of a station.** Many stations share one
+Icecast server (all five Pacifica sister stations are on one; ~28 affiliates on
+another), so each host's inventory is fetched once per cycle and serves every
+station on it. A minority of stations span more than one host, which the same
+shape supports.
+
 ### Channels and their mounts
 
 Icecast publishes each bitrate variant of a channel as its own mount, so **KPFT
@@ -347,6 +369,9 @@ DATA_DIR=/app/data              # MUST be a persistent volume in production
 SEED_FILE=/app/seed/historical-events.json  # Optional one-time historical import
 
 # ── Diagnostics ──────────────────────────────────────
+CONFIG_RESEED=false              # Overwrite stored station config from env on next boot
+STATION_ID=kpft                  # Station identity, used only when seeding
+STATION_NAME=KPFT Houston
 ICECAST_STATUS_ATTEMPTS=3        # Tries before believing Icecast is unreachable
 ICECAST_STATUS_RETRY_MS=2000     # Wait between those tries
 ICECAST_STATUS_URL=https://streams.pacifica.org:9000/status-json.xsl

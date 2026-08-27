@@ -46,6 +46,7 @@ let rollups = {};            // { [streamId]: [ hourlyRollup ] }  permanent
 let streamStatusCache = {};  // last known status, for warm restarts
 let appliedSeeds = [];       // seedIds already backfilled — guards against re-import
 let meta = {};               // small persisted scalars (e.g. last weekly roundup sent)
+let config = null;           // station/channel/host configuration; null until seeded
 let dirtyEvents = false;
 let dirtySamples = false;
 
@@ -85,11 +86,8 @@ function hourKey(ts) {
 }
 
 // ── Load ────────────────────────────────────────────────────────────────────
-function load(streamIds) {
-  streamIds.forEach((id) => {
-    if (!samples[id]) samples[id] = [];
-    if (!rollups[id]) rollups[id] = [];
-  });
+function load(streamIds = []) {
+  ensureStreams(streamIds);
 
   const ev = readJson(EVENTS_FILE);
   if (ev) {
@@ -97,7 +95,13 @@ function load(streamIds) {
     streamStatusCache = ev.streamStatus || {};
     appliedSeeds = Array.isArray(ev.appliedSeeds) ? ev.appliedSeeds : [];
     meta = ev.meta && typeof ev.meta === 'object' ? ev.meta : {};
+    config = ev.config && typeof ev.config === 'object' ? ev.config : null;
     console.log(`[Store] Loaded ${events.length} retained event(s)`);
+    if (config) {
+      const n = (config.stations || []).length;
+      const c = (config.stations || []).reduce((a, s) => a + (s.channels || []).length, 0);
+      console.log(`[Store] Loaded configuration: ${n} station(s), ${c} channel(s)`);
+    }
   }
 
   const sm = readJson(SAMPLES_FILE);
@@ -1738,6 +1742,44 @@ function getPeriodRollup(streamIds, windowMs) {
 function getStatusCache() { return streamStatusCache; }
 function setStatusCache(s) { streamStatusCache = s; dirtyEvents = true; }
 
+/**
+ * Pre-creates the sample and rollup arrays for a set of stream ids.
+ *
+ * Split out of load() because configuration now lives in this store, which means
+ * the ids are not known until after the file has been read. load() therefore
+ * runs first with nothing, and the caller calls this once it knows what it is
+ * monitoring.
+ */
+function ensureStreams(streamIds = []) {
+  streamIds.forEach((id) => {
+    if (!samples[id]) samples[id] = [];
+    if (!rollups[id]) rollups[id] = [];
+  });
+}
+
+// ── Station configuration ───────────────────────────────────────────────────
+/**
+ * The station/channel/host configuration, or null when none has been stored.
+ *
+ * Rides in events.json beside `meta` rather than taking a file of its own: it is
+ * small, it changes rarely, and it must survive a redeploy on the same
+ * persistent volume that already protects the event record.
+ *
+ * Returns a deep copy. Callers mutate what they are given — an admin panel most
+ * of all — and handing out the live object would let an edit take effect without
+ * ever being saved, producing configuration that vanishes on the next restart.
+ */
+function getStationConfig() {
+  return config ? JSON.parse(JSON.stringify(config)) : null;
+}
+
+function setStationConfig(next) {
+  if (!next || typeof next !== 'object') throw new Error('config must be an object');
+  config = JSON.parse(JSON.stringify(next));
+  dirtyEvents = true;
+  return getStationConfig();
+}
+
 // ── Small persisted scalars ─────────────────────────────────────────────────
 /**
  * Rides along in events.json rather than getting a file of its own. It holds
@@ -1763,6 +1805,7 @@ function saveEvents(force = false) {
         savedAt: new Date().toISOString(),
         appliedSeeds,
         meta,
+        config,
         events,
         streamStatus: streamStatusCache,
       }, null, 1),
@@ -1818,6 +1861,7 @@ module.exports = {
   getUptime, getOverallUptime, getAudioUptime, getCoverageStart, getSummary, getDailyBuckets, getCauseBreakdown,
   getPeriodRollup,
   getStatusCache, setStatusCache, getStorageInfo, getMeta, setMeta,
+  ensureStreams, getStationConfig, setStationConfig,
   isUnconfirmedSeverity, settledImpact, costListeners,
   getAudienceContext, getHourOfDayProfile, buildAudienceImpact, deriveListenerImpact,
   getListenerSeries, getAudienceSummary, chooseBucketMs,

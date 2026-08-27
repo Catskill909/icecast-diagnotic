@@ -181,17 +181,95 @@ function normaliseStreams(parsed) {
   return parsed.map(normaliseStream);
 }
 
-function init() {
-  if (process.env.STREAMS) {
-    try {
-      streams = normaliseStreams(JSON.parse(process.env.STREAMS));
-    } catch (e) {
-      console.error('[Monitor] Failed to parse STREAMS env var, using defaults:', e.message);
-      streams = DEFAULT_STREAMS;
-    }
-  } else {
-    streams = DEFAULT_STREAMS;
+/** Streams from the STREAMS env var, or null when it is unset or unusable. */
+function readStreamsFromEnv() {
+  if (!process.env.STREAMS) return null;
+  try {
+    return normaliseStreams(JSON.parse(process.env.STREAMS));
+  } catch (e) {
+    console.error('[Monitor] Failed to parse STREAMS env var, ignoring it:', e.message);
+    return null;
   }
+}
+
+/**
+ * Builds the initial station configuration from a flat list of streams.
+ *
+ * Hosts are derived from the stream URLs and kept as a top-level pool rather
+ * than a property of the station. Many stations share one Icecast server — all
+ * five Pacifica sister stations are on one, ~28 affiliates on another — so the
+ * check cycle must be able to fetch each host's inventory once and serve every
+ * station on it. A minority of stations also span more than one host, which a
+ * station-owns-its-server shape could not represent at all.
+ */
+function buildDefaultConfig(streamList) {
+  const hosts = {};
+  for (const s of streamList) {
+    let u;
+    try { u = new URL(s.url); } catch { continue; }
+    if (hosts[u.host]) continue;
+    hosts[u.host] = {
+      id: u.host.replace(/[^a-z0-9]+/gi, '-').toLowerCase(),
+      host: u.host,
+      // Honour an explicit status URL when one is configured; otherwise the
+      // conventional Icecast path on the same origin.
+      statusUrl: process.env.ICECAST_STATUS_URL || `${u.protocol}//${u.host}/status-json.xsl`,
+    };
+  }
+
+  return {
+    version: 1,
+    seededAt: new Date().toISOString(),
+    hosts: Object.values(hosts),
+    stations: [{
+      id: process.env.STATION_ID || 'kpft',
+      name: process.env.STATION_NAME || process.env.STATION_LABEL || 'KPFT Houston',
+      timezone: STATION_TZ,
+      channels: streamList,
+    }],
+  };
+}
+
+/**
+ * Flattens the station/channel tree into the flat stream list the check engine
+ * works on. Channel ids become stream ids unchanged, which is what keeps the
+ * stored samples, rollups and events attached to their history across this
+ * change.
+ */
+function flattenChannels(cfg) {
+  const out = [];
+  for (const station of cfg?.stations || []) {
+    for (const channel of station.channels || []) {
+      out.push({ ...channel, stationId: station.id, stationName: station.name });
+    }
+  }
+  return out;
+}
+
+function init() {
+  // Read the store first: the configuration lives in it, so what to monitor is
+  // not known until this returns.
+  store.load();
+
+  let cfg = store.getStationConfig();
+  const reseed = String(process.env.CONFIG_RESEED ?? '').trim().toLowerCase() === 'true';
+
+  if (!cfg || reseed) {
+    // First boot on this volume (or an explicit reseed). Env vars seed the
+    // configuration once; from then on the store is authoritative and changes
+    // to STREAMS are ignored. Set CONFIG_RESEED=true to overwrite it.
+    const seed = readStreamsFromEnv() || DEFAULT_STREAMS;
+    cfg = buildDefaultConfig(seed);
+    store.setStationConfig(cfg);
+    console.log(
+      `[Monitor] ${reseed ? 'RESEEDED' : 'Seeded'} configuration from ` +
+      `${process.env.STREAMS ? 'STREAMS env var' : 'built-in defaults'} — ` +
+      `${cfg.stations.length} station(s), ${flattenChannels(cfg).length} channel(s)`,
+    );
+  }
+
+  streams = normaliseStreams(flattenChannels(cfg));
+  store.ensureStreams(streams.map((s) => s.id));
 
   streams.forEach((s) => {
     streamStatus[s.id] = {
@@ -203,8 +281,6 @@ function init() {
     };
     silenceState[s.id] = { streak: 0, state: 'normal', timer: null };
   });
-
-  store.load(streams.map((s) => s.id));
 
   // Restore last known status, but never carry a failure streak across a
   // restart — that would let a stale count trigger a spurious alert.
@@ -1745,6 +1821,7 @@ module.exports = {
   getPeriodRollup, sendWeeklyRoundup, previewWeeklyRoundup, previewAlertForEvent,
   getEvents, getSamples, getRollups, getListeners, getSummary, getOverallUptime, getAudioUptime, getCoverageStart,
   getDailyBuckets, getCauseBreakdown, getStorageInfo, getSnapshot,
+  getStationConfig: () => store.getStationConfig(),
   // Exported for tests.
-  normaliseStreams, normaliseMounts,
+  normaliseStreams, normaliseMounts, buildDefaultConfig, flattenChannels,
 };
