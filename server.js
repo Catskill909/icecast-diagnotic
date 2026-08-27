@@ -187,6 +187,15 @@ app.get('/api/stations', (req, res) => {
   res.json(auth.currentSession(req) ? config : redact.publicStationConfig(config));
 });
 
+// Applies stored configuration to the running monitor without a redeploy.
+// The admin panel's write endpoints will call reloadConfig() directly; this
+// exposes it on its own so a configuration change can be applied and verified
+// before the panel that makes them exists.
+app.post('/api/stations/reload', auth.requireAuth, (req, res) => {
+  const result = monitor.reloadConfig();
+  res.json(result);
+});
+
 // ── Permanent Event Log ─────────────────────────────────────────────────────
 // Every recorded event, filterable. Unlike /api/history this is never pruned
 // by age, so it can serve the full incident record back to day one.

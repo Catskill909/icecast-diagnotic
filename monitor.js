@@ -246,6 +246,113 @@ function flattenChannels(cfg) {
   return out;
 }
 
+/** Fresh per-stream state. Shared by init() and reloadConfig() so they cannot drift. */
+function initStreamState(s) {
+  streamStatus[s.id] = {
+    status: 'unknown',
+    responseTime: null,
+    lastChecked: null,
+    consecutiveFailures: 0,
+    error: null,
+  };
+  silenceState[s.id] = { streak: 0, state: 'normal', timer: null };
+}
+
+/**
+ * Applies the stored configuration to a RUNNING monitor.
+ *
+ * Without this, adding a station through the admin panel would write to the
+ * store and change nothing until someone redeployed — "please restart the
+ * service to finish adding your station" being a poor answer from a system
+ * whose entire job is not stopping.
+ *
+ * Three things have to be handled, and only the first is obvious:
+ *
+ *   1. New channels need their per-stream state and their sample arrays.
+ *   2. Removed channels leave a pending silence-probe timer behind, which would
+ *      fire against a stream no longer being monitored.
+ *   3. Removed channels may have an OPEN episode. Leaving it open would count as
+ *      an ongoing failure forever in every rollup; inventing a recovery event
+ *      would claim an observation nobody made. It is closed as an abandoned
+ *      episode instead, which is what actually happened.
+ *
+ * Stored history for a removed channel is left untouched. Configuration says
+ * what to watch from now on; it is not a statement about the past.
+ */
+/**
+ * Closes an episode that was still open when its channel stopped being monitored.
+ *
+ * Neither obvious option is honest. Leaving it open counts as an ongoing failure
+ * in every rollup, forever. Writing a recovery event claims an observation
+ * nobody made — the stream may well still be down.
+ *
+ * So it is resolved, but marked `abandoned` with the reason recorded, which is
+ * what actually happened: watching stopped while it was still failing.
+ */
+function abandonEpisode(streamId, episode, timestamp = new Date().toISOString()) {
+  const startedMs = new Date(episode?.startedAt).getTime();
+  const durationMs = Number.isFinite(startedMs) ? Date.parse(timestamp) - startedMs : null;
+  const updated = store.updateEvent(episode.eventId, {
+    resolvedAt: timestamp,
+    durationMs,
+    durationLabel: durationMs != null ? diagnose.fmtDuration(durationMs) : null,
+    abandoned: true,
+    resolutionNote:
+      'Monitoring stopped — channel removed from configuration while still failing. ' +
+      'Recovery was never observed.',
+  });
+  console.log('[Monitor] Closed open episode for removed channel ' + streamId + ' as abandoned');
+  return updated;
+}
+
+function reloadConfig() {
+  const cfg = store.getStationConfig();
+  if (!cfg) return { changed: false, added: [], removed: [], reason: 'no configuration stored' };
+
+  const next = normaliseStreams(flattenChannels(cfg));
+  if (!next.length) {
+    // Refuse rather than silently monitor nothing.
+    return { changed: false, added: [], removed: [], reason: 'configuration contains no channels' };
+  }
+
+  const prevById = new Map(streams.map((s) => [s.id, s]));
+  const nextIds = new Set(next.map((s) => s.id));
+
+  const added = next.filter((s) => !prevById.has(s.id));
+  const removed = streams.filter((s) => !nextIds.has(s.id));
+  const timestamp = new Date().toISOString();
+
+  added.forEach(initStreamState);
+  if (added.length) store.ensureStreams(added.map((s) => s.id));
+
+  for (const s of removed) {
+    const st = silenceState[s.id];
+    if (st && st.timer) clearTimeout(st.timer);
+    delete silenceState[s.id];
+    delete streamStatus[s.id];
+
+    const ep = episodes[s.id];
+    if (ep) {
+      abandonEpisode(s.id, ep, timestamp);
+      delete episodes[s.id];
+    }
+  }
+
+  // Definitions of surviving channels are replaced, so an edited mount list or a
+  // renamed channel takes effect without a restart.
+  streams = next;
+  store.setStatusCache(streamStatus);
+
+  const changed = added.length > 0 || removed.length > 0;
+  if (changed) {
+    console.log(
+      '[Monitor] Configuration reloaded — ' + next.length + ' channel(s): +' +
+      added.length + ' added, -' + removed.length + ' removed',
+    );
+  }
+  return { changed, added: added.map((s) => s.id), removed: removed.map((s) => s.id), total: next.length };
+}
+
 function init() {
   // Read the store first: the configuration lives in it, so what to monitor is
   // not known until this returns.
@@ -271,16 +378,7 @@ function init() {
   streams = normaliseStreams(flattenChannels(cfg));
   store.ensureStreams(streams.map((s) => s.id));
 
-  streams.forEach((s) => {
-    streamStatus[s.id] = {
-      status: 'unknown',
-      responseTime: null,
-      lastChecked: null,
-      consecutiveFailures: 0,
-      error: null,
-    };
-    silenceState[s.id] = { streak: 0, state: 'normal', timer: null };
-  });
+  streams.forEach(initStreamState);
 
   // Restore last known status, but never carry a failure streak across a
   // restart — that would let a stale count trigger a spurious alert.
@@ -1822,6 +1920,8 @@ module.exports = {
   getEvents, getSamples, getRollups, getListeners, getSummary, getOverallUptime, getAudioUptime, getCoverageStart,
   getDailyBuckets, getCauseBreakdown, getStorageInfo, getSnapshot,
   getStationConfig: () => store.getStationConfig(),
+  reloadConfig,
+  abandonEpisode,
   // Exported for tests.
   normaliseStreams, normaliseMounts, buildDefaultConfig, flattenChannels,
 };
