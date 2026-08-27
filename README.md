@@ -353,8 +353,11 @@ ICECAST_STATUS_URL=https://streams.pacifica.org:9000/status-json.xsl
 SIBLING_MOUNTS=/live_128,/live_64,/HD3,/HD3_128,/HD3_64,/classic_country
 STATION_LABEL=KPFT              # Station name used in operator-facing evidence text
 
-# Optional JSON array replacing the three default streams
-# STREAMS=[{"id":"main","name":"Main","url":"https://example.com/main"}]
+# Optional JSON array replacing the three default streams. Include `mounts` to
+# list a channel every bitrate variant, so listener counts cover the whole
+# channel rather than the probed mount alone. Entries may be pathnames or full
+# URLs. Omit `mounts` and the stream counts only its own URL.
+# STREAMS=[{"id":"main","name":"Main","url":"https://example.com/main_128","mounts":["/main_128","/main_64"]}]
 ```
 
 ---

@@ -134,16 +134,57 @@ let roundupAttempts = { day: null, count: 0 };  // send retries for today's slot
 let transporter = null;
 
 // ── Initialize ──────────────────────────────────────────────────────────────
+/**
+ * Normalises one stream definition from configuration.
+ *
+ * Spreads the source object rather than rebuilding it from a fixed list of
+ * fields. The old whitelist silently dropped anything it did not name, which is
+ * how an env-configured station lost its `mounts` list — and with it the
+ * channel grouping that makes listener counts correct. Any field added later
+ * would have vanished the same way, so the shape is preserved by default and
+ * only the fields with defaults or validation are overridden.
+ */
+function normaliseStream(s, i) {
+  return {
+    ...s,
+    id: s.id || `stream-${i}`,
+    name: s.name || `Stream ${i + 1}`,
+    url: s.url,
+    m3u: s.m3u || '',
+    mounts: normaliseMounts(s.mounts),
+  };
+}
+
+/**
+ * Mount lists reduce to Icecast pathnames, because that is how the snapshot is
+ * keyed. Full URLs are accepted and reduced, so a station configured by pasting
+ * stream URLs — which is exactly what an admin UI will produce — still groups.
+ * Returns undefined when nothing usable was given, leaving the stream to fall
+ * back to its probed URL alone.
+ */
+function normaliseMounts(raw) {
+  if (!Array.isArray(raw)) return undefined;
+  const paths = raw
+    .map((m) => {
+      if (typeof m !== 'string') return null;
+      const t = m.trim();
+      if (!t) return null;
+      if (t.startsWith('/')) return t;
+      try { return new URL(t).pathname; } catch { return null; }
+    })
+    .filter(Boolean);
+  return paths.length ? [...new Set(paths)] : undefined;
+}
+
+function normaliseStreams(parsed) {
+  if (!Array.isArray(parsed)) throw new Error('STREAMS must be a JSON array');
+  return parsed.map(normaliseStream);
+}
+
 function init() {
   if (process.env.STREAMS) {
     try {
-      const parsed = JSON.parse(process.env.STREAMS);
-      streams = parsed.map((s, i) => ({
-        id: s.id || `stream-${i}`,
-        name: s.name || `Stream ${i + 1}`,
-        url: s.url,
-        m3u: s.m3u || '',
-      }));
+      streams = normaliseStreams(JSON.parse(process.env.STREAMS));
     } catch (e) {
       console.error('[Monitor] Failed to parse STREAMS env var, using defaults:', e.message);
       streams = DEFAULT_STREAMS;
@@ -1704,4 +1745,6 @@ module.exports = {
   getPeriodRollup, sendWeeklyRoundup, previewWeeklyRoundup, previewAlertForEvent,
   getEvents, getSamples, getRollups, getListeners, getSummary, getOverallUptime, getAudioUptime, getCoverageStart,
   getDailyBuckets, getCauseBreakdown, getStorageInfo, getSnapshot,
+  // Exported for tests.
+  normaliseStreams, normaliseMounts,
 };
