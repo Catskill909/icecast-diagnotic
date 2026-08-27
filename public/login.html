@@ -1,0 +1,169 @@
+<title>Sign in · Stream Monitor</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --surface-0: #0a0a12; --surface-1: #12121e; --surface-2: #1a1a2e; --surface-3: #22223a;
+    --primary: #7c6aef; --primary-light: #a595ff; --primary-dark: #5a49c9;
+    --status-down: #ef4444; --warn: #f59e0b;
+    --text-primary: #f0f0f5; --text-secondary: #a0a0b8; --text-muted: #6b6b85;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: var(--surface-0); color: var(--text-primary);
+    font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    min-height: 100vh; display: grid; place-items: center; padding: 24px;
+    background-image: radial-gradient(circle at 50% 0%, rgba(124,106,239,0.10), transparent 60%);
+  }
+  .card {
+    width: 100%; max-width: 380px; background: var(--surface-1);
+    border: 1px solid var(--surface-3); border-radius: 16px; padding: 32px;
+    box-shadow: 0 24px 60px rgba(0,0,0,0.5);
+  }
+  .logo { width: 40px; height: 40px; border-radius: 10px; margin-bottom: 20px;
+          background: linear-gradient(135deg, var(--primary), var(--primary-dark));
+          display: grid; place-items: center; font-size: 20px; }
+  h1 { font-size: 20px; font-weight: 600; letter-spacing: -0.01em; }
+  .sub { color: var(--text-secondary); font-size: 13px; margin-top: 6px; min-height: 18px; }
+  form { margin-top: 24px; }
+  label { display: block; font-size: 12px; font-weight: 500; color: var(--text-secondary);
+          margin-bottom: 7px; text-transform: uppercase; letter-spacing: 0.04em; }
+  input {
+    width: 100%; padding: 11px 13px; font-size: 15px; font-family: inherit;
+    background: var(--surface-2); border: 1px solid var(--surface-3);
+    border-radius: 9px; color: var(--text-primary); outline: none; transition: border-color .15s;
+  }
+  input:focus { border-color: var(--primary); }
+  button {
+    width: 100%; margin-top: 16px; padding: 11px; font-size: 15px; font-weight: 600;
+    font-family: inherit; color: #fff; background: var(--primary);
+    border: none; border-radius: 9px; cursor: pointer; transition: background .15s;
+  }
+  button:hover:not(:disabled) { background: var(--primary-light); }
+  button:disabled { opacity: .55; cursor: not-allowed; }
+  .back { background: none; color: var(--text-secondary); font-weight: 500;
+          font-size: 13px; margin-top: 10px; padding: 6px; }
+  .back:hover:not(:disabled) { background: none; color: var(--text-primary); }
+  .identity { display: flex; align-items: center; gap: 9px; padding: 9px 12px;
+              background: var(--surface-2); border: 1px solid var(--surface-3);
+              border-radius: 9px; margin-bottom: 18px; font-size: 14px; }
+  .identity .who { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .msg { margin-top: 16px; padding: 10px 12px; border-radius: 9px; font-size: 13px;
+         line-height: 1.45; display: none; }
+  .msg.err { display: block; background: rgba(239,68,68,.1);
+             border: 1px solid rgba(239,68,68,.3); color: #fca5a5; }
+  .msg.warn { display: block; background: rgba(245,158,11,.1);
+              border: 1px solid rgba(245,158,11,.3); color: #fcd34d; }
+  .foot { margin-top: 22px; font-size: 11px; color: var(--text-muted); text-align: center; }
+  .hidden { display: none; }
+</style>
+
+<div class="card">
+  <div class="logo">📻</div>
+  <h1 id="title">Sign in</h1>
+  <div class="sub" id="sub">Stream monitor administration</div>
+
+  <!-- Step 1 — username. Deliberately accepts anything and advances: refusing
+       here would turn this form into a way to discover valid usernames. -->
+  <form id="step1">
+    <label for="username">Username</label>
+    <input id="username" name="username" autocomplete="username" autocapitalize="off"
+           autocorrect="off" spellcheck="false" required autofocus>
+    <button type="submit">Continue</button>
+  </form>
+
+  <!-- Step 2 — password. Both halves are checked together on the server. -->
+  <form id="step2" class="hidden">
+    <div class="identity">
+      <span>👤</span>
+      <span class="who" id="who"></span>
+    </div>
+    <label for="password">Password</label>
+    <input id="password" name="password" type="password" autocomplete="current-password" required>
+    <button type="submit" id="submitBtn">Sign in</button>
+    <button type="button" class="back" id="backBtn">Use a different account</button>
+  </form>
+
+  <div class="msg" id="msg"></div>
+  <div class="foot">Protected area · unlisted</div>
+</div>
+
+<script>
+  const $ = (id) => document.getElementById(id);
+  const msg = $('msg');
+  let username = '';
+
+  function show(text, kind) {
+    msg.textContent = text;
+    msg.className = 'msg ' + (kind || 'err');
+  }
+  function clear() { msg.className = 'msg'; msg.textContent = ''; }
+
+  // Warn early if no credential is configured, so a 503 at submit time is not a
+  // mystery.
+  fetch('/api/me').then((r) => r.json()).then((s) => {
+    if (s.authenticated) return location.replace(next());
+    if (!s.configured) show('No admin password is configured on the server. Set ADMIN_PASSWORD_HASH and restart.', 'warn');
+  }).catch(() => {});
+
+  function next() {
+    const p = new URLSearchParams(location.search).get('next') || '/';
+    // Only same-origin paths: an attacker-supplied absolute URL here would turn
+    // the login into an open redirect.
+    return p.startsWith('/') && !p.startsWith('//') ? p : '/';
+  }
+
+  $('step1').addEventListener('submit', (e) => {
+    e.preventDefault();
+    username = $('username').value.trim();
+    if (!username) return;
+    clear();
+    $('who').textContent = username;
+    $('step1').classList.add('hidden');
+    $('step2').classList.remove('hidden');
+    $('title').textContent = 'Enter password';
+    $('sub').textContent = 'Welcome back';
+    $('password').focus();
+  });
+
+  $('backBtn').addEventListener('click', () => {
+    clear();
+    $('password').value = '';
+    $('step2').classList.add('hidden');
+    $('step1').classList.remove('hidden');
+    $('title').textContent = 'Sign in';
+    $('sub').textContent = 'Stream monitor administration';
+    $('username').focus();
+  });
+
+  $('step2').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    clear();
+    const btn = $('submitBtn');
+    btn.disabled = true;
+    btn.textContent = 'Signing in…';
+    try {
+      const res = await fetch('/api/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username, password: $('password').value }),
+      });
+      const body = await res.json().catch(() => ({}));
+      if (res.ok) return location.replace(next());
+      if (res.status === 429) {
+        show(`Too many attempts. Try again in ${Math.ceil((body.retryAfterSeconds || 900) / 60)} minutes.`);
+      } else if (res.status === 503) {
+        show(body.detail || 'Admin password is not configured on the server.', 'warn');
+      } else {
+        show('Incorrect username or password.');
+      }
+    } catch {
+      show('Could not reach the server. Check your connection and try again.');
+    } finally {
+      btn.disabled = false;
+      btn.textContent = 'Sign in';
+      $('password').select();
+    }
+  });
+</script>

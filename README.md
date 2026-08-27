@@ -261,6 +261,41 @@ The status document is parsed **tolerantly**: Icecast 2.4.x emits invalid JSON w
 
 The key distinction it draws: **an Icecast mount returning HTTP 404 means the server is healthy and the source encoder dropped off.** That is a studio problem (check the Barix), not a server problem. Because other Pacifica stations share the host, the engine can also confirm whether a fault is KPFT-specific or server-wide — and `stream_start_iso8601` gives the exact source reconnect moment, yielding a true outage duration independent of the polling interval.
 
+### Admin authentication
+
+Endpoints that **change state or send mail** require a session; reading stays
+open. Sign in at `/login.html`.
+
+```bash
+node scripts/hash-password.js          # prints ADMIN_PASSWORD_HASH=...
+```
+
+Set `ADMIN_USER`, `ADMIN_PASSWORD_HASH` and `SESSION_SECRET` in the hosting panel.
+
+**Protected routes fail closed.** With no password configured they return 503
+rather than allowing the request. This is deliberate: `/api/test-alert` sends mail
+through the station's SMTP, and before this gate existed anyone who found the
+URL could fire station-branded email at arbitrary addresses. A deployment that
+forgets to set a password gets a broken button, not a silent hole.
+
+| Route | Access |
+|---|---|
+| `/api/test-alert`, `/api/weekly-roundup` | **Authenticated** — both send mail |
+| `POST /api/login`, `/api/logout`, `GET /api/me` | Public |
+| Everything else | Public, as before |
+
+**What the gate is and is not.** It is one shared credential, an scrypt password
+hash, constant-time comparison, rate limiting with lockout, and a signed
+`HttpOnly` / `SameSite=Strict` session cookie. It is not per-user accounts, roles
+or per-station scoping — those arrive with the admin panel, and the middleware
+boundary here is what lets them arrive without revisiting every route.
+
+The login is two screens (username, then password) because that interaction was
+asked for. **It adds no security** — it is an identity-*routing* pattern, and a
+script posts both steps as fast as one. It is implemented safely: the first
+screen accepts any username and always advances, and both halves are verified
+together on the server, so it cannot be used to discover valid usernames.
+
 ### Where configuration lives
 
 **Station, channel and host configuration lives in the data store, not in

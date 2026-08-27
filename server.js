@@ -2,9 +2,12 @@ require('dotenv').config();
 const express = require('express');
 const path = require('path');
 const monitor = require('./monitor');
+const auth = require('./auth');
 
 const app = express();
 const PORT = parseInt(process.env.PORT, 10) || 3000;
+
+app.use(express.json({ limit: '256kb' }));
 
 // ── Security & Search Engine Deterrence Middleware ─────────────────────────
 app.use((req, res, next) => {
@@ -24,6 +27,60 @@ app.use(express.static(path.join(__dirname, 'public'), {
     res.setHeader('Expires', '0');
   }
 }));
+
+// ── Authentication ──────────────────────────────────────────────────────────
+// One shared admin credential and a signed cookie — the minimum needed before
+// any endpoint that changes state or sends mail can safely exist. Reading stays
+// open, which is the dashboard's existing behaviour.
+
+app.post('/api/login', (req, res) => {
+  if (!auth.isConfigured()) {
+    return res.status(503).json({
+      error: 'Admin password not configured',
+      detail: 'Set ADMIN_PASSWORD_HASH (or ADMIN_PASSWORD) to enable login.',
+    });
+  }
+
+  const key = auth.clientKey(req);
+  const locked = auth.lockoutRemaining(key);
+  if (locked > 0) {
+    // Rate limiting is what actually stops password guessing — not the shape of
+    // the login form.
+    return res.status(429).json({
+      error: 'Too many attempts',
+      retryAfterSeconds: Math.ceil(locked / 1000),
+    });
+  }
+
+  const username = typeof req.body?.username === 'string' ? req.body.username : '';
+  const password = typeof req.body?.password === 'string' ? req.body.password : '';
+  if (!auth.verifyCredentials(username, password)) {
+    auth.recordFailure(key);
+    // Deliberately says nothing about which part was wrong.
+    return res.status(401).json({ error: 'Incorrect credentials' });
+  }
+
+  auth.clearFailures(key);
+  const exp = Date.now() + auth.SESSION_HOURS * 60 * 60 * 1000;
+  auth.setSessionCookie(req, res, auth.signSession({ sub: 'admin', iat: Date.now(), exp }));
+  res.json({ ok: true, expiresAt: new Date(exp).toISOString() });
+});
+
+app.post('/api/logout', (req, res) => {
+  auth.clearSessionCookie(res);
+  res.json({ ok: true });
+});
+
+// Lets the UI decide what to render without guessing, and tells an operator
+// whether a password has been configured at all.
+app.get('/api/me', (req, res) => {
+  const session = auth.currentSession(req);
+  res.json({
+    authenticated: !!session,
+    configured: auth.isConfigured(),
+    expiresAt: session?.exp ? new Date(session.exp).toISOString() : null,
+  });
+});
 
 // ── API Endpoints ───────────────────────────────────────────────────────────
 app.get('/api/status', (req, res) => {
@@ -198,7 +255,10 @@ app.get('/api/diagnostics', (req, res) => {
 });
 
 // ── Test Email Alert ────────────────────────────────────────────────────────
-app.get('/api/test-alert', async (req, res) => {
+// PROTECTED: sends mail through the station's SMTP. Open to the internet this
+// was a way for anyone who found the URL to fire station-branded email at
+// arbitrary addresses and burn the sending reputation.
+app.get('/api/test-alert', auth.requireAuth, async (req, res) => {
   const to = (req.query.to || '').trim();
   const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
   if (!to || !emailRegex.test(to)) {
@@ -225,7 +285,8 @@ app.get('/api/events/:id/email-preview', (req, res) => {
 // ── Weekly Roundup (manual send / preview) ──────────────────────────────────
 // The scheduled job sends this on its own; this route is for proving it works
 // without waiting a week, and for re-sending one on request.
-app.get('/api/weekly-roundup', async (req, res) => {
+// PROTECTED: can send the roundup to an arbitrary address.
+app.get('/api/weekly-roundup', auth.requireAuth, async (req, res) => {
   const to = (req.query.to || '').trim();
   const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
   if (to && !emailRegex.test(to)) {
