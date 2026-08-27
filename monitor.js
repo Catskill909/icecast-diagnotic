@@ -128,6 +128,7 @@ let episodes = {};        // { [streamId]: { eventId, startedAt, alerted, severi
 let snapshot = null;      // latest Icecast snapshot
 let prevSnapshot = null;
 let intervalHandle = null;
+let checkInFlight = false;   // guards against overlapping check cycles
 let flushHandle = null;
 let roundupHandle = null;
 let roundupAttempts = { day: null, count: 0 };  // send retries for today's slot
@@ -353,6 +354,31 @@ function reloadConfig() {
   return { changed, added: added.map((s) => s.id), removed: removed.map((s) => s.id), total: next.length };
 }
 
+/**
+ * Writes configuration and applies it in one step.
+ *
+ * Kept together so the invariant cannot drift: configuration that has been saved
+ * but not reloaded is configuration the operator believes is live and is not.
+ *
+ * Saved synchronously rather than waiting for the periodic flush. Configuration
+ * changes are rare and deliberate; losing a station somebody just added because
+ * the container restarted within the flush window would be a genuinely
+ * infuriating way to lose work.
+ */
+function saveStationConfig(next) {
+  store.setStationConfig(next);
+  const result = reloadConfig();
+  store.save(true);
+
+  // Probe straight away. Otherwise a station added at second 5 of a cycle reads
+  // 'unknown' for the next 55, which looks like something went wrong at exactly
+  // the moment someone is watching to see whether it worked.
+  if (result.added && result.added.length) {
+    runChecks().catch((err) => console.error('[Monitor] Post-add check failed:', err.message));
+  }
+  return result;
+}
+
 function init() {
   // Read the store first: the configuration lives in it, so what to monitor is
   // not known until this returns.
@@ -567,6 +593,26 @@ async function resolveDeadAir(stream, result, timestamp) {
 
 // ── Run Check Cycle ─────────────────────────────────────────────────────────
 async function runChecks() {
+  // Cycles must not overlap. Each one writes a sample per channel stamped with
+  // its start time, so two in flight together would write two samples for the
+  // same instant and corrupt the uptime arithmetic that reads them.
+  //
+  // Harmless at three channels, where a cycle takes under a second. Not harmless
+  // at thirty-three, where a slow or unreachable host can push a cycle past the
+  // sixty-second interval and the next one starts on top of it.
+  if (checkInFlight) {
+    console.warn('[Monitor] Previous check cycle still running — skipping this tick');
+    return;
+  }
+  checkInFlight = true;
+  try {
+    return await runChecksInner();
+  } finally {
+    checkInFlight = false;
+  }
+}
+
+async function runChecksInner() {
   const timestamp = new Date().toISOString();
 
   prevSnapshot = snapshot;
@@ -1921,6 +1967,7 @@ module.exports = {
   getDailyBuckets, getCauseBreakdown, getStorageInfo, getSnapshot,
   getStationConfig: () => store.getStationConfig(),
   reloadConfig,
+  saveStationConfig,
   abandonEpisode,
   // Exported for tests.
   normaliseStreams, normaliseMounts, buildDefaultConfig, flattenChannels,

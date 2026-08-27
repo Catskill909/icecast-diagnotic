@@ -91,6 +91,17 @@ app.use((req, res, next) => {
   return res.status(401).json({ error: 'Authentication required' });
 });
 
+// The admin page always requires a session, even when reads are otherwise
+// public. Its API calls are protected either way, so an anonymous visitor could
+// only ever have seen an empty form — but a browsable administration screen
+// invites people to try, and there is no reason to serve one.
+const ADMIN_PAGES = new Set(['/admin.html', '/admin.js', '/admin.css']);
+app.use((req, res, next) => {
+  if (!ADMIN_PAGES.has(req.path)) return next();
+  if (auth.currentSession(req)) return next();
+  return res.redirect('/login.html?next=' + encodeURIComponent(req.originalUrl));
+});
+
 // ── Serve Static Frontend (Cache Busting for Dev) ───────────────────────────
 app.use(express.static(path.join(__dirname, 'public'), {
   etag: true,
@@ -230,6 +241,37 @@ app.post('/api/stations/discover', auth.requireAuth, async (req, res) => {
     derivedFrom: derived.derivedFrom || null,
     repairedJson: !!snapshot.repairedJson,
     ...discover.summarise(snapshot),
+  });
+});
+
+// Adds a station and starts monitoring it, without a redeploy.
+//
+// Every channel URL is re-validated here even though discovery already checked
+// the one it was found on. Trusting the submitted payload would leave the
+// obvious hole: discover a real inventory, then swap in a loopback address
+// before saving. What gets probed every sixty seconds forever is what arrives
+// in THIS request.
+app.post('/api/stations', auth.requireAuth, async (req, res) => {
+  const config = monitor.getStationConfig();
+  const v = discover.validateStationPayload(req.body, config);
+  if (!v.ok) return res.status(400).json({ errors: v.errors });
+
+  try {
+    // Structural validation happened above; this resolves each hostname, which
+    // is the check a name pointing at 127.0.0.1 would otherwise walk past.
+    for (const c of v.station.channels) {
+      await safeUrl.assertPublicHost(new URL(c.url).hostname);
+    }
+  } catch (err) {
+    return res.status(400).json({ errors: [err.message] });
+  }
+
+  const next = discover.addStationToConfig(config, v.station, v.hosts);
+  const reload = monitor.saveStationConfig(next);
+
+  res.status(201).json({
+    station: v.station,
+    monitoring: { added: reload.added, total: reload.total },
   });
 });
 

@@ -1,0 +1,72 @@
+<title>Stations · Admin</title>
+<meta name="robots" content="noindex, nofollow, noarchive, nosnippet">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="admin.css">
+
+<div class="wrap">
+  <header class="head">
+    <div>
+      <h1>Stations</h1>
+      <p class="sub" id="summary">Loading…</p>
+    </div>
+    <div class="head-actions">
+      <a class="ghost" href="/">Dashboard</a>
+      <button class="ghost" id="logout">Sign out</button>
+    </div>
+  </header>
+
+  <!-- Current stations -->
+  <section class="panel">
+    <h2>Monitored now</h2>
+    <div id="stations" class="stations">Loading…</div>
+  </section>
+
+  <!-- Add a station -->
+  <section class="panel">
+    <h2>Add a station</h2>
+    <p class="hint">
+      Paste a stream URL or an Icecast status URL. Everything else is worked out
+      from the server itself.
+    </p>
+
+    <form id="discover-form" class="row">
+      <input id="url" type="url" placeholder="https://stream.example.org:8000/live" required
+             autocapitalize="off" autocorrect="off" spellcheck="false">
+      <button type="submit" id="discover-btn">Discover</button>
+    </form>
+    <div class="msg" id="discover-msg"></div>
+
+    <!-- Discovery results -->
+    <div id="results" class="hidden">
+      <div class="found" id="found"></div>
+
+      <h3>Which channels belong to this station?</h3>
+      <p class="hint" id="shared-note"></p>
+      <div id="channels" class="channels"></div>
+
+      <h3>Station details</h3>
+      <div class="fields">
+        <label>Name
+          <input id="st-name" placeholder="WPFW Washington" required>
+        </label>
+        <label>Identifier
+          <input id="st-id" placeholder="wpfw" pattern="[a-z0-9][a-z0-9-]*" required>
+          <span class="note">Permanent. Used to key this station's history.</span>
+        </label>
+        <label>Timezone
+          <input id="st-tz" placeholder="America/New_York" required>
+        </label>
+      </div>
+
+      <div class="actions">
+        <button id="save-btn" class="primary">Add station</button>
+        <button id="cancel-btn" class="ghost" type="button">Cancel</button>
+      </div>
+      <div class="msg" id="save-msg"></div>
+    </div>
+  </section>
+</div>
+<script src="admin.js"></script>

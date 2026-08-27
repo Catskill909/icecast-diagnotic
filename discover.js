@@ -112,3 +112,117 @@ function summarise(snapshot) {
 }
 
 module.exports = { toStatusUrl, channelKeyFor, suggestChannels, summarise };
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   Validating a station before it is written
+
+   Two things here are not cosmetic.
+
+   CHANNEL IDS ARE LOAD-BEARING. Every sample, rollup and event is keyed by them.
+   Reusing an id attaches a new channel to another channel's history — the data
+   does not disappear, it silently becomes wrong, and uptime is computed from it.
+   So ids must be unique across every station, not merely within the one being
+   added.
+
+   URLS BECOME THINGS THIS SERVER FETCHES. A saved channel is probed every 60
+   seconds forever. Validating only the URL that was discovered would leave the
+   obvious hole: submit a discovered inventory, then swap in a loopback address
+   before saving.
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+const SLUG = /^[a-z0-9][a-z0-9-]{0,63}$/;
+
+/** Existing channel ids across the whole configuration. */
+function existingChannelIds(config) {
+  const ids = new Set();
+  for (const s of config?.stations || []) for (const c of s.channels || []) ids.add(c.id);
+  return ids;
+}
+
+/**
+ * Checks a proposed station. Returns { ok: true, station, host } or
+ * { ok: false, errors: [...] } — every problem at once, because fixing a form
+ * one error per submission is miserable.
+ */
+function validateStationPayload(payload, config) {
+  const errors = [];
+  const p = payload && typeof payload === 'object' ? payload : {};
+  const stationIn = p.station && typeof p.station === 'object' ? p.station : {};
+  const channelsIn = Array.isArray(p.channels) ? p.channels : [];
+
+  const id = String(stationIn.id || '').trim().toLowerCase();
+  if (!id) errors.push('Station id is required');
+  else if (!SLUG.test(id)) errors.push('Station id must be lowercase letters, numbers and hyphens');
+  else if ((config?.stations || []).some((s) => s.id === id)) errors.push(`A station with id "${id}" already exists`);
+
+  const name = String(stationIn.name || '').trim();
+  if (!name) errors.push('Station name is required');
+
+  const timezone = String(stationIn.timezone || 'UTC').trim();
+  try {
+    new Intl.DateTimeFormat('en-US', { timeZone: timezone });
+  } catch {
+    errors.push(`"${timezone}" is not a recognised timezone`);
+  }
+
+  if (!channelsIn.length) errors.push('At least one channel is required');
+
+  const taken = existingChannelIds(config);
+  const seen = new Set();
+  const channels = [];
+
+  channelsIn.forEach((c, i) => {
+    const label = `Channel ${i + 1}`;
+    const cid = String(c?.id || '').trim().toLowerCase();
+    if (!cid) errors.push(`${label}: id is required`);
+    else if (!SLUG.test(cid)) errors.push(`${label}: id must be lowercase letters, numbers and hyphens`);
+    else if (taken.has(cid)) errors.push(`${label}: id "${cid}" is already used by another station — it would inherit that channel's history`);
+    else if (seen.has(cid)) errors.push(`${label}: id "${cid}" is repeated`);
+    seen.add(cid);
+
+    const cname = String(c?.name || '').trim();
+    if (!cname) errors.push(`${label}: name is required`);
+
+    const v = validateUrl(c?.url);
+    if (!v.ok) errors.push(`${label}: ${v.reason}`);
+
+    const mounts = Array.isArray(c?.mounts)
+      ? c.mounts.map((m) => String(m || '').trim()).filter(Boolean)
+      : [];
+    if (mounts.some((m) => !m.startsWith('/'))) errors.push(`${label}: mounts must be Icecast paths beginning with /`);
+
+    if (v.ok && cid && cname) {
+      channels.push({ id: cid, name: cname, url: v.url.href, mounts: mounts.length ? [...new Set(mounts)] : undefined });
+    }
+  });
+
+  if (errors.length) return { ok: false, errors };
+
+  // The host every channel lives on, derived rather than asked for.
+  const origins = [...new Set(channels.map((c) => new URL(c.url).host))];
+  return {
+    ok: true,
+    station: { id, name, timezone, channels },
+    hosts: origins.map((host) => ({
+      id: host.replace(/[^a-z0-9]+/gi, '-').toLowerCase(),
+      host,
+      statusUrl: `${new URL(channels.find((c) => new URL(c.url).host === host).url).protocol}//${host}/status-json.xsl`,
+    })),
+  };
+}
+
+/** Merges a validated station into the configuration, without mutating it. */
+function addStationToConfig(config, station, hosts) {
+  const next = JSON.parse(JSON.stringify(config || { version: 1, hosts: [], stations: [] }));
+  next.hosts = next.hosts || [];
+  next.stations = next.stations || [];
+  for (const h of hosts || []) {
+    if (!next.hosts.some((existing) => existing.host === h.host)) next.hosts.push(h);
+  }
+  next.stations.push(station);
+  return next;
+}
+
+module.exports.validateStationPayload = validateStationPayload;
+module.exports.addStationToConfig = addStationToConfig;
+module.exports.existingChannelIds = existingChannelIds;
