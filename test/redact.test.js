@@ -162,3 +162,19 @@ test('the Icecast admin contact is withheld', () => {
   assert.equal(out.mountCount, 15);
   assert.deepEqual(emailsIn(out), []);
 });
+
+// ── Source-level guard ──────────────────────────────────────────────────────
+test('no advice or error-catalogue constant contains an email address', () => {
+  // The leak that free-text scrubbing exists to cover came from a hardcoded
+  // string in diagnose.js: an administrator's address inside remediation advice,
+  // stored on every matching event. Scrubbing covers events already written;
+  // this stops a new one being introduced, and also keeps station-specific
+  // contacts out of advice that other stations will read.
+  const fs = require('fs');
+  const path = require('path');
+  const src = fs.readFileSync(path.join(__dirname, '..', 'diagnose.js'), 'utf8');
+  // Only string literals, so the email-shaped regex in the file itself is not a hit.
+  const literals = src.match(/'[^'\n]*'|"[^"\n]*"/g) || [];
+  const offenders = literals.filter((s) => EMAIL_RE.test(s) && (EMAIL_RE.lastIndex = 0) === 0);
+  assert.deepEqual(offenders, [], `address-bearing literals in diagnose.js: ${offenders.join(' ')}`);
+});

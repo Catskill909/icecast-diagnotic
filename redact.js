@@ -18,6 +18,25 @@
    report; getting one wrongly published cannot be undone.
    ═══════════════════════════════════════════════════════════════════════════ */
 
+const EMAIL_RE = /[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g;
+
+/**
+ * Removes address-shaped strings from human-readable text.
+ *
+ * Structured redaction is not enough on its own. Advice and evidence strings are
+ * free text, and on 2026-08-27 one of them had an administrator's address baked
+ * into it — published on every matching event, past redaction that was only
+ * looking at fields named "recipients".
+ *
+ * Fixing the string at its source stops new events carrying it; this covers the
+ * hundreds already stored, which cannot be rewritten.
+ */
+function scrubText(value) {
+  if (typeof value === 'string') return value.replace(EMAIL_RE, '[address withheld]');
+  if (Array.isArray(value)) return value.map(scrubText);
+  return value;
+}
+
 /**
  * An event as an anonymous caller may see it.
  *
@@ -37,13 +56,21 @@ function publicEvent(event) {
   // "it is public somewhere else" is exactly the reasoning that leaves addresses
   // sitting in responses, so it is withheld here too. Nothing in the UI reads it.
   if (diagnosis && typeof diagnosis === 'object') {
-    const { icecast, ...restDiag } = diagnosis;
-    out.diagnosis = icecast && typeof icecast === 'object'
-      ? { ...restDiag, icecast: publicIcecast(icecast) }
-      : diagnosis;
+    const { icecast, remediation, evidence, ...restDiag } = diagnosis;
+    // Free text is scrubbed rather than dropped, because the advice itself is
+    // what the history page shows and is worth keeping. Absent fields stay
+    // absent — adding `undefined` keys would change the shape of every event.
+    out.diagnosis = { ...restDiag };
+    if (remediation !== undefined) out.diagnosis.remediation = scrubText(remediation);
+    if (evidence !== undefined) out.diagnosis.evidence = scrubText(evidence);
+    if (icecast !== undefined) {
+      out.diagnosis.icecast = icecast && typeof icecast === 'object' ? publicIcecast(icecast) : icecast;
+    }
   } else if (diagnosis !== undefined) {
     out.diagnosis = diagnosis;
   }
+
+  if (typeof out.message === 'string') out.message = scrubText(out.message);
 
   if (!email || typeof email !== 'object') {
     if (email !== undefined) out.email = email;
@@ -122,4 +149,4 @@ function publicIcecast(icecast) {
   return rest;
 }
 
-module.exports = { publicEvent, publicEvents, publicStationConfig, publicIcecast };
+module.exports = { publicEvent, publicEvents, publicStationConfig, publicIcecast, scrubText };

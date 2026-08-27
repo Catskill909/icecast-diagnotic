@@ -135,7 +135,11 @@ const REMEDIATION = {
   ],
   icecast_down: [
     'The Icecast process itself is not accepting connections.',
-    'Contact the Pacifica server administrator (streams@stations1.pacifica.org).',
+    // No address here. Remediation text is stored on every matching event and
+    // served to anonymous callers, so an address in it is published — see
+    // redact.js. Whoever reads an alert is station staff and knows who to
+    // contact; the address itself adds nothing to the advice.
+    'Contact the upstream server administrator.',
     'Verify the host stations1.pacifica.org is up and the service is running.',
     'This affects ALL stations on the server, not just KPFT.',
   ],
