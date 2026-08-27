@@ -6,3 +6,8 @@ npm-debug.log
 README.md
 docker-compose.yml
 data/
+test/
+docs/
+WORKING-NOTES.md
+icecast-app-future-dev.md
+incidents-backup.json

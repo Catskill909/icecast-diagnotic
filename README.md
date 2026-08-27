@@ -261,6 +261,17 @@ The status document is parsed **tolerantly**: Icecast 2.4.x emits invalid JSON w
 
 The key distinction it draws: **an Icecast mount returning HTTP 404 means the server is healthy and the source encoder dropped off.** That is a studio problem (check the Barix), not a server problem. Because other Pacifica stations share the host, the engine can also confirm whether a fault is KPFT-specific or server-wide — and `stream_start_iso8601` gives the exact source reconnect moment, yielding a true outage duration independent of the polling interval.
 
+### Installing elsewhere
+
+The app is a plain Node service in a standard container and does **not** depend on
+any hosting platform. Docker Compose, Coolify, a bare Docker host and Node under
+systemd all run the same code — they differ only in where the environment
+variables are typed. A `docker-compose.yml` is included.
+
+See **[`docs/INSTALL.md`](docs/INSTALL.md)** for all four paths, the minimum
+configuration for a single-stream station, and what must be on a persistent
+volume.
+
 ### Admin authentication
 
 Endpoints that **change state or send mail** require a session; reading stays

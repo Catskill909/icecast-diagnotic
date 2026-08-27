@@ -1,0 +1,43 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Icecast Monitor — self-contained deployment
+#
+#   cp .env.example .env      # then edit it
+#   docker compose up -d
+#
+# Nothing here depends on a particular hosting platform. Coolify, Portainer,
+# Dokku and a bare Docker host all run the same image; they differ only in where
+# the environment variables are typed. See docs/INSTALL.md.
+# ─────────────────────────────────────────────────────────────────────────────
+services:
+  monitor:
+    build: .
+    # Or pull a prebuilt image instead of building:
+    # image: ghcr.io/catskill909/icecast-monitor:latest
+    container_name: icecast-monitor
+    restart: unless-stopped
+
+    # Every setting comes from the environment. Nothing is baked into the image,
+    # which is what makes the same image serve any station.
+    env_file: .env
+
+    ports:
+      - "${PORT:-3000}:3000"
+
+    volumes:
+      # THE IMPORTANT LINE. The permanent incident record lives here. Without a
+      # persistent volume every redeploy silently starts the history over at
+      # zero — and uptime figures computed from an empty record look perfect.
+      - monitor-data:/app/data
+
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/health"]
+      interval: 30s
+      timeout: 5s
+      start_period: 15s
+      retries: 3
+
+volumes:
+  monitor-data:
+    # A named volume survives `docker compose down` and image rebuilds.
+    # To keep the data somewhere you can see and back up, replace the volume
+    # entry above with a bind mount:  - ./data:/app/data
