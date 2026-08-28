@@ -364,3 +364,105 @@
   background: var(--primary);
   min-width: 2px;
 }
+
+/* ── Listener numbers — the page's headline ─────────────────────────────── */
+
+.count-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 12px;
+  margin: 14px 0 22px;
+}
+
+.count-card {
+  background: var(--surface-1);
+  border: 1px solid var(--surface-3);
+  border-radius: 14px;
+  padding: 18px 20px;
+}
+
+.cc-label {
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-tertiary);
+}
+
+/* The headcount. Deliberately the largest thing on the page — it is the first
+   question anyone asks, and listening-hours answers a different one. */
+.cc-peak {
+  margin-top: 8px;
+  font-size: 40px;
+  font-weight: 700;
+  line-height: 1;
+  color: var(--primary-light);
+  font-variant-numeric: tabular-nums;
+}
+
+.cc-peak-l {
+  margin-top: 5px;
+  font-size: 11px;
+  color: var(--text-secondary);
+  line-height: 1.4;
+}
+
+.cc-delta {
+  display: inline-block;
+  margin-top: 9px;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 5px;
+  background: var(--surface-3);
+  color: var(--text-tertiary);
+}
+
+.cc-delta.up { color: var(--status-up); background: var(--status-up-surface); }
+.cc-delta.down { color: var(--warn); background: var(--warn-surface); }
+.cc-delta.none { font-weight: 500; }
+
+.cc-row {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px solid var(--surface-2);
+}
+
+.cc-avg {
+  font-size: 20px;
+  font-weight: 700;
+  color: var(--text-primary);
+  font-variant-numeric: tabular-nums;
+}
+
+.cc-avg-l {
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+
+.cc-row .cc-delta { margin-top: 0; margin-left: auto; }
+
+/* Shown, never hidden. A missing card reads as an oversight; this states both
+   the capability and the missing piece. */
+.count-card.unavailable {
+  border-style: dashed;
+  background: transparent;
+}
+
+.count-card.unavailable .cc-peak { color: var(--text-tertiary); }
+
+.cc-unavailable {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  margin-top: 10px;
+  font-size: 11px;
+  line-height: 1.45;
+  color: var(--text-tertiary);
+}
+
+.cc-unavailable .material-symbols-outlined { font-size: 14px; flex: 0 0 auto; }

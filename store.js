@@ -1318,6 +1318,173 @@ function getListeningDelivered(streamIds, windowMs) {
   return Math.round(listenerMinutes);
 }
 
+/* ── Listener counts ────────────────────────────────────────────────────────
+   HEADCOUNTS, not hours. "How many people are listening" is the question a
+   station actually asks, and listening-hours answers a different one.
+
+   Two figures, and the difference matters:
+
+     PEAK      the most people connected at one moment. A real instant.
+     AVERAGE   how many are typically connected across the period.
+
+   Neither is a count of distinct PEOPLE. Icecast's status endpoint reports how
+   many connections exist right now, not who they are, so "1,800 different
+   people listened this week" cannot be derived from it at any polling rate —
+   that needs per-listener records from the admin API. Nothing here should ever
+   be labelled "unique listeners".
+   ─────────────────────────────────────────────────────────────────────────── */
+
+/**
+ * The station as one audience, over a time range: every channel's listeners
+ * summed at each moment.
+ *
+ * Summing per channel FIRST and taking maxima second is the whole point. Two
+ * channels peaking an hour apart do not add up to a moment, and taking each
+ * channel's own maximum then adding them reports a total the station never
+ * reached — measured on production, that overstated the real peak by 18%.
+ *
+ * Resolution follows the data: raw samples are per-minute, and once they
+ * compact the finest truth available is the hourly rollup. `resolution` says
+ * which, because a peak drawn from hourly averages is a peak HOUR, not a peak
+ * minute, and quoting the two as though they were the same figure is wrong.
+ */
+function concurrentBetween(streamIds, startMs, endMs) {
+  const byMinute = new Map();
+  const byHour = new Map();
+
+  for (const id of streamIds) {
+    for (const s of samples[id] || []) {
+      const t = new Date(s.timestamp).getTime();
+      if (!isFinite(t) || t < startMs || t >= endMs) continue;
+      // Down samples report zero listeners because the mount is gone, not
+      // because nobody was listening. Counting them would drag the average
+      // toward zero in exactly the periods a station is already unhappy about.
+      if (s.status !== 'up' || s.listeners == null) continue;
+      byMinute.set(t, (byMinute.get(t) || 0) + s.listeners);
+    }
+
+    for (const r of rollups[id] || []) {
+      const t = new Date(r.hour).getTime();
+      if (!isFinite(t) || t < startMs || t >= endMs) continue;
+      if (r.avgListeners == null) continue;
+      byHour.set(t, (byHour.get(t) || 0) + r.avgListeners);
+    }
+  }
+
+  // Prefer raw where it exists; fall back to rollups for older stretches. An
+  // hour holding both would be double counted, so raw wins for its own hour.
+  const rawHours = new Set([...byMinute.keys()].map((t) => Math.floor(t / HOUR_MS) * HOUR_MS));
+  const points = [...byMinute.values()];
+  let usedRollup = false;
+  for (const [t, v] of byHour) {
+    if (rawHours.has(Math.floor(t / HOUR_MS) * HOUR_MS)) continue;
+    points.push(v);
+    usedRollup = true;
+  }
+
+  if (!points.length) return { peak: null, avg: null, low: null, readings: 0, resolution: null };
+
+  let peak = -Infinity;
+  let low = Infinity;
+  let sum = 0;
+  for (const v of points) {
+    if (v > peak) peak = v;
+    if (v < low) low = v;
+    sum += v;
+  }
+
+  return {
+    peak: Math.round(peak),
+    avg: Math.round((sum / points.length) * 10) / 10,
+    low: Math.round(low),
+    readings: points.length,
+    resolution: byMinute.size && !usedRollup ? 'minute' : byMinute.size ? 'mixed' : 'hour',
+  };
+}
+
+/** Start of today, this week (Monday) and this month, on the station clock. */
+function periodBounds(timeZone, now = Date.now()) {
+  const today = zonedDayKey(now, timeZone);
+  const todayStart = zonedMidnightMs(today, timeZone);
+
+  // Week starts Monday: a community station's schedule runs Monday to Sunday,
+  // and a week that splits the weekend down the middle compares two halves of
+  // different things.
+  const dow = new Date(todayStart).getUTCDay();
+  const backToMonday = (dow + 6) % 7;
+  const weekStart = zonedMidnightMs(addCalendarDay(today, -backToMonday), timeZone);
+
+  return {
+    today: todayStart,
+    week: weekStart,
+    month: monthStartMs(timeZone, now),
+  };
+}
+
+/**
+ * Headline listener counts for today, this week and this month — each against
+ * the equivalent previous period.
+ *
+ * "Down 10% on last month" is the sentence a station wants, and it is only
+ * honest if the two periods are comparable. So the comparison is like-for-like:
+ * today against the same elapsed hours of yesterday, this week against the same
+ * elapsed part of last week, this month against the same elapsed part of last
+ * month. Comparing nine days of this month against all thirty-one of last month
+ * would report a collapse every single month.
+ */
+function getListenerCounts(streamIds, timeZone = 'UTC', now = Date.now()) {
+  const b = periodBounds(timeZone, now);
+
+  const build = (startMs, prevStartMs) => {
+    const elapsed = now - startMs;
+    const current = concurrentBetween(streamIds, startMs, now);
+    // Same elapsed span, one period earlier — not the whole previous period.
+    const previous = concurrentBetween(streamIds, prevStartMs, prevStartMs + elapsed);
+    const pct = (a, bb) => (bb > 0 && a != null && bb != null
+      ? Math.round(((a - bb) / bb) * 1000) / 10
+      : null);
+    return {
+      start: new Date(startMs).toISOString(),
+      elapsedMs: elapsed,
+      ...current,
+      previous,
+      changePct: {
+        peak: pct(current.peak, previous.peak),
+        avg: pct(current.avg, previous.avg),
+      },
+    };
+  };
+
+  const dayMs = 24 * 60 * 60 * 1000;
+  const todayKey = zonedDayKey(now, timeZone);
+  const monthPrevStart = monthStartMs(timeZone, b.month - 1);
+
+  return {
+    timeZone,
+    today: build(b.today, zonedMidnightMs(addCalendarDay(todayKey, -1), timeZone)),
+    week: build(b.week, b.week - 7 * dayMs),
+    month: build(b.month, monthPrevStart),
+    // THREE different questions, and only the first is answerable from a
+    // connection count. Carried in the payload as explicit nulls with reasons so
+    // the UI has something honest to render and nobody can later fill one in
+    // with a concurrent figure under a name that misdescribes it.
+    unavailable: {
+      plays: {
+        value: null,
+        label: 'Plays / tune-ins',
+        detail: 'How many times someone started listening. One person who tunes in three times is three plays.',
+        reason: 'needs Icecast admin access — a connection count cannot see a connection begin or end',
+      },
+      distinctListeners: {
+        value: null,
+        label: 'Distinct listeners',
+        detail: 'How many different people, however often each of them tuned in.',
+        reason: 'needs Icecast admin access — and even then it is an approximation, see below',
+      },
+    },
+  };
+}
+
 /* ── Aggregate Tuning Hours ─────────────────────────────────────────────────
    ATH — one person listening for one hour — is the metric a US noncommercial
    webcaster's royalty rate is computed from, not merely an engagement figure.
@@ -2011,6 +2178,7 @@ module.exports = {
   getAudienceContext, getHourOfDayProfile, buildAudienceImpact, deriveListenerImpact,
   getListenerSeries, getAudienceSummary, chooseBucketMs,
   getListeningDelivered, getAth, getMonthToDateAth, ATH_MONTHLY_ALLOWANCE,
+  getListenerCounts, concurrentBetween, periodBounds,
   SAMPLE_RETENTION_DAYS,
   MAX_EVENTS,
 };

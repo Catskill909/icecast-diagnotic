@@ -136,12 +136,13 @@
   function render() {
     if (!data || !rows().length) {
       $('#aud-tiles').innerHTML = '<div class="aud-empty">No audience data in this range yet.</div>';
-      ['#aud-lines', '#channel-table', '#daily-table', '#mount-breakdown', '#hour-profile'].forEach((s) => {
+      ['#count-cards', '#aud-lines', '#channel-table', '#daily-table', '#mount-breakdown', '#hour-profile'].forEach((s) => {
         const el = $(s);
         if (el) el.innerHTML = '';
       });
       return;
     }
+    renderCounts();
     renderTiles();
     renderAth();
     renderDaily();
@@ -151,6 +152,80 @@
     renderHours();
     $('#range-note').textContent =
       `${rows().length} channel${rows().length === 1 ? '' : 's'} · updated ${new Date(data.generatedAt).toLocaleTimeString('en-US')}`;
+  }
+
+  /**
+   * Headcounts for today, this week and this month — the page's headline.
+   *
+   * Peak and average, each against the same elapsed span of the previous
+   * period, because "down 10% on last month" is only true if the two spans are
+   * comparable. Nine days measured against a full thirty-one would report a
+   * collapse every month without fail.
+   *
+   * A count of DISTINCT people is shown as unavailable rather than omitted.
+   * Icecast reports how many connections exist, not who they are, so no polling
+   * rate can turn this into "1,800 different people listened". Hiding the card
+   * would leave the impression the figure simply was not thought of.
+   */
+  function renderCounts() {
+    const c = (data && data.counts) || null;
+    if (!c) { $('#count-cards').innerHTML = ''; return; }
+
+    const PERIODS = [
+      { key: 'today', label: 'Today', vs: 'yesterday' },
+      { key: 'week', label: 'This week', vs: 'last week' },
+      { key: 'month', label: 'This month', vs: 'last month' },
+    ];
+
+    const delta = (pct, vs) => {
+      if (pct == null) return `<span class="cc-delta none">no ${esc(vs)} to compare</span>`;
+      const dir = pct > 0 ? 'up' : pct < 0 ? 'down' : 'flat';
+      const arrow = pct > 0 ? '▲' : pct < 0 ? '▼' : '–';
+      return `<span class="cc-delta ${dir}">${arrow} ${esc(Math.abs(pct))}% vs ${esc(vs)}</span>`;
+    };
+
+    const cards = PERIODS.map((p) => {
+      const d = c[p.key] || {};
+      if (d.peak == null) {
+        return `<div class="count-card">
+          <div class="cc-label">${esc(p.label)}</div>
+          <div class="cc-peak">—</div>
+          <div class="cc-sub">no readings yet</div>
+        </div>`;
+      }
+      return `<div class="count-card">
+        <div class="cc-label">${esc(p.label)}</div>
+        <div class="cc-peak">${esc(d.peak.toLocaleString())}</div>
+        <div class="cc-peak-l">listeners at once, at the busiest moment</div>
+        ${delta(d.changePct && d.changePct.peak, p.vs)}
+        <div class="cc-row">
+          <span class="cc-avg">${esc(fmt(d.avg))}</span>
+          <span class="cc-avg-l">typically listening</span>
+          ${delta(d.changePct && d.changePct.avg, p.vs)}
+        </div>
+      </div>`;
+    }).join('');
+
+    // Stated, not hidden — the standing rule for anything gated on Icecast
+    // admin access. Two separate cards, because they are two separate questions:
+    // one person who tunes in three times is THREE plays and ONE listener, and
+    // a page that blurs them invites a station to quote the wrong figure.
+    const gated = Object.values((c.unavailable) || {}).map((u) => `<div class="count-card unavailable">
+      <div class="cc-label">${esc(u.label)}</div>
+      <div class="cc-peak">—</div>
+      <div class="cc-peak-l">${esc(u.detail)}</div>
+      <div class="cc-unavailable">
+        <span class="material-symbols-outlined">lock</span>
+        Unavailable for this server — ${esc(u.reason)}.
+      </div>
+    </div>`).join('');
+
+    $('#count-cards').innerHTML = cards + gated;
+
+    const res = (c.today && c.today.resolution) || null;
+    $('#counts-hint').textContent = res === 'hour'
+      ? `${c.timeZone} · hourly resolution`
+      : `${c.timeZone} · every check`;
   }
 
   function renderTiles() {

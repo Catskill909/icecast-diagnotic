@@ -66,6 +66,26 @@
       <span class="range-note" id="range-note"></span>
     </div>
 
+    <!-- HEADCOUNTS. The first question anyone asks, so it leads the page. -->
+    <div class="section-title">
+      <span class="material-symbols-outlined">groups</span>
+      Listener Numbers
+      <details class="info-popover">
+        <summary aria-label="Explain listener numbers" title="Explain these figures">
+          <span class="material-symbols-outlined" aria-hidden="true">info</span>
+        </summary>
+        <div class="info-popover-card">
+          <strong>Peak</strong> is the most people connected at one moment — a real
+          instant, with every channel summed. <strong>Average</strong> is how many are
+          typically connected. Each period is compared against the <em>same elapsed
+          span</em> of the one before it, so nine days of this month are measured
+          against the first nine days of last month rather than against all thirty-one.
+        </div>
+      </details>
+      <span class="section-hint" id="counts-hint"></span>
+    </div>
+    <div class="count-cards fade-in" id="count-cards"></div>
+
     <!-- Right now -->
     <div class="aud-tiles fade-in" id="aud-tiles"></div>
 
@@ -88,30 +108,6 @@
     <div class="panel fade-in">
       <div id="aud-lines"></div>
       <div class="aud-legend" id="aud-lines-legend"></div>
-    </div>
-
-    <!-- Listening hours against the royalty allowance -->
-    <div class="section-title">
-      <span class="material-symbols-outlined">hourglass_top</span>
-      Listening Hours (ATH)
-      <details class="info-popover">
-        <summary aria-label="Explain aggregate tuning hours" title="Explain ATH">
-          <span class="material-symbols-outlined" aria-hidden="true">info</span>
-        </summary>
-        <div class="info-popover-card">
-          One ATH is one person listening for one hour. For a US noncommercial
-          webcaster it is the figure the SoundExchange royalty rate is computed
-          from — the annual fee covers each channel's first 159,140 ATH per month,
-          and more is owed above that. <strong>These are estimates</strong>, derived
-          from counting listeners once a minute rather than from a log of every
-          connection, so treat them as an early warning and get the real figure
-          before filing anything.
-        </div>
-      </details>
-      <span class="section-hint" id="ath-hint"></span>
-    </div>
-    <div class="panel fade-in">
-      <div id="ath-panel"></div>
     </div>
 
     <!-- Per channel -->
@@ -181,6 +177,30 @@
     </div>
     <div class="panel fade-in">
       <div id="hour-profile"></div>
+    </div>
+
+    <!-- Listening hours against the royalty allowance -->
+    <div class="section-title">
+      <span class="material-symbols-outlined">hourglass_top</span>
+      Listening Hours (ATH)
+      <details class="info-popover">
+        <summary aria-label="Explain aggregate tuning hours" title="Explain ATH">
+          <span class="material-symbols-outlined" aria-hidden="true">info</span>
+        </summary>
+        <div class="info-popover-card">
+          One ATH is one person listening for one hour. For a US noncommercial
+          webcaster it is the figure the SoundExchange royalty rate is computed
+          from — the annual fee covers each channel's first 159,140 ATH per month,
+          and more is owed above that. <strong>These are estimates</strong>, derived
+          from counting listeners once a minute rather than from a log of every
+          connection, so treat them as an early warning and get the real figure
+          before filing anything.
+        </div>
+      </details>
+      <span class="section-hint" id="ath-hint"></span>
+    </div>
+    <div class="panel fade-in">
+      <div id="ath-panel"></div>
     </div>
 
   </div>

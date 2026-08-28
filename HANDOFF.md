@@ -82,7 +82,7 @@ regression, however green the tests are.**
   Angeles), 5 channels, 1 Icecast host, ~456 events retained since 2026-08-04.
 - **All three stations share one Icecast host**, which is the whole affiliate
   economics: one snapshot fetch per cycle serves all of them.
-- **233 tests**, `npm test`, Node's built-in runner, no test framework dependency.
+- **241 tests**, `npm test`, Node's built-in runner, no test framework dependency.
 - **Dependencies: express, nodemailer 9, dotenv.** That is the whole list, and it
   is deliberate. Crypto, testing and HTTP are all Node built-ins. Adding a
   dependency should require an argument.
@@ -251,6 +251,8 @@ rounding error: `/live_64` regularly carries a third of KPFT Main's audience
 | `byMount` in the listener series | Per-mount audience history. Only reaches back `SAMPLE_RETENTION_DAYS` — hourly rollups compact the breakdown away, and the UI must say so rather than drawing a short line beside a long one |
 | **Audience page** (`listeners.html`) | Audience is a different question, for a different reader, than "what went wrong". Station-scoped like the history page, with the per-mount split that every other figure sums away, plus CSV export |
 | `getListeners()` scoped by station | It computed its series from the scoped set but returned the FULL stream list beside it. The chart filtered on which ids had a series, so nothing looked wrong — and the new page reads that list directly |
+| **Listener NUMBERS lead the page** | The page had drifted to answering "how much listening was delivered" when the first question a station asks is "how many people". Headcounts for today / this week / this month now head it, each with peak and average against the same elapsed span of the previous period; listening hours moved to the bottom |
+| Distinct listeners shown as unavailable | Icecast reports how many connections exist, not who they are, so no polling rate yields "1,800 different people". The card states that rather than omitting it or quietly presenting a concurrent figure as a headcount |
 | **True concurrent peak** | The page reported the SUM of each channel's separate high-water mark — a total the station never reached at any one moment. Measured against production: it said 212 where the real simultaneous peak was 179, an 18% overstatement. Now computed from the channels summed per bucket, and carries the timestamp, because a peak with no "when" is trivia |
 | Listener figures the page lacked | Quietest moment (the floor the station holds), "now vs typical for this hour" from the hour profile, and a day-by-day table of average / peak / low / hours |
 | **ATH against the royalty allowance** | Aggregate Tuning Hours is what a US noncommercial webcaster's SoundExchange rate is computed from — the fee covers each channel's first 159,140 per month. `getListeningDelivered()` had computed the listener-minutes since day one and surfaced them nowhere. KPFT Main runs ≈39,100/month, ≈25% of the allowance |
@@ -378,6 +380,24 @@ Reviewed end to end on 2026-08-27; findings and reasoning in
   `VARIANT_PROBE_EVERY` cycles. Making the cycle "faster" by fetching the
   snapshot and probing in parallel again would corrupt every audience figure
   the system stores, permanently and invisibly.
+- **A period is compared against the SAME ELAPSED SPAN of the previous one.**
+  Nine days of this month measured against all thirty-one of last month reports a
+  collapse every single month, for ever. `getListenerCounts()` builds the
+  comparison window from `elapsedMs`; `test/listener-counts.test.js` has the
+  fixture where getting it wrong flips a real 20% drop into an 86% rise.
+- **Three different audience questions, and only one is answerable today.**
+  *Concurrent* is how many connections are open at an instant — that is what we
+  measure. *Plays* is how many times someone started listening. *Distinct
+  listeners* is how many different people. One person tuning in three times is
+  three plays and one listener, and neither equals a concurrent count. Never
+  label a concurrent figure as either: `getListenerCounts()` returns an
+  `unavailable` block with a null and a distinct reason for each, precisely so
+  the UI has something honest to render. Definitions in
+  [`docs/AUDIENCE-ROADMAP.md`](docs/AUDIENCE-ROADMAP.md) §1.5.
+- **When distinct listeners do arrive, they are a PROXY.** The industry
+  definition is a unique IP + user-agent pair, so a household or office behind
+  one NAT collapses to one, and one person on a phone and a laptop counts as two.
+  Label it wherever it is shown, the way ATH is labelled an estimate.
 - **Never sum per-channel peaks.** Two channels peaking at different moments do
   not add up to a moment. Any station-wide maximum must come from the channels
   summed per bucket (`stationSeries()` in `public/audience-stats.js`), which is

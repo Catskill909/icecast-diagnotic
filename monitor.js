@@ -2052,6 +2052,16 @@ function getListeners(windowMs, bucketMs, stationId) {
     })),
     series,
     outages,
+    // HEADCOUNTS for today / this week / this month, each against the same
+    // elapsed span of the previous period. The station clock comes from the
+    // scoped station; with several in scope they share a host and, in practice,
+    // a region — UTC is the honest fallback rather than picking one arbitrarily.
+    counts: store.getListenerCounts(
+      ids,
+      scoped.length === 1 || new Set(scoped.map((x) => x.stationTimezone)).size === 1
+        ? scoped[0]?.stationTimezone || 'UTC'
+        : 'UTC',
+    ),
     summary: store.getAudienceSummary(ids, windowMs),
     generatedAt: new Date().toISOString(),
   };

@@ -53,6 +53,45 @@ Getting it is worth more than any amount of charting work on the data we have.
 
 ---
 
+## 1.5 Vocabulary — and why these are not the same number
+
+Most confusion about audience figures is one of these five words being used for
+another. They differ by more than definition: they differ by what data can
+produce them at all.
+
+| Term | What it counts | Needs | Status |
+|---|---|---|---|
+| **Concurrent listeners** | Connections open at one instant | A count, polled | ✅ built |
+| **Peak concurrent** | The largest that number ever got | Same | ✅ built |
+| **Plays / tune-ins / sessions** | How many times someone *started* listening | Connection start and end events | ❌ admin |
+| **Distinct listeners** | How many different people, however often each tuned in | Identity per connection (IP + user agent) | ❌ admin |
+| **ATH / listening hours** | Total time delivered, all listeners summed | Counts × elapsed time | ⚠️ built, estimated |
+
+The one that catches people out:
+
+> **One person who tunes in three times is THREE plays and ONE listener.**
+
+Neither is our current "peak 178". That is how many were connected at the same
+moment — a third question again, and the only one a status endpoint can answer.
+A station quoting "178 listeners today" when it means "178 at once" is
+understating its reach, possibly by a lot; quoting plays as listeners overstates
+it. Both mistakes are easy and neither is visible in the number.
+
+### The distinct-listener caveat, for when we can compute it
+
+Even with admin access, "unique listeners" is a **proxy, not a headcount of
+humans**. The industry definition — Radio Mast states it explicitly — is a
+unique combination of **IP address and user agent**. That means:
+
+- A household, an office or a mobile carrier behind one NAT address collapses
+  **several people into one**.
+- One person listening on a phone and a laptop counts as **two**.
+
+It is still the best available reach figure and worth having. But if a station
+puts it in a funding pitch, the caveat travels with it — which is why it should
+be labelled in the UI when it arrives, exactly as ATH is labelled an estimate
+now.
+
 ## 2. What the market actually offers
 
 Surveyed: Radio Mast, AzuraCast, Centova Cast, Live365, MediaCP.
@@ -138,7 +177,13 @@ real figure."
    (average / peak / low / hours per day), which already shows the effect on
    real data — weekends average 69–78 against 43–47 on Monday and Tuesday. The
    full hour × weekday grid is still to do.
-3. ✅ **SHIPPED 2026-08-28. Trend against the previous period.** Withheld — null,
+3. ✅ **SHIPPED 2026-08-28. Listener NUMBERS, and trend against the previous
+   period.** Headcounts — peak and average concurrent — for today, this week and
+   this month, each against the same elapsed span of the period before. This is
+   the page's headline; listening hours sit below it. Note what is still *not*
+   answerable: a count of distinct people needs per-listener records, so the card
+   for it says "unavailable for this server" rather than showing a concurrent
+   figure under a name that would misdescribe it. Withheld — null,
    not zero — unless we watched for the whole of the earlier window, because a
    monitor running four days comparing week against week reports a collapse in
    listening that only happened to the recording.
@@ -150,10 +195,58 @@ real figure."
 **Phase 2 — needs admin credentials.** Deferred by decision, not blocked: see
 §4.1. Build when a credential exists to build against.
 
-6. Unique listeners, session length, TSL.
-7. Geography, device and player breakdowns.
-8. Real (non-estimated) ATH from per-connection data, which would make the
-   royalty figure filing-grade rather than indicative.
+One endpoint unlocks all of it. `/admin/listclients?mount=/live_128` returns a
+row per connected listener; the Icecast docs do not enumerate the fields, so the
+first task is to request it without the `.xsl` suffix and read the raw XML. From
+those rows, in rough order of value:
+
+6. **Plays / tune-ins.** A connection appearing and later disappearing is a
+   session. Counting them needs no identity at all — just polling `listclients`
+   and diffing — so this is the **cheapest and first** thing to build, and it is
+   half of what §1.5 says we currently cannot answer.
+7. **Session length and TSL.** Falls out of the same diffing: how long each
+   connection persisted. TSL is the engagement metric station managers say they
+   actually watch.
+8. **Distinct listeners / reach**, deduplicated on IP + user agent — with the
+   caveat in §1.5 attached wherever it is shown.
+9. **Device, player and browser breakdown**, from the user-agent string. Cheap
+   once the rows are being collected, and it answers a real operational question:
+   which players are people using, and does the stream work in them.
+10. **Geography.** See the dependency below — this one is not just a chart.
+11. **Real, non-estimated ATH**, summed from actual session durations rather than
+    inferred from polling. This is what turns the royalty figure from an early
+    warning into something filing-grade.
+
+### The geography dependency
+
+Turning an IP into a city or country needs a geolocation database, and the choice
+matters more than it looks:
+
+- **A local database** — MaxMind GeoLite2 or IP2Location LITE — is free, needs an
+  account and a licence key, and updates monthly. Roughly 70 MB, resolved
+  in-process.
+- **A lookup API** is less work but **sends every listener's IP address to a third
+  party**. That is the audience's personal data leaving the station's
+  infrastructure for a vendor with its own retention policy.
+
+**Use a local database.** The privacy argument decides it on its own, and it also
+removes a per-lookup cost and a network dependency from the check cycle.
+
+Note this changes the deployment: a data file that must be present in the image
+or on the volume, and refreshed. The Dockerfile copies files individually — see
+the trap in `HANDOFF.md` — so it must be added there deliberately.
+
+### What collecting sessions changes about the store
+
+Every metric above needs per-connection rows, not counts. That is a different
+data shape and a much larger one: today the monitor writes one sample per channel
+per minute. Sessions mean rows proportional to the **audience**, not the channel
+count — at 180 concurrent listeners, potentially thousands of rows a day.
+
+This is the point where the "SQLite is not needed yet" decision in `HANDOFF.md`
+§5 expires. That note already says to revisit at ~50 mounts **or when
+per-listener analytics begins, whichever comes first** — and this is that.
+Decide the storage before collection starts, not after.
 
 ### 4.1 How credentials work — decided 2026-08-28
 
