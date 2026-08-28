@@ -115,22 +115,77 @@ test('a missing comparison is withheld, never reported as no change', () => {
   assert.notEqual(c.today.changePct.avg, 0);
 });
 
-test('plays and distinct listeners are declared unavailable, not fabricated', () => {
-  // THREE different questions live here and only one is answerable:
-  //
-  //   concurrent  how many connections are open right now        ✅ we have it
-  //   plays       how many times someone started listening       ❌ needs sessions
-  //   distinct    how many different people                      ❌ needs identity
-  //
-  // A person who tunes in three times is one distinct listener and three plays.
-  // Icecast's status endpoint reports neither — it reports how many connections
-  // exist at an instant, not that one began or who owns it. Presenting a
-  // concurrent figure under either name would be an invented number.
+test('total listeners counts tune-ins, not the concurrent figure', () => {
+  // THE headline. Every rise in the listener count is somebody starting to
+  // listen. On the production record this runs six to nine times the concurrent
+  // peak — quoting the concurrent number instead understates a station by an
+  // order of magnitude to the funders who ask.
+  const id = 'tune';
+  store.ensureStreams([id]);
+  // 10 already listening, then +5, then -3, then +4. Peak is 16; the number of
+  // people who tuned in is 10 + 5 + 4 = 19.
+  const base = Date.parse('2026-08-28T06:00:00.000Z');
+  [10, 15, 12, 16].forEach((n, i) => {
+    store.addSample(id, {
+      timestamp: new Date(base + i * 60 * 1000).toISOString(),
+      status: 'up', responseTime: 10, listeners: n,
+    });
+  });
+
+  const t = store.getTuneIns([id], base - 1000, NOW);
+  assert.equal(t.total, 19, '10 present + 5 joining + 4 joining');
+  assert.notEqual(t.total, 16, 'the concurrent peak is a different question');
+  assert.equal(t.floor, true, 'and it is a floor, never an exact count');
+});
+
+test('a monitoring gap is not a surge of listeners', () => {
+  // The failure this prevents: after an outage or a restart, the audience
+  // becoming visible again looks like everyone arriving at once. Counting it
+  // would invent a spike of listeners precisely on the days a station already
+  // had a bad time.
+  const id = 'gap';
+  store.ensureStreams([id]);
+  const base = Date.parse('2026-08-28T06:00:00.000Z');
+  store.addSample(id, { timestamp: new Date(base).toISOString(), status: 'up', responseTime: 10, listeners: 50 });
+  // An hour of silence, then the audience reappears at 90.
+  store.addSample(id, { timestamp: new Date(base + 60 * 60 * 1000).toISOString(), status: 'up', responseTime: 10, listeners: 90 });
+
+  const t = store.getTuneIns([id], base - 1000, NOW);
+  assert.equal(t.total, 50, 'the 40 that appeared across the gap are not counted as arrivals');
+  assert.equal(t.gaps, 1, 'and the skip is reported rather than silent');
+});
+
+test('someone leaving does not subtract from total listeners', () => {
+  // Reach only ever accumulates. A listener who leaves still listened.
+  const id = 'leave';
+  store.ensureStreams([id]);
+  const base = Date.parse('2026-08-28T06:00:00.000Z');
+  [100, 40, 10].forEach((n, i) => {
+    store.addSample(id, {
+      timestamp: new Date(base + i * 60 * 1000).toISOString(),
+      status: 'up', responseTime: 10, listeners: n,
+    });
+  });
+  assert.equal(store.getTuneIns([id], base - 1000, NOW).total, 100);
+});
+
+test('total listeners is carried per period with its own comparison', () => {
   const c = store.getListenerCounts(['a'], TZ, NOW);
-  assert.equal(c.unavailable.plays.value, null);
-  assert.equal(c.unavailable.distinctListeners.value, null);
-  assert.match(c.unavailable.plays.reason, /admin/i);
-  assert.match(c.unavailable.distinctListeners.reason, /admin/i);
-  // Each carries its own wording: they are not the same missing thing.
-  assert.notEqual(c.unavailable.plays.detail, c.unavailable.distinctListeners.detail);
+  assert.ok(c.today.totalListeners > 0, 'today has a reach figure');
+  assert.ok('totalListeners' in c.today.changePct, 'compared like the others');
+  assert.equal(c.today.totalListenersMeta.floor, true);
+});
+
+test('individual listeners stay a declared headline, not a fabricated one', () => {
+  // One person who tunes in ten times is TEN total listeners and ONE individual
+  // listener. Both are headline figures for a station; only the first is
+  // derivable from a connection count, so the second says why it is empty rather
+  // than being quietly filled with the other.
+  const c = store.getListenerCounts(['a'], TZ, NOW);
+  const u = c.unavailable.individualListeners;
+  assert.equal(u.value, null);
+  assert.match(u.reason, /admin/i);
+  assert.notEqual(u.label, undefined);
+  // It must never be conflated with the tune-in count sitting beside it.
+  assert.notEqual(u.value, c.today.totalListeners);
 });

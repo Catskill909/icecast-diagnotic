@@ -699,6 +699,30 @@ function prune() {
 
     if (expire.length) {
       const buckets = new Map();
+      // Tune-ins must be counted NOW, from the raw samples, because an hourly
+      // average cannot show that forty listeners left as forty arrived. Once
+      // these samples are gone the churn is unrecoverable, so the figure is
+      // frozen onto the rollup the same way audience impact is frozen onto an
+      // event at recovery.
+      const tuneInsByHour = new Map();
+      {
+        const ordered = [...expire]
+          .filter((s) => s.status === 'up' && s.listeners != null)
+          .sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
+        for (let i = 0; i < ordered.length; i++) {
+          const key = hourKey(ordered[i].timestamp);
+          const prev = ordered[i - 1];
+          let add;
+          if (!prev) {
+            add = ordered[i].listeners;      // everyone already connected
+          } else if (new Date(ordered[i].timestamp) - new Date(prev.timestamp) > 5 * 60 * 1000) {
+            add = 0;                          // a gap is not a surge of listeners
+          } else {
+            add = Math.max(0, ordered[i].listeners - prev.listeners);
+          }
+          tuneInsByHour.set(key, (tuneInsByHour.get(key) || 0) + add);
+        }
+      }
       for (const s of expire) {
         const key = hourKey(s.timestamp);
         if (!buckets.has(key)) {
@@ -706,6 +730,7 @@ function prune() {
             hour: key, checks: 0, up: 0, down: 0, silent: 0,
             responseSum: 0, responseCount: 0, minResponse: null, maxResponse: null,
             listenerSum: 0, listenerCount: 0, listenerPeak: 0,
+            tuneIns: Math.round(tuneInsByHour.get(key) || 0),
           });
         }
         const b = buckets.get(key);
@@ -762,6 +787,13 @@ function prune() {
                   ? Math.round(((prevRoll.avgListeners || 0) * prevListN + b.listenerSum) / listN)
                   : null,
                 listenerPeak: Math.max(prevRoll.listenerPeak || 0, b.listenerPeak),
+                // Additive: two prunes touching one hour each counted part of
+                // its churn. Absent on rollups written before tune-ins existed,
+                // and left absent rather than defaulted to 0 — "not recorded"
+                // and "nobody tuned in" are different facts.
+                tuneIns: prevRoll.tuneIns == null && b.tuneIns == null
+                  ? undefined
+                  : (prevRoll.tuneIns || 0) + (b.tuneIns || 0),
               };
             })()
           : {
@@ -777,6 +809,7 @@ function prune() {
               listenerCount: b.listenerCount,
               avgListeners: b.listenerCount ? Math.round(b.listenerSum / b.listenerCount) : null,
               listenerPeak: b.listenerPeak,
+              tuneIns: b.tuneIns,
             };
         if (merged.minResponse === Infinity) merged.minResponse = null;
         existing.set(key, merged);
@@ -1318,6 +1351,114 @@ function getListeningDelivered(streamIds, windowMs) {
   return Math.round(listenerMinutes);
 }
 
+/* ── Total listeners (tune-ins) ─────────────────────────────────────────────
+   THE headline figure for a listener-supported station.
+
+   "178 listening" is a concurrent count — an engineering number about server
+   load. What a station puts in a pledge drive, a CPB report or an underwriting
+   pitch is REACH: how many people listened at all. On this record those differ
+   by six to nine times, so quoting the concurrent figure makes a station look an
+   order of magnitude smaller than it is, to exactly the audiences whose money
+   depends on the number.
+
+   Every time the listener count RISES, someone tuned in. Summing those rises
+   over a period counts tune-ins without needing to know who anybody is.
+
+   Two honest limits, and both must travel with the figure:
+
+     · It is a FLOOR. Within one 60-second cycle, three people leaving as three
+       arrive is a net change of zero and is invisible. The real number is
+       higher, never lower.
+
+     · It counts TUNE-INS, not people. Someone who listens twice counts twice.
+       Distinguishing them needs per-listener identity — see AUDIENCE-ROADMAP.
+   ─────────────────────────────────────────────────────────────────────────── */
+
+/**
+ * Tune-ins for one stream between two instants, from raw samples.
+ *
+ * A rise across a monitoring GAP is not a rise in the audience — it is the
+ * audience we could not see becoming visible again. Counting it would turn every
+ * restart and every outage recovery into a phantom surge of listeners, which is
+ * worst precisely when a station is already looking at a bad day. Deltas across
+ * a gap longer than `maxGapMs` are therefore skipped and reported.
+ */
+function tuneInsFromSamples(streamId, startMs, endMs, maxGapMs) {
+  const arr = (samples[streamId] || [])
+    .filter((s) => {
+      const t = new Date(s.timestamp).getTime();
+      return isFinite(t) && t >= startMs && t < endMs && s.status === 'up' && s.listeners != null;
+    })
+    .sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
+
+  if (!arr.length) return { tuneIns: 0, gaps: 0, covered: false };
+
+  // Everyone already connected when the period opened listened during it, so
+  // they belong in "who listened today" even though they tuned in yesterday.
+  let tuneIns = arr[0].listeners;
+  let gaps = 0;
+
+  for (let i = 1; i < arr.length; i++) {
+    const dt = new Date(arr[i].timestamp) - new Date(arr[i - 1].timestamp);
+    if (dt > maxGapMs) { gaps++; continue; }
+    const delta = arr[i].listeners - arr[i - 1].listeners;
+    if (delta > 0) tuneIns += delta;
+  }
+
+  return { tuneIns, gaps, covered: true };
+}
+
+/**
+ * Tune-ins over a period, per stream, summed.
+ *
+ * Raw samples carry the churn; hourly rollups do not — an average cannot show
+ * that forty people left and forty arrived. So each hour's tune-ins are computed
+ * and frozen onto its rollup when the samples compact (see prune), and this
+ * reads raw where it exists and the stored figure where it does not. Hours older
+ * than the raw window that were rolled up BEFORE this existed carry no figure,
+ * and are reported as uncovered rather than as zero.
+ */
+function getTuneIns(streamIds, startMs, endMs) {
+  const maxGapMs = 5 * 60 * 1000;   // five minutes: generous against a slow cycle
+  let total = 0;
+  let gaps = 0;
+  let hoursFromRollup = 0;
+  let hoursMissing = 0;
+
+  for (const id of streamIds) {
+    const raw = tuneInsFromSamples(id, startMs, endMs, maxGapMs);
+    total += raw.tuneIns;
+    gaps += raw.gaps;
+
+    // Hours the raw samples do not reach, filled from what prune() froze.
+    const rawFrom = raw.covered
+      ? Math.min(...(samples[id] || [])
+        .map((s) => new Date(s.timestamp).getTime())
+        .filter((t) => isFinite(t) && t >= startMs && t < endMs))
+      : endMs;
+
+    for (const r of rollups[id] || []) {
+      const t = new Date(r.hour).getTime();
+      if (!isFinite(t) || t < startMs || t >= endMs || t >= rawFrom) continue;
+      if (r.tuneIns == null) { hoursMissing++; continue; }
+      total += r.tuneIns;
+      hoursFromRollup++;
+    }
+  }
+
+  return {
+    total: Math.round(total),
+    gaps,
+    hoursFromRollup,
+    // Whole hours in range for which no tune-in figure was ever recorded. The
+    // total is a floor for the period AND misses these entirely, so a UI must be
+    // able to say the period is only partly counted.
+    hoursMissing,
+    estimated: true,
+    floor: true,
+  };
+}
+
 /* ── Listener counts ────────────────────────────────────────────────────────
    HEADCOUNTS, not hours. "How many people are listening" is the question a
    station actually asks, and listening-hours answers a different one.
@@ -1435,22 +1576,32 @@ function periodBounds(timeZone, now = Date.now()) {
 function getListenerCounts(streamIds, timeZone = 'UTC', now = Date.now()) {
   const b = periodBounds(timeZone, now);
 
+  const pct = (a, bb) => (bb > 0 && a != null && bb != null
+    ? Math.round(((a - bb) / bb) * 1000) / 10
+    : null);
+
   const build = (startMs, prevStartMs) => {
     const elapsed = now - startMs;
     const current = concurrentBetween(streamIds, startMs, now);
     // Same elapsed span, one period earlier — not the whole previous period.
     const previous = concurrentBetween(streamIds, prevStartMs, prevStartMs + elapsed);
-    const pct = (a, bb) => (bb > 0 && a != null && bb != null
-      ? Math.round(((a - bb) / bb) * 1000) / 10
-      : null);
+
+    // THE headline. How many people listened at all, versus how many were
+    // listening at once — on this record they differ by six to nine times.
+    const tuneIns = getTuneIns(streamIds, startMs, now);
+    const prevTuneIns = getTuneIns(streamIds, prevStartMs, prevStartMs + elapsed);
+
     return {
       start: new Date(startMs).toISOString(),
       elapsedMs: elapsed,
       ...current,
-      previous,
+      totalListeners: tuneIns.total || null,
+      totalListenersMeta: tuneIns,
+      previous: { ...previous, totalListeners: prevTuneIns.total || null },
       changePct: {
         peak: pct(current.peak, previous.peak),
         avg: pct(current.avg, previous.avg),
+        totalListeners: pct(tuneIns.total, prevTuneIns.total),
       },
     };
   };
@@ -1468,18 +1619,17 @@ function getListenerCounts(streamIds, timeZone = 'UTC', now = Date.now()) {
     // connection count. Carried in the payload as explicit nulls with reasons so
     // the UI has something honest to render and nobody can later fill one in
     // with a concurrent figure under a name that misdescribes it.
+    // `totalListeners` above answers "how many times did someone start
+    // listening". This is its pair: how many different PEOPLE that was. One
+    // person who tunes in ten times is ten total listeners and one individual
+    // listener, and a station needs both figures — so this is a headline slot
+    // showing why it is empty, not a hidden feature.
     unavailable: {
-      plays: {
+      individualListeners: {
         value: null,
-        label: 'Plays / tune-ins',
-        detail: 'How many times someone started listening. One person who tunes in three times is three plays.',
-        reason: 'needs Icecast admin access — a connection count cannot see a connection begin or end',
-      },
-      distinctListeners: {
-        value: null,
-        label: 'Distinct listeners',
-        detail: 'How many different people, however often each of them tuned in.',
-        reason: 'needs Icecast admin access — and even then it is an approximation, see below',
+        label: 'Total individual listeners',
+        detail: 'How many different people, however many times each of them tuned in.',
+        reason: 'needs Icecast admin access — telling one listener from another requires per-connection detail the public status page does not carry',
       },
     },
   };
@@ -2179,6 +2329,7 @@ module.exports = {
   getListenerSeries, getAudienceSummary, chooseBucketMs,
   getListeningDelivered, getAth, getMonthToDateAth, ATH_MONTHLY_ALLOWANCE,
   getListenerCounts, concurrentBetween, periodBounds,
+  getTuneIns, tuneInsFromSamples,
   SAMPLE_RETENTION_DAYS,
   MAX_EVENTS,
 };

@@ -63,19 +63,41 @@ produce them at all.
 |---|---|---|---|
 | **Concurrent listeners** | Connections open at one instant | A count, polled | ✅ built |
 | **Peak concurrent** | The largest that number ever got | Same | ✅ built |
-| **Plays / tune-ins / sessions** | How many times someone *started* listening | Connection start and end events | ❌ admin |
-| **Distinct listeners** | How many different people, however often each tuned in | Identity per connection (IP + user agent) | ❌ admin |
+| **Total listeners / tune-ins** | How many times someone *started* listening | Every RISE in the count is an arrival | ✅ built, a floor |
+| **Individual listeners** | How many different people, however often each tuned in | Identity per connection (IP + user agent) | ❌ admin |
 | **ATH / listening hours** | Total time delivered, all listeners summed | Counts × elapsed time | ⚠️ built, estimated |
 
 The one that catches people out:
 
-> **One person who tunes in three times is THREE plays and ONE listener.**
+> **One person who tunes in ten times is TEN total listeners and ONE individual
+> listener.**
 
-Neither is our current "peak 178". That is how many were connected at the same
-moment — a third question again, and the only one a status endpoint can answer.
-A station quoting "178 listeners today" when it means "178 at once" is
-understating its reach, possibly by a lot; quoting plays as listeners overstates
-it. Both mistakes are easy and neither is visible in the number.
+Neither is "peak 178". That is how many were connected at the same moment.
+
+**This distinction is not academic — it is the difference between a station
+looking small and looking its actual size.** Measured on the production record:
+844 people tuned in today against a concurrent peak of 178, and 1,269 against
+193 on the busiest day — **four to nine times larger**. A listener-supported
+station quoting the concurrent figure in a pledge drive, a CPB report or an
+underwriting pitch understates itself by that factor, to precisely the audiences
+whose decisions turn on the number.
+
+Reach is the mission figure. Concurrency is a fact about server load.
+
+### How tune-ins are derived without per-listener data
+
+Every RISE in the listener count is somebody starting to listen. Summing the
+rises over a period counts arrivals without needing to know who anyone is.
+
+It is a **floor**. Within one 60-second cycle, three people leaving as three
+arrive is a net change of zero and is invisible, so the true number is higher —
+never lower. Rises across a monitoring gap are excluded: an audience becoming
+visible again after an outage is not an audience arriving, and counting it would
+invent a surge on exactly the days a station already had a bad time.
+
+Each hour's tune-ins are frozen onto its rollup when raw samples compact, because
+an hourly average cannot show that forty listeners left as forty arrived. Miss
+that window and the churn is gone for good.
 
 ### The distinct-listener caveat, for when we can compute it
 
@@ -200,10 +222,10 @@ row per connected listener; the Icecast docs do not enumerate the fields, so the
 first task is to request it without the `.xsl` suffix and read the raw XML. From
 those rows, in rough order of value:
 
-6. **Plays / tune-ins.** A connection appearing and later disappearing is a
-   session. Counting them needs no identity at all — just polling `listclients`
-   and diffing — so this is the **cheapest and first** thing to build, and it is
-   half of what §1.5 says we currently cannot answer.
+6. ✅ **SHIPPED 2026-08-28 in estimated form. Total listeners / tune-ins**, from
+   rises in the listener count — a floor, needing no credentials at all. Admin
+   access would upgrade it from a floor to an exact count by making each
+   connection individually visible, but the figure exists and leads the page now.
 7. **Session length and TSL.** Falls out of the same diffing: how long each
    connection persisted. TSL is the engagement metric station managers say they
    actually watch.

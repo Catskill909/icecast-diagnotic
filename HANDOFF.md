@@ -18,7 +18,7 @@ shortest path to being useful.
 **Orient yourself (2 minutes).**
 
 ```bash
-npm test                                   # 241 tests, all should pass
+npm test                                   # 245 tests, all should pass
 curl -s https://kpft-icecast.supersoul.top/api/stations | jq   # what it monitors
 curl -s https://kpft-icecast.supersoul.top/api/status   | jq   # how it is doing
 ```
@@ -82,7 +82,7 @@ regression, however green the tests are.**
   Angeles), 5 channels, 1 Icecast host, ~456 events retained since 2026-08-04.
 - **All three stations share one Icecast host**, which is the whole affiliate
   economics: one snapshot fetch per cycle serves all of them.
-- **241 tests**, `npm test`, Node's built-in runner, no test framework dependency.
+- **245 tests**, `npm test`, Node's built-in runner, no test framework dependency.
 - **Dependencies: express, nodemailer 9, dotenv.** That is the whole list, and it
   is deliberate. Crypto, testing and HTTP are all Node built-ins. Adding a
   dependency should require an argument.
@@ -251,6 +251,8 @@ rounding error: `/live_64` regularly carries a third of KPFT Main's audience
 | `byMount` in the listener series | Per-mount audience history. Only reaches back `SAMPLE_RETENTION_DAYS` — hourly rollups compact the breakdown away, and the UI must say so rather than drawing a short line beside a long one |
 | **Audience page** (`listeners.html`) | Audience is a different question, for a different reader, than "what went wrong". Station-scoped like the history page, with the per-mount split that every other figure sums away, plus CSV export |
 | `getListeners()` scoped by station | It computed its series from the scoped set but returned the FULL stream list beside it. The chart filtered on which ids had a series, so nothing looked wrong — and the new page reads that list directly |
+| **TOTAL LISTENERS leads the page** | Reach, not concurrency. Every rise in the listener count is an arrival, so tune-ins are derivable with no credentials — 844 today against a concurrent peak of 178, and 1,269 against 193 on the busiest day. A listener-supported station quoting the concurrent figure understates itself four to nine fold to funders. Peak and average are kept, ranked below it |
+| Tune-ins frozen onto rollups at compaction | An hourly average cannot show that forty listeners left as forty arrived. Miss the window when raw samples expire and the churn is unrecoverable |
 | **Listener NUMBERS lead the page** | The page had drifted to answering "how much listening was delivered" when the first question a station asks is "how many people". Headcounts for today / this week / this month now head it, each with peak and average against the same elapsed span of the previous period; listening hours moved to the bottom |
 | Distinct listeners shown as unavailable | Icecast reports how many connections exist, not who they are, so no polling rate yields "1,800 different people". The card states that rather than omitting it or quietly presenting a concurrent figure as a headcount |
 | **True concurrent peak** | The page reported the SUM of each channel's separate high-water mark — a total the station never reached at any one moment. Measured against production: it said 212 where the real simultaneous peak was 179, an 18% overstatement. Now computed from the channels summed per bucket, and carries the timestamp, because a peak with no "when" is trivia |
@@ -385,6 +387,11 @@ Reviewed end to end on 2026-08-27; findings and reasoning in
   collapse every single month, for ever. `getListenerCounts()` builds the
   comparison window from `elapsedMs`; `test/listener-counts.test.js` has the
   fixture where getting it wrong flips a real 20% drop into an 86% rise.
+- **Reach is the headline, not concurrency.** "How many listened" and "how many
+  at once" differ by four to nine times on this record. The concurrent figure is
+  about server load; reach is what a listener-supported station reports to
+  funders. `totalListeners` leads the audience page and must stay there — this
+  was got wrong repeatedly before it was got right.
 - **Three different audience questions, and only one is answerable today.**
   *Concurrent* is how many connections are open at an instant — that is what we
   measure. *Plays* is how many times someone started listening. *Distinct
@@ -493,7 +500,7 @@ Reviewed end to end on 2026-08-27; findings and reasoning in
 ## 9. Verifying a change
 
 ```bash
-npm test                                             # 241 tests
+npm test                                             # 245 tests
 node --check server.js monitor.js store.js diagnose.js auth.js
 
 # Against production

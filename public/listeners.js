@@ -177,43 +177,57 @@
       { key: 'month', label: 'This month', vs: 'last month' },
     ];
 
-    const delta = (pct, vs) => {
+    const delta = (pct, vs, cls) => {
       if (pct == null) return `<span class="cc-delta none">no ${esc(vs)} to compare</span>`;
       const dir = pct > 0 ? 'up' : pct < 0 ? 'down' : 'flat';
       const arrow = pct > 0 ? '▲' : pct < 0 ? '▼' : '–';
-      return `<span class="cc-delta ${dir}">${arrow} ${esc(Math.abs(pct))}% vs ${esc(vs)}</span>`;
+      return `<span class="cc-delta ${dir} ${cls || ''}">${arrow} ${esc(Math.abs(pct))}% vs ${esc(vs)}</span>`;
     };
 
     const cards = PERIODS.map((p) => {
       const d = c[p.key] || {};
-      if (d.peak == null) {
+      const meta = d.totalListenersMeta || {};
+
+      if (d.totalListeners == null && d.peak == null) {
         return `<div class="count-card">
           <div class="cc-label">${esc(p.label)}</div>
-          <div class="cc-peak">—</div>
+          <div class="cc-total">—</div>
           <div class="cc-sub">no readings yet</div>
         </div>`;
       }
-      return `<div class="count-card">
+
+      // TOTAL LISTENERS leads. "How many people listened" is the figure a
+      // listener-supported station reports; "how many at once" is a fact about
+      // server load. They differ six to nine fold, so leading with the wrong one
+      // understates the station by an order of magnitude.
+      return `<div class="count-card headline">
         <div class="cc-label">${esc(p.label)}</div>
-        <div class="cc-peak">${esc(d.peak.toLocaleString())}</div>
-        <div class="cc-peak-l">listeners at once, at the busiest moment</div>
-        ${delta(d.changePct && d.changePct.peak, p.vs)}
-        <div class="cc-row">
-          <span class="cc-avg">${esc(fmt(d.avg))}</span>
-          <span class="cc-avg-l">typically listening</span>
-          ${delta(d.changePct && d.changePct.avg, p.vs)}
+        <div class="cc-total">${d.totalListeners == null ? '—' : esc(d.totalListeners.toLocaleString())}</div>
+        <div class="cc-total-l">total listeners — times someone tuned in</div>
+        ${delta(d.changePct && d.changePct.totalListeners, p.vs, 'strong')}
+        ${meta.hoursMissing ? `<div class="cc-partial">${esc(meta.hoursMissing)} hour(s) in this period predate tune-in recording and are not counted</div>` : ''}
+        <div class="cc-secondary">
+          <div class="cc-sec">
+            <span class="cc-sec-v">${d.peak == null ? '—' : esc(d.peak.toLocaleString())}</span>
+            <span class="cc-sec-l">at once, at the busiest moment</span>
+            ${delta(d.changePct && d.changePct.peak, p.vs)}
+          </div>
+          <div class="cc-sec">
+            <span class="cc-sec-v">${esc(fmt(d.avg))}</span>
+            <span class="cc-sec-l">typically listening</span>
+            ${delta(d.changePct && d.changePct.avg, p.vs)}
+          </div>
         </div>
       </div>`;
     }).join('');
 
-    // Stated, not hidden — the standing rule for anything gated on Icecast
-    // admin access. Two separate cards, because they are two separate questions:
-    // one person who tunes in three times is THREE plays and ONE listener, and
-    // a page that blurs them invites a station to quote the wrong figure.
-    const gated = Object.values((c.unavailable) || {}).map((u) => `<div class="count-card unavailable">
+    // The other half of the headline, shown as a headline rather than hidden:
+    // one person who tunes in ten times is ten total listeners and ONE
+    // individual listener, and a station needs both numbers.
+    const gated = Object.values(c.unavailable || {}).map((u) => `<div class="count-card headline unavailable">
       <div class="cc-label">${esc(u.label)}</div>
-      <div class="cc-peak">—</div>
-      <div class="cc-peak-l">${esc(u.detail)}</div>
+      <div class="cc-total">—</div>
+      <div class="cc-total-l">${esc(u.detail)}</div>
       <div class="cc-unavailable">
         <span class="material-symbols-outlined">lock</span>
         Unavailable for this server — ${esc(u.reason)}.
@@ -222,10 +236,10 @@
 
     $('#count-cards').innerHTML = cards + gated;
 
-    const res = (c.today && c.today.resolution) || null;
-    $('#counts-hint').textContent = res === 'hour'
-      ? `${c.timeZone} · hourly resolution`
-      : `${c.timeZone} · every check`;
+    const m = (c.today && c.today.totalListenersMeta) || {};
+    $('#counts-hint').textContent = m.floor
+      ? `${c.timeZone} · a floor — brief overlaps are invisible between checks`
+      : c.timeZone;
   }
 
   function renderTiles() {

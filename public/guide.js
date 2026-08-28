@@ -122,14 +122,23 @@
         `<strong>Peak</strong> is the most people connected at one moment, with every
          channel added together. <strong>Average</strong> is how many are typically
          connected.`,
+        `<strong>Total listeners</strong> is the headline: how many times someone tuned
+         in. Every rise in the listener count is somebody starting to listen. It runs
+         several times higher than the number listening at once — on this station about
+         four to nine times — and it is the reach figure to quote in a pledge drive or a
+         grant report. It is a <em>floor</em>: within a single check, one person leaving
+         as another arrives cancels out and cannot be seen, so the real number is higher,
+         never lower.`,
         `Three different things get called "listeners", and only one of them is
          measurable here. <strong>Concurrent</strong> is how many are connected at once —
          that is what the numbers above show. <strong>Plays</strong> is how many times
          someone started listening. <strong>Distinct listeners</strong> is how many
          different people. Someone who tunes in three times is three plays and one
          listener. Icecast's public status page reports only how many connections exist
-         at an instant, so the other two are shown as unavailable until the station's
-         streaming server grants admin access.`,
+         at an instant, so <strong>total individual
+         listeners</strong> — how many different people, rather than how many tune-ins —
+         needs admin access to the streaming server and is shown as unavailable until
+         there is some.`,
         `<strong>Listening hours (ATH)</strong> is one person listening for one hour.
          It is the figure a US noncommercial station's SoundExchange royalty rate is
          computed from — the annual fee covers each channel's first 159,140 per month.
