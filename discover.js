@@ -54,7 +54,7 @@ function channelKeyFor(pathname) {
  * The result is a SUGGESTION. An operator confirms or regroups it; the point is
  * that the common case needs no thought.
  */
-function suggestChannels(mounts) {
+function suggestChannels(mounts, origin) {
   const groups = new Map();
 
   for (const m of mounts || []) {
@@ -75,7 +75,18 @@ function suggestChannels(mounts) {
       // A name from the metadata when there is one, since it is what a human
       // recognises; the path is the fallback and is always present.
       name: primary.serverName || primary.title || key.replace(/^\//, ''),
-      url: primary.listenurl,
+      // Built from the origin the operator actually reached, NOT from Icecast's
+      // self-reported listenurl.
+      //
+      // On the Pacifica server those differ: an operator reaches
+      // https://streams.pacifica.org:9000 while Icecast announces itself as
+      // http://stations1.pacifica.org:7267 — its own address behind the proxy,
+      // over plain HTTP. Taking the announcement would silently downgrade the
+      // connection and monitor a path no listener uses; behind a CDN it is
+      // frequently an internal address that is not reachable at all.
+      //
+      // The operator reached the origin we were given. That is the one to probe.
+      url: origin ? origin.replace(/\/+$/, '') + primary.pathname : primary.listenurl,
       mounts: sorted.map((m) => m.pathname),
       // Everything below is for the operator to look at while confirming.
       listeners: sorted.reduce((sum, m) => sum + (m.listeners || 0), 0),
@@ -96,10 +107,26 @@ function suggestChannels(mounts) {
  * them, so a discovered inventory is usually many stations' mounts and the
  * operator needs to pick out their own rather than adopt all of them.
  */
-function summarise(snapshot) {
+function summarise(snapshot, pastedPath, origin) {
   const mounts = Object.values(snapshot?.mounts || {});
-  const channels = suggestChannels(mounts);
+  const channels = suggestChannels(mounts, origin);
+
+  // Which channel did they actually paste? On a shared host most of what was
+  // found belongs to other stations, and making someone hunt for their own
+  // among eight is the opposite of the point of discovery.
+  let matched = null;
+  if (pastedPath) {
+    matched = channels.find((c) => (c.mounts || []).includes(pastedPath)) || null;
+    if (matched) {
+      matched.matched = true;
+      // Put it first: it is the answer to the question they asked.
+      channels.splice(channels.indexOf(matched), 1);
+      channels.unshift(matched);
+    }
+  }
+
   return {
+    matchedChannelId: matched ? matched.id : null,
     reachable: !!snapshot?.reachable,
     serverId: snapshot?.serverId || null,
     host: snapshot?.host || null,
@@ -111,7 +138,30 @@ function summarise(snapshot) {
   };
 }
 
-module.exports = { toStatusUrl, channelKeyFor, suggestChannels, summarise };
+/**
+ * A station name and identifier suggested from a channel.
+ *
+ * Icecast metadata names are written for listeners, not for configuration:
+ * "WPFW Eckington 1" and "KPFA HiRes Stream" both carry the call sign plus
+ * noise. The call sign is the part worth keeping.
+ */
+function suggestStationIdentity(channel) {
+  if (!channel) return { name: '', id: '' };
+  // Strip the descriptive tail operators append: "WPFW Eckington 1" → "WPFW".
+  const raw = String(channel.name || '').trim();
+  const callSign = (raw.match(/^[A-Z]{3,5}\b/) || [])[0];
+
+  // The call sign is the station. The mount path is only a fallback, and a poor
+  // one for a station id — "/HD3_128" is one KPFT channel, not the station.
+  const fromPath = String((channel.mounts || [])[0] || '')
+    .replace(/^\//, '').replace(/_\d+$/, '');
+  const slug = (s) => String(s).replace(/[^a-z0-9]+/gi, '-').toLowerCase().replace(/^-+|-+$/g, '');
+  const id = callSign ? slug(callSign) : (slug(fromPath) || 'station');
+
+  return { name: callSign || raw || id.toUpperCase(), id };
+}
+
+module.exports = { toStatusUrl, channelKeyFor, suggestChannels, summarise, suggestStationIdentity };
 
 /* ═══════════════════════════════════════════════════════════════════════════
    Validating a station before it is written

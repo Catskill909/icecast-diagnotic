@@ -38,6 +38,18 @@ const $ = (id) => document.getElementById(id);
     $('password').focus();
   });
 
+  // Show/hide the password. Typing a passphrase blind is how people end up
+  // choosing shorter ones.
+  $('pw-toggle').addEventListener('click', () => {
+    const input = $('password');
+    const shown = input.type === 'text';
+    input.type = shown ? 'password' : 'text';
+    $('pw-toggle').classList.toggle('on', !shown);
+    $('pw-toggle').setAttribute('aria-label', shown ? 'Show password' : 'Hide password');
+    $('pw-toggle').title = shown ? 'Show password' : 'Hide password';
+    input.focus();
+  });
+
   $('backBtn').addEventListener('click', () => {
     clear();
     $('password').value = '';

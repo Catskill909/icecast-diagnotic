@@ -119,3 +119,97 @@ test('an empty or unreachable snapshot summarises without throwing', () => {
     assert.equal(s.totalListeners, 0);
   }
 });
+
+// ── Which channel did they actually paste? ──────────────────────────────────
+test('the pasted channel is marked and hoisted to the top', () => {
+  // On a shared host most of what was found belongs to other stations. Making
+  // someone hunt for their own among eight defeats the point of discovery — and
+  // the first version of this screen did exactly that.
+  const s = summarise(snapshot(), '/wpfw_128');
+  assert.equal(s.matchedChannelId, 'wpfw');
+  assert.equal(s.channels[0].id, 'wpfw', 'it must come first, not in listener order');
+  assert.equal(s.channels[0].matched, true);
+});
+
+test('a pasted mount that is one of several bitrates still matches its channel', () => {
+  const s = summarise(snapshot(), '/live_64');
+  assert.equal(s.matchedChannelId, 'live', 'the 64k variant identifies KPFT Main');
+  assert.equal(s.channels[0].id, 'live');
+});
+
+test('pasting a status URL marks nothing, and nothing is hoisted', () => {
+  const s = summarise(snapshot(), null);
+  assert.equal(s.matchedChannelId, null);
+  assert.ok(!s.channels.some((c) => c.matched));
+});
+
+test('an unrecognised mount marks nothing rather than guessing', () => {
+  const s = summarise(snapshot(), '/not-on-this-server');
+  assert.equal(s.matchedChannelId, null);
+});
+
+// ── Suggested station identity ──────────────────────────────────────────────
+const { suggestStationIdentity } = require('../discover');
+
+test('the call sign is extracted from the metadata name', () => {
+  assert.deepEqual(suggestStationIdentity({ name: 'WPFW Eckington 1', mounts: ['/wpfw_128'] }),
+                   { name: 'WPFW', id: 'wpfw' });
+  assert.deepEqual(suggestStationIdentity({ name: 'KPFA HiRes Stream', mounts: ['/kpfa'] }),
+                   { name: 'KPFA', id: 'kpfa' });
+});
+
+test('the call sign wins over the mount path for the station id', () => {
+  // "/HD3_128" is one KPFT channel, not the station. Deriving the station id
+  // from the path would have produced "hd3".
+  assert.deepEqual(suggestStationIdentity({ name: 'KPFT HD2 Live Stream', mounts: ['/HD3_128'] }),
+                   { name: 'KPFT', id: 'kpft' });
+});
+
+test('a mount with no usable name falls back to the path', () => {
+  const r = suggestStationIdentity({ name: 'Unspecified name', mounts: ['/classic_country'] });
+  assert.equal(r.id, 'classic-country');
+});
+
+test('a nameless channel still yields something usable', () => {
+  assert.deepEqual(suggestStationIdentity({ name: '', mounts: ['/wuwu'] }), { name: 'WUWU', id: 'wuwu' });
+  assert.deepEqual(suggestStationIdentity(null), { name: '', id: '' });
+});
+
+test('every suggested id passes the validator that will receive it', () => {
+  // A suggestion the form then rejects is worse than no suggestion.
+  const SLUG = /^[a-z0-9][a-z0-9-]{0,63}$/;
+  for (const c of summarise(snapshot(), '/wpfw_128').channels) {
+    const { id } = suggestStationIdentity(c);
+    assert.match(id, SLUG, `suggested id "${id}" from "${c.name}" would be rejected`);
+  }
+});
+
+// ── The URL to probe ────────────────────────────────────────────────────────
+test('channel URLs are built from the origin reached, not Icecast self-report', () => {
+  // Icecast announces its own address behind the proxy — on the Pacifica server
+  // http://stations1.pacifica.org:7267, over plain HTTP — while an operator
+  // reaches https://streams.pacifica.org:9000. Taking the announcement would
+  // downgrade the connection and probe a path no listener uses.
+  const chans = suggestChannels(Object.values(snapshot().mounts), 'https://streams.pacifica.org:9000');
+  for (const c of chans) {
+    assert.ok(c.url.startsWith('https://streams.pacifica.org:9000/'), `got ${c.url}`);
+    assert.doesNotMatch(c.url, /stations1|:7267/, 'must not use the self-reported host');
+  }
+});
+
+test('the built URL keeps the mount path exactly', () => {
+  const c = suggestChannels(Object.values(snapshot().mounts), 'https://h.example.org:8000')
+    .find((x) => x.id === 'live');
+  assert.equal(c.url, 'https://h.example.org:8000/live_128');
+});
+
+test('a trailing slash on the origin does not produce a doubled slash', () => {
+  const c = suggestChannels(Object.values(snapshot().mounts), 'https://h.example.org:8000/')
+    .find((x) => x.id === 'live');
+  assert.equal(c.url, 'https://h.example.org:8000/live_128');
+});
+
+test('with no origin it falls back to the announced URL rather than breaking', () => {
+  const c = suggestChannels(Object.values(snapshot().mounts)).find((x) => x.id === 'live');
+  assert.ok(c.url, 'a URL is still produced');
+});

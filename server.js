@@ -236,12 +236,27 @@ app.post('/api/stations/discover', auth.requireAuth, async (req, res) => {
     });
   }
 
-  res.json({
+  // The mount they pasted, when they pasted a stream rather than a status URL.
+  let pastedPath = null;
+  if (derived.derivedFrom) {
+    try { pastedPath = new URL(derived.derivedFrom).pathname; } catch { /* ignore */ }
+  }
+
+  const body = {
     statusUrl: derived.url.href,
     derivedFrom: derived.derivedFrom || null,
     repairedJson: !!snapshot.repairedJson,
-    ...discover.summarise(snapshot),
-  });
+    // The origin the operator reached — the addresses to probe are built from
+    // it rather than from what Icecast says about itself.
+    ...discover.summarise(snapshot, pastedPath, derived.url.origin),
+  };
+  // A suggested name and identifier, so the operator confirms rather than types.
+  // Placeholder text that merely LOOKS filled in is worse than an empty field:
+  // the first attempt at this shipped with realistic placeholders and the form
+  // was submitted empty.
+  const matched = (body.channels || []).find((c) => c.matched) || (body.channels || [])[0];
+  body.suggestedStation = discover.suggestStationIdentity(matched);
+  res.json(body);
 });
 
 // Adds a station and starts monitoring it, without a redeploy.

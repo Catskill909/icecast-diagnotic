@@ -62,6 +62,12 @@ button:disabled { opacity: .5; cursor: not-allowed; }
   border-radius: 9px; cursor: pointer;
 }
 .ch:hover { border-color: var(--primary); }
+.ch.matched { border-color: var(--primary); background: rgba(124,106,239,.08); }
+.tag { display: inline-block; margin-left: 8px; padding: 1px 7px; border-radius: 20px;
+       font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: .04em;
+       background: var(--primary); color: #fff; vertical-align: 1px; }
+/* Placeholders must not be mistakable for values. */
+input::placeholder { color: var(--text-muted); opacity: .55; font-style: italic; }
 .ch input[type=checkbox] { width: 16px; height: 16px; margin-top: 2px; flex: none; accent-color: var(--primary); }
 .ch-body { flex: 1; min-width: 0; }
 .ch-name { font-weight: 600; font-size: 14px; }

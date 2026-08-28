@@ -100,10 +100,10 @@
       : 'Tick the channels to monitor.';
 
     $('channels').innerHTML = (d.channels || []).map((c, i) => `
-      <label class="ch">
-        <input type="checkbox" data-i="${i}" ${d.sharedHost ? '' : 'checked'}>
+      <label class="ch${c.matched ? ' matched' : ''}">
+        <input type="checkbox" data-i="${i}" ${c.matched || !d.sharedHost ? 'checked' : ''}>
         <span class="ch-body">
-          <span class="ch-name">${esc(c.name)}</span>
+          <span class="ch-name">${esc(c.name)}${c.matched ? '<span class="tag">the URL you pasted</span>' : ''}</span>
           <span class="ch-meta">
             <span class="ch-listeners">${esc(c.listeners)} listening</span>
             <span>${esc(c.variants)} bitrate${c.variants === 1 ? '' : 's'}</span>
@@ -112,9 +112,17 @@
         </span>
       </label>`).join('');
 
+    // Fields carry REAL values, not placeholders that look like values. The
+    // first version of this form used realistic placeholder text and was
+    // submitted empty, because there was no way to tell the two apart.
+    const s = d.suggestedStation || {};
+    $('st-name').value = s.name || '';
+    $('st-id').value = s.id || '';
+    idTouched = false;
     $('st-tz').value = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
     $('results').classList.remove('hidden');
     $('st-name').focus();
+    $('st-name').select();
   }
 
   // Suggest an identifier from the name, but never overwrite a typed one.
@@ -143,12 +151,21 @@
     if (!picked.length) { show($('save-msg'), 'Select at least one channel.'); return; }
 
     const stationId = $('st-id').value.trim();
+    if (!stationId || !$('st-name').value.trim()) {
+      show($('save-msg'), 'Give the station a name and an identifier.');
+      return;
+    }
     const payload = {
       station: { id: stationId, name: $('st-name').value.trim(), timezone: $('st-tz').value.trim() },
       // Channel ids are prefixed with the station so they stay unique across
       // stations — they key this channel's history permanently.
       channels: picked.map((c) => ({
-        id: `${stationId}-${c.id}`.slice(0, 64),
+        // Prefixed with the station so ids stay unique across stations — they
+        // key this channel's history permanently. Not doubled up when the
+        // channel already carries the station's name: "wpfw-wpfw" helps nobody.
+        id: (c.id === stationId || c.id.startsWith(stationId + '-')
+              ? c.id
+              : `${stationId}-${c.id}`).slice(0, 64),
         name: c.name,
         url: c.url,
         mounts: c.mounts,

@@ -52,3 +52,14 @@
               border: 1px solid rgba(245,158,11,.3); color: #fcd34d; }
   .foot { margin-top: 22px; font-size: 11px; color: var(--text-muted); text-align: center; }
   .hidden { display: none; }
+
+/* Show/hide password */
+.pw-wrap { position: relative; }
+.pw-wrap input { padding-right: 44px; }
+.pw-toggle {
+  position: absolute; right: 4px; top: 50%; transform: translateY(-50%);
+  width: 36px; margin: 0; padding: 0; font-size: 15px; line-height: 1;
+  background: none; border: none; cursor: pointer; opacity: .5;
+}
+.pw-toggle:hover { opacity: 1; background: none; }
+.pw-toggle.on { opacity: 1; }

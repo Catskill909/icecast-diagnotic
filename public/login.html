@@ -26,7 +26,10 @@
       <span class="who" id="who"></span>
     </div>
     <label for="password">Password</label>
-    <input id="password" name="password" type="password" autocomplete="current-password" required>
+    <div class="pw-wrap">
+      <input id="password" name="password" type="password" autocomplete="current-password" required>
+      <button type="button" class="pw-toggle" id="pw-toggle" aria-label="Show password" title="Show password">👁</button>
+    </div>
     <button type="submit" id="submitBtn">Sign in</button>
     <button type="button" class="back" id="backBtn">Use a different account</button>
   </form>
