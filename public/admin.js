@@ -47,16 +47,31 @@
       `${channels} channel${channels === 1 ? '' : 's'}, ` +
       `${(r.body.hosts || []).length} Icecast host${(r.body.hosts || []).length === 1 ? '' : 's'}`;
 
+    const only = stations.length < 2;
     host.innerHTML = stations.map((s) => `
-      <div class="station">
-        <div class="station-name">${esc(s.name)}</div>
-        <div class="station-meta">${esc(s.id)} · ${esc(s.timezone || 'UTC')}</div>
+      <div class="station" data-station="${esc(s.id)}">
+        <div class="station-head">
+          <div>
+            <div class="station-name">${esc(s.name)}</div>
+            <div class="station-meta">${esc(s.id)} · ${esc(s.timezone || 'UTC')}</div>
+          </div>
+          <div class="station-actions">
+            <button class="mini" data-edit="${esc(s.id)}">Edit</button>
+            <button class="mini danger" data-remove="${esc(s.id)}" ${only ? 'disabled title="The only station cannot be removed"' : ''}>Remove</button>
+          </div>
+        </div>
         <div class="chan">
           ${(s.channels || []).map((c) =>
             `<span class="chip">${esc(c.name)} · ${esc((c.mounts || []).length || 1)} mount${(c.mounts || []).length === 1 ? '' : 's'}</span>`
           ).join('')}
         </div>
+        <div class="station-editor hidden" data-editor="${esc(s.id)}"></div>
       </div>`).join('') || '<div class="hint">No stations configured.</div>';
+
+    host.querySelectorAll('[data-edit]').forEach((b) =>
+      b.addEventListener('click', () => openEditor(stations.find((s) => s.id === b.dataset.edit))));
+    host.querySelectorAll('[data-remove]').forEach((b) =>
+      b.addEventListener('click', () => confirmRemove(stations.find((s) => s.id === b.dataset.remove), b)));
   }
 
   // ── Discovery ─────────────────────────────────────────────────────────────
@@ -225,6 +240,114 @@
     $('url').value = ''; discovered = null; idTouched = false;
     loadStations();
   });
+
+  // ── Editing ───────────────────────────────────────────────────────────────
+  function openEditor(s) {
+    if (!s) return;
+    const box = document.querySelector(`[data-editor="${CSS.escape(s.id)}"]`);
+    if (!box.classList.contains('hidden')) { box.classList.add('hidden'); return; }
+
+    box.innerHTML = `
+      <div class="fields">
+        <label>Name<input data-f="name" value="${esc(s.name)}"></label>
+        <label>Timezone<input data-f="tz" value="${esc(s.timezone || 'UTC')}"></label>
+      </div>
+      <h3>Channels</h3>
+      <p class="hint">A channel's identifier is fixed — it keys this channel's recorded history. Everything else can change.</p>
+      <div class="edit-channels">
+        ${(s.channels || []).map((c) => `
+          <div class="edit-ch" data-cid="${esc(c.id)}">
+            <div class="edit-ch-id">${esc(c.id)}</div>
+            <input data-f="cname" value="${esc(c.name)}" placeholder="Display name">
+            <input data-f="curl" value="${esc(c.url)}" placeholder="Stream URL">
+            <input data-f="cmounts" value="${esc((c.mounts || []).join(' '))}" placeholder="/mount /mount_64">
+            <button class="mini danger" data-drop="${esc(c.id)}">Drop</button>
+          </div>`).join('')}
+      </div>
+      <div class="actions">
+        <button class="primary" data-save="${esc(s.id)}">Save changes</button>
+        <button class="ghost" data-cancel="1" type="button">Cancel</button>
+      </div>
+      <div class="msg" data-msg="1"></div>`;
+    box.classList.remove('hidden');
+
+    box.querySelectorAll('[data-drop]').forEach((b) => b.addEventListener('click', () => {
+      if (box.querySelectorAll('.edit-ch').length < 2) {
+        show(box.querySelector('[data-msg]'), 'A station must keep at least one channel.');
+        return;
+      }
+      b.closest('.edit-ch').remove();
+    }));
+    box.querySelector('[data-cancel]').addEventListener('click', () => box.classList.add('hidden'));
+    box.querySelector('[data-save]').addEventListener('click', () => saveEdit(s.id, box));
+  }
+
+  async function saveEdit(id, box) {
+    const msg = box.querySelector('[data-msg]');
+    clear(msg);
+    const channels = [...box.querySelectorAll('.edit-ch')].map((row) => ({
+      // The id is read from the row, never from an input: it is not editable.
+      id: row.dataset.cid,
+      name: row.querySelector('[data-f=cname]').value.trim(),
+      url: row.querySelector('[data-f=curl]').value.trim(),
+      mounts: row.querySelector('[data-f=cmounts]').value.trim().split(/\s+/).filter(Boolean),
+    }));
+    const body = {
+      name: box.querySelector('[data-f=name]').value.trim(),
+      timezone: box.querySelector('[data-f=tz]').value.trim(),
+      channels,
+    };
+
+    const btn = box.querySelector('[data-save]');
+    btn.disabled = true; btn.textContent = 'Saving…';
+    const r = await api(`/api/stations/${encodeURIComponent(id)}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    btn.disabled = false; btn.textContent = 'Save changes';
+    if (!r) return;
+    if (!r.ok) {
+      if (Array.isArray(r.body.errors)) showList(msg, r.body.errors);
+      else show(msg, r.body.error || 'Could not save.');
+      return;
+    }
+    const dropped = (r.body.removedChannels || []);
+    show($('save-msg'),
+      `${r.body.station.name} updated.` +
+      (dropped.length ? ` Stopped monitoring ${dropped.join(', ')} — its recorded history is kept.` : ''),
+      'ok');
+    loadStations();
+  }
+
+  // ── Removing ──────────────────────────────────────────────────────────────
+  function confirmRemove(s, btn) {
+    if (!s) return;
+    // Two clicks rather than a modal. Removing is reversible in the sense that
+    // matters — the history survives — so the bar is "not by accident", not
+    // "type the name to continue".
+    if (btn.dataset.armed !== '1') {
+      btn.dataset.armed = '1';
+      btn.textContent = 'Confirm remove';
+      btn.title = 'Stops monitoring. Recorded history is kept.';
+      setTimeout(() => {
+        if (!btn.isConnected) return;
+        btn.dataset.armed = '0'; btn.textContent = 'Remove'; btn.title = '';
+      }, 5000);
+      return;
+    }
+    removeStation(s);
+  }
+
+  async function removeStation(s) {
+    const r = await api(`/api/stations/${encodeURIComponent(s.id)}`, { method: 'DELETE' });
+    if (!r) return;
+    if (!r.ok) { show($('save-msg'), r.body.error || 'Could not remove.'); return; }
+    show($('save-msg'),
+      `${r.body.removed.name} is no longer monitored. Its recorded history is kept — ` +
+      `re-adding it with the same channel identifiers reconnects to it.`, 'ok');
+    loadStations();
+  }
 
   $('logout').addEventListener('click', async () => {
     await fetch('/api/logout', { method: 'POST' });

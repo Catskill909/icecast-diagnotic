@@ -48,6 +48,28 @@ button:disabled { opacity: .5; cursor: not-allowed; }
            border-radius: 10px; padding: 13px 15px; }
 .station-name { font-weight: 600; font-size: 14px; }
 .station-meta { color: var(--text-muted); font-size: 12px; margin-top: 2px; }
+.station-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+.station-actions { display: flex; gap: 6px; flex-shrink: 0; }
+.mini { padding: 5px 11px; font-size: 12px; font-weight: 600;
+        background: var(--surface-3); color: var(--text-secondary); }
+.mini:hover:not(:disabled) { background: var(--surface-3); color: var(--text-primary); }
+.mini.danger { color: #fca5a5; }
+.mini.danger:hover:not(:disabled) { background: rgba(239,68,68,.16); color: #fecaca; }
+.mini[data-armed="1"] { background: rgba(239,68,68,.2); color: #fecaca; }
+
+.station-editor { margin-top: 15px; padding-top: 15px; border-top: 1px solid var(--surface-3); }
+.station-editor.hidden { display: none; }
+.edit-channels { display: grid; gap: 8px; }
+.edit-ch { display: grid; gap: 7px; align-items: center;
+           grid-template-columns: 118px 1fr 1.4fr 1fr auto;
+           background: var(--surface-2); border: 1px solid var(--surface-3);
+           border-radius: 9px; padding: 9px 11px; }
+.edit-ch-id { font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+              font-size: 11.5px; color: var(--text-muted); overflow: hidden;
+              text-overflow: ellipsis; }
+.edit-ch input { font-size: 13px; padding: 7px 9px; }
+@media (max-width: 720px) { .edit-ch { grid-template-columns: 1fr; } }
+
 .chan { color: var(--text-secondary); font-size: 12px; margin-top: 7px;
         display: flex; flex-wrap: wrap; gap: 6px; }
 .chip { background: var(--surface-3); border-radius: 5px; padding: 2px 7px; font-size: 11px; }

@@ -301,6 +301,60 @@ app.post('/api/stations', auth.requireAuth, async (req, res) => {
   });
 });
 
+// Edits a station. Channel ids are IMMUTABLE — they key every stored sample,
+// rollup and event, so renaming one would orphan its history rather than move
+// it. Everything else may change: display names, URLs, mount lists, and which
+// channels the station has.
+app.patch('/api/stations/:id', auth.requireAuth, async (req, res) => {
+  const config = monitor.getStationConfig();
+  const v = discover.validateStationEdit(req.body, config, req.params.id);
+  if (!v.ok) return res.status(v.errors[0]?.startsWith('No station') ? 404 : 400).json({ errors: v.errors });
+
+  try {
+    // Re-resolved on every save. A URL that was safe when discovered is not
+    // necessarily the URL being saved now.
+    for (const c of v.station.channels) await safeUrl.assertPublicHost(new URL(c.url).hostname);
+  } catch (err) {
+    return res.status(400).json({ errors: [err.message] });
+  }
+
+  const next = discover.replaceStationInConfig(config, v.station, v.hosts);
+  const reload = monitor.saveStationConfig(next);
+
+  res.json({
+    station: v.station,
+    // Named explicitly: a channel dropped by an edit stops being watched, and
+    // the operator should see which rather than infer it from a count.
+    removedChannels: v.removedChannels,
+    monitoring: { added: reload.added, removed: reload.removed, total: reload.total },
+  });
+});
+
+// Stops monitoring a station. Its recorded history is NOT deleted.
+//
+// Configuration says what to watch from now on; it is not a statement about the
+// past. Removing the record of what happened while a station WAS watched would
+// destroy the thing this application exists to keep, and would do it on a click.
+app.delete('/api/stations/:id', auth.requireAuth, (req, res) => {
+  const config = monitor.getStationConfig();
+  const station = (config?.stations || []).find((s) => s.id === req.params.id);
+  if (!station) return res.status(404).json({ error: `No station with id "${req.params.id}"` });
+
+  const next = discover.removeStationFromConfig(config, req.params.id);
+  if (!next.stations.length) {
+    // reloadConfig would refuse this anyway; saying so here is clearer than
+    // letting the save appear to succeed and change nothing.
+    return res.status(400).json({ error: 'That is the only station. Add another before removing this one.' });
+  }
+
+  const reload = monitor.saveStationConfig(next);
+  res.json({
+    removed: { id: station.id, name: station.name, channels: (station.channels || []).map((c) => c.id) },
+    historyRetained: true,
+    monitoring: { removed: reload.removed, total: reload.total },
+  });
+});
+
 // Applies stored configuration to the running monitor without a redeploy.
 // The admin panel's write endpoints will call reloadConfig() directly; this
 // exposes it on its own so a configuration change can be applied and verified

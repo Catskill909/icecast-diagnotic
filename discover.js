@@ -298,3 +298,134 @@ function addStationToConfig(config, station, hosts) {
 module.exports.validateStationPayload = validateStationPayload;
 module.exports.addStationToConfig = addStationToConfig;
 module.exports.existingChannelIds = existingChannelIds;
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   Editing and removing a station
+
+   THE HAZARD IN EDITING is that channel ids key every stored sample, rollup and
+   event. Renaming one does not move its history — it orphans it, and the channel
+   silently starts again from zero while the old record sits under a name nothing
+   references. So ids are immutable: a station's channels can be added to,
+   removed, renamed in their DISPLAY name, repointed at a different URL, and have
+   their mount lists changed, but an existing channel's id is fixed.
+
+   THE HAZARD IN REMOVING is assuming configuration is a statement about the
+   past. It is not. Removing a station stops it being watched; the record of what
+   happened while it WAS watched stays exactly where it is. Deleting that would
+   destroy the thing this application exists to keep, and would do it on a click.
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+/**
+ * Checks an edit to an existing station.
+ *
+ * Every problem is returned at once, and ids that already belong to this station
+ * are permitted — they are what makes it an edit rather than a new station.
+ */
+function validateStationEdit(payload, config, stationId) {
+  const errors = [];
+  const station = (config?.stations || []).find((s) => s.id === stationId);
+  if (!station) return { ok: false, errors: [`No station with id "${stationId}"`] };
+
+  const p = payload && typeof payload === 'object' ? payload : {};
+  const name = String(p.name ?? station.name ?? '').trim();
+  if (!name) errors.push('Station name is required');
+
+  const timezone = String(p.timezone ?? station.timezone ?? 'UTC').trim();
+  try {
+    new Intl.DateTimeFormat('en-US', { timeZone: timezone });
+  } catch {
+    errors.push(`"${timezone}" is not a recognised timezone`);
+  }
+
+  const channelsIn = Array.isArray(p.channels) ? p.channels : station.channels || [];
+  if (!channelsIn.length) errors.push('A station must keep at least one channel');
+
+  // Ids belonging to OTHER stations are taken; this station's own are not.
+  const mine = new Set((station.channels || []).map((c) => c.id));
+  const taken = new Set();
+  for (const s of config.stations || []) {
+    if (s.id === stationId) continue;
+    for (const c of s.channels || []) taken.add(c.id);
+  }
+
+  const seen = new Set();
+  const channels = [];
+
+  channelsIn.forEach((c, i) => {
+    const label = `Channel ${i + 1}`;
+    const cid = String(c?.id || '').trim().toLowerCase();
+    if (!cid) errors.push(`${label}: id is required`);
+    else if (!SLUG.test(cid)) errors.push(`${label}: id must be lowercase letters, numbers and hyphens`);
+    else if (taken.has(cid)) errors.push(`${label}: id "${cid}" belongs to another station`);
+    else if (seen.has(cid)) errors.push(`${label}: id "${cid}" is repeated`);
+    seen.add(cid);
+
+    const cname = String(c?.name || '').trim();
+    if (!cname) errors.push(`${label}: name is required`);
+
+    const v = validateUrl(c?.url);
+    if (!v.ok) errors.push(`${label}: ${v.reason}`);
+
+    const mounts = Array.isArray(c?.mounts)
+      ? c.mounts.map((m) => String(m || '').trim()).filter(Boolean)
+      : [];
+    if (mounts.some((m) => !m.startsWith('/'))) errors.push(`${label}: mounts must be Icecast paths beginning with /`);
+
+    if (v.ok && cid && cname) {
+      channels.push({ id: cid, name: cname, url: v.url.href, mounts: mounts.length ? [...new Set(mounts)] : undefined });
+    }
+  });
+
+  if (errors.length) return { ok: false, errors };
+
+  // What is being dropped, so the caller can say so before doing it.
+  const kept = new Set(channels.map((c) => c.id));
+  const removed = [...mine].filter((id) => !kept.has(id));
+
+  const origins = [...new Set(channels.map((c) => new URL(c.url).host))];
+  return {
+    ok: true,
+    station: { ...station, id: stationId, name, timezone, channels },
+    removedChannels: removed,
+    hosts: origins.map((host) => ({
+      id: host.replace(/[^a-z0-9]+/gi, '-').toLowerCase(),
+      host,
+      statusUrl: `${new URL(channels.find((c) => new URL(c.url).host === host).url).protocol}//${host}/status-json.xsl`,
+    })),
+  };
+}
+
+/** Replaces one station in the configuration, without mutating the original. */
+function replaceStationInConfig(config, station, hosts) {
+  const next = JSON.parse(JSON.stringify(config));
+  next.stations = (next.stations || []).map((s) => (s.id === station.id ? station : s));
+  next.hosts = next.hosts || [];
+  for (const h of hosts || []) {
+    if (!next.hosts.some((existing) => existing.host === h.host)) next.hosts.push(h);
+  }
+  return next;
+}
+
+/**
+ * Removes a station. Its stored history is deliberately untouched.
+ *
+ * Hosts left serving no channel are dropped too, so the check cycle stops
+ * fetching a status document nothing reads.
+ */
+function removeStationFromConfig(config, stationId) {
+  const next = JSON.parse(JSON.stringify(config));
+  next.stations = (next.stations || []).filter((s) => s.id !== stationId);
+
+  const stillUsed = new Set();
+  for (const s of next.stations) {
+    for (const c of s.channels || []) {
+      try { stillUsed.add(new URL(c.url).host); } catch { /* keep the host */ }
+    }
+  }
+  next.hosts = (next.hosts || []).filter((h) => stillUsed.has(h.host));
+  return next;
+}
+
+module.exports.validateStationEdit = validateStationEdit;
+module.exports.replaceStationInConfig = replaceStationInConfig;
+module.exports.removeStationFromConfig = removeStationFromConfig;
