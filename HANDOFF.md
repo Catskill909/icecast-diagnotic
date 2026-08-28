@@ -2,7 +2,7 @@
 
 > **Purpose.** Everything a new session, a new developer, or another model needs
 > to pick this up without reading the conversation it came from. Written
-> 2026-08-27, current as of commit `24fd762`.
+> 2026-08-27, current as of commit `ef83256`.
 >
 > Read this first, then [`README.md`](README.md) for behaviour,
 > [`docs/DIAGNOSTICS.md`](docs/DIAGNOSTICS.md) for the classifier, and
@@ -40,7 +40,7 @@ regression, however green the tests are.**
 
 - **Live**, healthy, ~90 listeners, 3 channels, 443 events retained since
   2026-08-04.
-- **153 tests**, `npm test`, Node's built-in runner, no test framework dependency.
+- **168 tests**, `npm test`, Node's built-in runner, no test framework dependency.
 - **Dependencies: express, nodemailer 9, dotenv.** That is the whole list, and it
   is deliberate. Crypto, testing and HTTP are all Node built-ins. Adding a
   dependency should require an argument.
@@ -170,11 +170,12 @@ Build order, with the current position marked:
 5. ✅ Station scoping — every aggregate takes a station, and the history page has
    a picker. Without it, adding a second station made the first one's uptime
    silently wrong
-6. ⬅ **NEXT: per-station alert recipients.** Alert emails are still one global
+6. ✅ Edit and remove stations — ids immutable, history retained on removal
+7. ⬅ **NEXT: per-station alert recipients.** Alert emails are still one global
    list, so WPFW's GM would be paged about KPFT. This is the first genuinely
    GM-facing screen
-7. Fleet view
-8. Roles and multi-user — **only when a real GM asks for a login**
+8. Fleet view
+9. Roles and multi-user — **only when a real GM asks for a login**
 
 Two design rules already decided:
 
@@ -235,9 +236,15 @@ Reviewed end to end on 2026-08-27; findings and reasoning in
   monitor.js is the seam. A new figure that hardcodes "all streams" is not
   merely broader — it reports one station's outages as another's, and nothing
   fails. An unknown station id returns nothing, deliberately.
-- **Channel ids key all history and must be unique across stations.** Reusing one
-  attaches a new channel to another's record; the data does not vanish, it
-  becomes wrong.
+- **Channel ids key all history. They are unique across stations AND immutable.**
+  Reusing one attaches a new channel to another's record. RENAMING one is worse:
+  it orphans the history rather than moving it, so the channel restarts at zero
+  while the old record sits under a name nothing references — and uptime is then
+  computed from the empty one. The station editor deliberately offers no way to
+  type an id. Do not add one.
+- **Removing a station must never delete its history.** Configuration says what to
+  watch from now on; it is not a statement about the past. Re-adding a station
+  with the same channel ids reconnects to its record.
 - **Probe URLs are built from the origin the operator reached**, never from
   Icecast's `listenurl`. On the Pacifica server those differ, and the announced
   one is plain HTTP against an internal host.
@@ -259,7 +266,7 @@ Reviewed end to end on 2026-08-27; findings and reasoning in
 ## 8. Verifying a change
 
 ```bash
-npm test                                             # 153 tests
+npm test                                             # 168 tests
 node --check server.js monitor.js store.js diagnose.js auth.js
 
 # Against production
