@@ -1029,6 +1029,35 @@ what makes it fair enough to publish.
 Tier 2 is the opposite: **a station should see its own history without asking.**
 That is the part with obvious operational value and no politics.
 
+### Each station chooses whether its own data is public
+
+Open is the default; it is not imposed. A station that would rather its figures
+were not readable by anyone holding the URL can put **its own** data behind a
+login, and that is the station's decision rather than the platform's.
+
+This matters more than it looks. A platform-wide switch makes one person decide
+for everybody, and whichever way they decide somebody is unhappy. A per-station
+setting means the answer can differ — which is the honest position, because a
+station with a funding fight underway and a station proud of its numbers do not
+have the same interests.
+
+**It does not require roles.** The setting is binary — public, or needs a session
+— and the existing single-admin login already satisfies the second. Roles in §5.5
+become necessary only for the finer question of *whose* session: letting a
+station's own staff see their gated data while other stations cannot. That is a
+later problem, and deferring it does not block this.
+
+**What it does require** is that scoping be honoured on the way out, not only on
+the way in. A station marked private must be absent from the cross-station
+comparison for an anonymous viewer and present for a signed-in one, which means
+the fleet view computes over a different set depending on who is asking. The
+allowlist projection in `redact.js` is the right place for that, and the
+per-station scoping in `streamIdsFor()` is the right seam.
+
+**The one failure to avoid:** a private station appearing in the comparison as a
+gap, a blank row, or a rank with a hole in it. That publishes the fact that it is
+hiding, which is worse than publishing the number. Absent means absent.
+
 ### What this needs that does not exist yet
 
 1. **Per-station read scoping.** Today reads are public or gated wholesale
