@@ -264,6 +264,13 @@ The status document is parsed **tolerantly**: Icecast 2.4.x emits invalid JSON w
 
 The key distinction it draws: **an Icecast mount returning HTTP 404 means the server is healthy and the source encoder dropped off.** That is a studio problem (check the Barix), not a server problem. Because other Pacifica stations share the host, the engine can also confirm whether a fault is KPFT-specific or server-wide — and `stream_start_iso8601` gives the exact source reconnect moment, yielding a true outage duration independent of the polling interval.
 
+### In-app guide
+
+The dashboard carries a guide covering how diagnosis works, what counts as an
+outage, when an email is sent, and how listener impact is measured. Its content
+lives in [`public/guide.js`](public/guide.js) as data — a TOPICS array — rather than
+as markup, so editing it does not mean editing the page.
+
 ### Security
 
 A point-by-point review is in **[`docs/SECURITY.md`](docs/SECURITY.md)** — findings,

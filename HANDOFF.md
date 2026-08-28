@@ -2,7 +2,7 @@
 
 > **Purpose.** Everything a new session, a new developer, or another model needs
 > to pick this up without reading the conversation it came from. Written
-> 2026-08-27, current as of commit `ef83256`.
+> 2026-08-27, current as of commit `91114be`.
 >
 > Read this first, then [`README.md`](README.md) for behaviour,
 > [`docs/DIAGNOSTICS.md`](docs/DIAGNOSTICS.md) for the classifier, and
@@ -10,10 +10,50 @@
 
 ---
 
+## 0. Start here
+
+If you are a new session or a different model picking this up cold, this is the
+shortest path to being useful.
+
+**Orient yourself (2 minutes).**
+
+```bash
+npm test                                   # 168 tests, all should pass
+curl -s https://kpft-icecast.supersoul.top/api/stations | jq   # what it monitors
+curl -s https://kpft-icecast.supersoul.top/api/status   | jq   # how it is doing
+```
+
+**Read, in this order.** §1 (the one idea), §3 (the data flow), §8 (the traps).
+Those three are what stop you breaking something quietly. Everything else can be
+read when you need it.
+
+**The five things most likely to catch you out**, all of which fail *silently*:
+
+| | |
+|---|---|
+| Alerting on probe failure | Reintroducing it undoes the product. §1 |
+| A new aggregate that isn't station-scoped | Reports one station's outages as another's. §8 |
+| Renaming a channel id | Orphans its history rather than moving it. §8 |
+| Adding a module without updating the Dockerfile | Container dies on startup. CI catches it |
+| Assuming a push deployed | Deploys are manual, always |
+
+**How work gets shipped.** Commit, push, then *tell the operator to deploy* — a
+human clicks deploy in Coolify and the build takes 1–5 minutes. Verify against
+production afterwards, and check `oldestEvent` is still `2026-08-04T17:52:53.123Z`
+to prove the data volume survived.
+
+**What this session's operator values**, learned the hard way: no loose ends left
+as asides, corrections stated plainly rather than buried, and claims backed by a
+measurement rather than an inference. If you find yourself writing "worth doing
+later", either do it or record it somewhere durable — do not leave it in prose.
+
+---
+
 ## 1. What this is, and the one idea behind it
 
-A monitor for Icecast audio streams, live at `https://kpft-icecast.supersoul.top`,
-watching KPFT Houston (a Pacifica Foundation station).
+A monitor for Icecast audio streams, live at `https://kpft-icecast.supersoul.top`.
+It began watching one station (KPFT Houston, a Pacifica Foundation station) and
+now watches three, added through its own admin panel.
 
 **The single idea that makes it different from every uptime monitor: it
 distinguishes "our probe failed" from "listeners actually lost audio," and only
@@ -38,8 +78,10 @@ regression, however green the tests are.**
 
 ## 2. Current state
 
-- **Live**, healthy, ~90 listeners, 3 channels, 443 events retained since
-  2026-08-04.
+- **Live and healthy.** 3 stations (KPFT Houston, WPFW Washington DC, KPFK Los
+  Angeles), 5 channels, 1 Icecast host, ~456 events retained since 2026-08-04.
+- **All three stations share one Icecast host**, which is the whole affiliate
+  economics: one snapshot fetch per cycle serves all of them.
 - **168 tests**, `npm test`, Node's built-in runner, no test framework dependency.
 - **Dependencies: express, nodemailer 9, dotenv.** That is the whole list, and it
   is deliberate. Crypto, testing and HTTP are all Node built-ins. Adding a
@@ -112,7 +154,13 @@ silently alters what lands in someone's inbox.
 | `redact.js` | ~130 | **Public projections.** What anonymous callers may see |
 | `safe-url.js` | ~150 | **SSRF guard** for fetching user-supplied URLs |
 | `discover.js` | ~240 | Station discovery: mount → channel grouping, validation |
-| `public/` | ~2900 | Vanilla JS dashboard, history page, login. No framework |
+| `public/app.js` | 633 | Dashboard |
+| `public/history.js` | 1515 | History page, station picker, charts |
+| `public/admin.js` | 363 | Admin panel: add, edit, remove stations |
+| `public/guide.js` | 230 | In-app guide (content lives here as data) |
+| `public/login.js` | ~90 | Two-step sign-in |
+
+No framework, no build step. Every page loads plain files.
 
 Data lives in `DATA_DIR` (`/app/data` in production, **must be a persistent
 volume**): `events.json` (permanent, plus config) and `samples.json` (rolling).
@@ -121,7 +169,8 @@ volume**): `events.json` (permanent, plus config) and `samples.json` (rolling).
 
 ## 5. What changed on 2026-08-27, and why
 
-Seven commits. The reasoning matters more than the diffs.
+Roughly thirty commits over one long session. The reasoning matters more than the
+diffs; the table below covers the ones that changed how the system behaves.
 
 | Commit | Change | Why |
 |---|---|---|
@@ -132,6 +181,13 @@ Seven commits. The reasoning matters more than the diffs.
 | `81fbd54` | Station config moved into the store | An admin panel must change settings without a redeploy |
 | `e7c9a6e` | Admin authentication | `/api/test-alert` sent mail with **no credential at all** |
 | `9657c42` | `auth.js` added to the Dockerfile | The image would have crashed on startup |
+| `16c21cf` | Live configuration reload | A station added through the panel had to be monitored without a redeploy |
+| `2fff761` | Station discovery | Paste one URL, get the channels back — the reason setup is 30 seconds rather than a support call |
+| `44f6528` | Add-station endpoint and admin page | Also guarded overlapping check cycles, which would have corrupted uptime at 33 channels |
+| `7727181` | Station scoping | Adding WPFW made KPFT's uptime silently wrong; every aggregate now takes a station |
+| `d284ae3` | Heatmap and root causes scoped | The first scoping pass missed two panels, found from a screenshot |
+| `ef83256` | Edit and remove stations | Channel ids immutable; history retained on removal |
+| `bb22efa` | Station in the page title and URL | A remembered picker choice meant reading another station's numbers without noticing |
 
 ### Corrections worth inheriting
 
@@ -195,10 +251,12 @@ architecture.
 
 ---
 
-## 6b. Security posture
+---
+
+## 7. Security posture
 
 Reviewed end to end on 2026-08-27; findings and reasoning in
-[`docs/SECURITY.md`](docs/SECURITY.md). Four things to carry forward:
+[`docs/SECURITY.md`](docs/SECURITY.md). Six things to carry forward:
 
 1. **Reading is public; identities are not.** Every public response goes through
    `redact.js`. Station configuration is projected by **allowlist**, so a field
@@ -215,9 +273,11 @@ Reviewed end to end on 2026-08-27; findings and reasoning in
 6. **Any server-side fetch of a user-supplied URL goes through `safe-url.js`.**
    Built ahead of the add-station flow; its tests are that feature's spec.
 
-## 7. Traps
+## 8. Traps
 
 - **Deploys are manual.** Pushing is not shipping. Say so explicitly.
+- **The in-app guide's content lives in `public/guide.js`**, as data rather than
+  markup. Edit the TOPICS array; do not put copy back into index.html.
 - **`STREAMS` in the hosting panel no longer does anything** after first boot.
   The store owns configuration. `CONFIG_RESEED=true` overwrites it.
 - **The Dockerfile lists files individually.** A new module must be added to it
@@ -258,12 +318,12 @@ Reviewed end to end on 2026-08-27; findings and reasoning in
   tested ahead of the feature; its tests are the specification. Calling
   `assertFetchable(url)` before any server-side fetch of a user-supplied address
   is the whole requirement, and redirects must be re-checked the same way.
-- - **Do not trust a green `npm test` as proof of deployability.** The tests pass
+- **Do not trust a green `npm test` as proof of deployability.** The tests pass
   on a machine where every file exists.
 
 ---
 
-## 8. Verifying a change
+## 9. Verifying a change
 
 ```bash
 npm test                                             # 168 tests
@@ -283,7 +343,7 @@ count could be zero — zero survives everything.
 
 ---
 
-## 9. Open questions
+## 10. Open questions
 
 1. Is the customer Pacifica specifically, or a general product with Pacifica as
    first user? Changes the tenancy and auth models.
