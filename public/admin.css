@@ -63,6 +63,7 @@ button:disabled { opacity: .5; cursor: not-allowed; }
 }
 .ch:hover { border-color: var(--primary); }
 .ch.matched { border-color: var(--primary); background: rgba(124,106,239,.08); }
+.tag.alt { background: var(--surface-3); color: var(--text-secondary); }
 .tag { display: inline-block; margin-left: 8px; padding: 1px 7px; border-radius: 20px;
        font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: .04em;
        background: var(--primary); color: #fff; vertical-align: 1px; }
@@ -74,6 +75,18 @@ input::placeholder { color: var(--text-muted); opacity: .55; font-style: italic;
 .ch-meta { color: var(--text-muted); font-size: 12px; margin-top: 3px;
            display: flex; flex-wrap: wrap; gap: 8px; }
 .ch-listeners { color: var(--up); font-weight: 600; }
+
+.more { margin-top: 4px; }
+.more summary {
+  cursor: pointer; padding: 9px 13px; font-size: 12.5px; color: var(--text-muted);
+  background: var(--surface-2); border: 1px dashed var(--surface-3); border-radius: 9px;
+  list-style: none; user-select: none;
+}
+.more summary::-webkit-details-marker { display: none; }
+.more summary::before { content: '▸ '; }
+.more[open] summary::before { content: '▾ '; }
+.more summary:hover { color: var(--text-secondary); border-color: var(--primary); }
+.more-body { display: grid; gap: 8px; margin-top: 8px; }
 
 .fields { display: grid; gap: 14px; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); }
 label { display: block; font-size: 12px; font-weight: 500; color: var(--text-secondary); }

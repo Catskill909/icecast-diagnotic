@@ -213,3 +213,54 @@ test('with no origin it falls back to the announced URL rather than breaking', (
   const c = suggestChannels(Object.values(snapshot().mounts)).find((x) => x.id === 'live');
   assert.ok(c.url, 'a URL is still produced');
 });
+
+// ── One stream is the normal case ───────────────────────────────────────────
+test('a single-stream station sees ONE channel, not the whole server', () => {
+  // Twenty-two of the twenty-eight affiliates on the shared Pacifica host are
+  // single-channel. Showing all eight and asking someone to find theirs made
+  // the normal case look like a puzzle.
+  const s = summarise(snapshot(), '/wpfw_128', 'https://streams.pacifica.org:9000');
+  const front = s.channels.filter((c) => c.matched || c.sameStation);
+  assert.equal(front.length, 1, 'WPFW has one stream and should present as one');
+  assert.equal(front[0].id, 'wpfw');
+});
+
+test('a multi-channel station gets its siblings surfaced by call sign', () => {
+  // KPFT is the exception, and burying its HD2 among four other stations'
+  // streams would make the exception needlessly hard.
+  const s = summarise(snapshot(), '/live_128', 'https://streams.pacifica.org:9000');
+  assert.equal(s.callSign, 'KPFT');
+  const front = s.channels.filter((c) => c.matched || c.sameStation);
+  assert.ok(front.length >= 2, 'KPFT Main and HD2 belong together');
+  assert.ok(front.some((c) => c.id === 'hd3' && c.sameStation), 'HD2 surfaced as a sibling');
+});
+
+test('a sibling is surfaced but NOT pre-selected', () => {
+  // Surfacing says "this might be yours". Ticking it would claim so.
+  const s = summarise(snapshot(), '/live_128', 'https://streams.pacifica.org:9000');
+  const sib = s.channels.find((c) => c.sameStation);
+  assert.equal(sib.matched, undefined, 'only the pasted channel is the confirmed one');
+});
+
+test('another station on the same server is NEVER treated as a sibling', () => {
+  // The failure that would actually matter: attaching someone else's stream.
+  const s = summarise(snapshot(), '/wpfw_128', 'https://streams.pacifica.org:9000');
+  for (const c of s.channels) {
+    if (c.matched) continue;
+    assert.notEqual(c.sameStation, true, `${c.name} must not be treated as WPFW's`);
+  }
+});
+
+test('a channel with no call sign in its name is left alone', () => {
+  // KPFT's /classic_country announces "Unspecified name". A false negative costs
+  // one click; a false positive attaches another station's stream to yours.
+  const s = summarise(snapshot(), '/live_128', 'https://streams.pacifica.org:9000');
+  const cc = s.channels.find((c) => c.id === 'classic-country');
+  assert.notEqual(cc.sameStation, true);
+});
+
+test('with no pasted mount there is no call sign and no sibling guessing', () => {
+  const s = summarise(snapshot(), null, 'https://streams.pacifica.org:9000');
+  assert.equal(s.callSign, null);
+  assert.ok(!s.channels.some((c) => c.sameStation));
+});

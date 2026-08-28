@@ -93,24 +93,54 @@
       `, grouped into <strong>${esc(d.channelCount)}</strong> channel${d.channelCount === 1 ? '' : 's'}.` +
       (d.repairedJson ? ' <em>That server emits slightly malformed JSON; it was repaired.</em>' : '');
 
-    // On a shared host most of what was found belongs to other stations, so
-    // nothing is pre-selected and the point is stated rather than implied.
-    $('shared-note').textContent = d.sharedHost
-      ? 'This server carries several stations. Tick only the channels that belong to yours.'
-      : 'Tick the channels to monitor.';
-
-    $('channels').innerHTML = (d.channels || []).map((c, i) => `
+    // MOST STATIONS HAVE ONE STREAM. Twenty-two of the twenty-eight affiliates
+    // on the shared Pacifica host are single-channel; KPFT's three is the
+    // exception. So the default shows the one channel that was asked for, and
+    // everything else on the server — which belongs to other stations — is
+    // folded away behind a disclosure. The first version showed all eight and
+    // made the normal case look like a puzzle.
+    const all = d.channels || [];
+    // The pasted channel, plus anything sharing its call sign — KPFT Main and
+    // KPFT HD2 belong together and should not be separated by four other
+    // stations' streams.
+    const mine = all.filter((c) => c.matched || c.sameStation);
+    const others = all.filter((c) => !c.matched && !c.sameStation);
+    const row = (c, i) => `
       <label class="ch${c.matched ? ' matched' : ''}">
         <input type="checkbox" data-i="${i}" ${c.matched || !d.sharedHost ? 'checked' : ''}>
         <span class="ch-body">
-          <span class="ch-name">${esc(c.name)}${c.matched ? '<span class="tag">the URL you pasted</span>' : ''}</span>
+          <span class="ch-name">${esc(c.name)}${
+            c.matched ? '<span class="tag">the URL you pasted</span>'
+            : c.sameStation ? '<span class="tag alt">same call sign — also yours?</span>' : ''
+          }</span>
           <span class="ch-meta">
             <span class="ch-listeners">${esc(c.listeners)} listening</span>
             <span>${esc(c.variants)} bitrate${c.variants === 1 ? '' : 's'}</span>
             <span>${esc((c.mounts || []).join('  '))}</span>
           </span>
         </span>
-      </label>`).join('');
+      </label>`;
+    const indexOf = (c) => all.indexOf(c);
+
+    if (mine.length) {
+      $('shared-note').textContent = mine.length > 1
+        ? 'The stream you pasted, plus others on this server sharing its call sign. Tick any that are also yours.'
+        : 'This is the stream you pasted. Most stations have exactly one.';
+      $('channels').innerHTML =
+        mine.map((c) => row(c, indexOf(c))).join('') +
+        (others.length ? `
+          <details class="more">
+            <summary>${others.length} other channel${others.length === 1 ? '' : 's'} on this server — other stations, most likely</summary>
+            <div class="more-body">${others.map((c) => row(c, indexOf(c))).join('')}</div>
+          </details>` : '');
+    } else {
+      // A status URL was pasted rather than a stream, so there is nothing to
+      // single out and the whole list is the answer.
+      $('shared-note').textContent = d.sharedHost
+        ? 'This server carries several stations. Tick only the channels that belong to yours.'
+        : 'Tick the channels to monitor.';
+      $('channels').innerHTML = all.map((c, i) => row(c, i)).join('');
+    }
 
     // Fields carry REAL values, not placeholders that look like values. The
     // first version of this form used realistic placeholder text and was

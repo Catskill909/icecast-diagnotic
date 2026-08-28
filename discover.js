@@ -125,8 +125,30 @@ function summarise(snapshot, pastedPath, origin) {
     }
   }
 
+  // Channels that look like they belong to the SAME station as the one pasted.
+  //
+  // Most stations have one stream — twenty-two of the twenty-eight affiliates on
+  // the shared Pacifica host — so the pasted channel is usually the whole story.
+  // KPFT's three are the exception, and burying its HD2 among four other
+  // stations' streams would make the exception needlessly hard.
+  //
+  // The signal is the call sign at the start of the metadata name, which is
+  // conservative on purpose: it surfaces a likely sibling without claiming one.
+  // KPFT's /classic_country announces "Unspecified name" and so is not matched —
+  // a false negative costs one click, a false positive attaches another
+  // station's stream to yours.
+  const callSign = matched ? (String(matched.name || '').match(/^[A-Z]{3,5}\b/) || [])[0] : null;
+  if (callSign) {
+    for (const c of channels) {
+      if (c === matched) continue;
+      const sign = (String(c.name || '').match(/^[A-Z]{3,5}\b/) || [])[0];
+      if (sign && sign === callSign) c.sameStation = true;
+    }
+  }
+
   return {
     matchedChannelId: matched ? matched.id : null,
+    callSign: callSign || null,
     reachable: !!snapshot?.reachable,
     serverId: snapshot?.serverId || null,
     host: snapshot?.host || null,
