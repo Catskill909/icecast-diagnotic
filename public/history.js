@@ -8,6 +8,52 @@
   const $ = (sel) => document.querySelector(sel);
   const PAGE_SIZE = 60;
 
+  /* ── Station scope ─────────────────────────────────────────────────────────
+     Every figure on this page is an aggregate, and with more than one station
+     an unscoped aggregate is not merely broader — it is wrong. A GM reading
+     "uptime" would be reading their own outages plus somebody else's.
+     Absent means all stations, which is what a fleet view wants.            */
+  let stationId = null;
+  try { stationId = localStorage.getItem('historyStationId') || null; } catch (e) { /* private mode */ }
+  const scope = () => (stationId ? '&stationId=' + encodeURIComponent(stationId) : '');
+
+  async function initStationPicker() {
+    let stations = [];
+    try {
+      const r = await fetch('/api/stations/list');
+      stations = (await r.json()).stations || [];
+    } catch (e) { return; }
+
+    // A picker with one option is furniture, not a control.
+    if (stations.length < 2) return;
+
+    // A remembered station that has since been removed would scope every figure
+    // on the page to nothing, silently. Fall back to all stations.
+    if (stationId && !stations.some((s) => s.id === stationId)) stationId = null;
+
+    const sel = document.getElementById('station-select');
+    const opts = ['<option value="">All stations</option>'];
+    for (const s of stations) {
+      const o = document.createElement('option');
+      o.value = s.id;
+      o.textContent = s.name;          // textContent, so a station name cannot inject markup
+      opts.push(o.outerHTML);
+    }
+    sel.innerHTML = opts.join('');
+    sel.value = stationId || '';
+    document.getElementById('station-picker').classList.remove('hidden');
+
+    sel.addEventListener('change', () => {
+      stationId = sel.value || null;
+      try {
+        if (stationId) localStorage.setItem('historyStationId', stationId);
+        else localStorage.removeItem('historyStationId');
+      } catch (e) { /* private mode */ }
+      reload();
+    });
+  }
+
+
   let allEvents = [];      // everything fetched for the current range
   let filtered = [];       // after client-side filters
   let rendered = 0;
@@ -36,6 +82,9 @@
   // ── Boot ────────────────────────────────────────────────────────────────
   async function boot() {
     try {
+      // Before reload(): the scope has to be known before the first fetch, or the
+      // page renders every station once and then corrects itself.
+      await initStationPicker();
       await reload();
       $('#loading').style.display = 'none';
       $('#history-view').style.display = 'block';
@@ -56,13 +105,13 @@
     const days = rangeDays();
     const isAllTime = $('#f-range').value === 'all';
     const [statsRes, eventsRes, uptimeRes] = await Promise.all([
-      fetch(`/api/stats?days=${days}`).then((r) => r.json()),
-      fetch(`/api/events?days=${days}&limit=2000`).then((r) => r.json()),
+      fetch(`/api/stats?days=${days}${scope()}`).then((r) => r.json()),
+      fetch(`/api/events?days=${days}&limit=2000${scope()}`).then((r) => r.json()),
       // Supplementary — the incident record must never depend on it. A monitor
       // mid-deploy serves the new page from a process that lacks this route,
       // and a rejection here would take every summary tile, the heatmap and
       // the timeline down with it.
-      fetch(`/api/uptime?days=${days}`)
+      fetch(`/api/uptime?days=${days}${scope()}`)
         .then((r) => (r.ok ? r.json() : null))
         .catch(() => null),
     ]);
@@ -77,8 +126,8 @@
     // Same defensive contract as /api/uptime: audience is supplementary, and a
     // monitor mid-deploy may serve this page from a process without the route.
     [lastListeners, lastRollup] = await Promise.all([
-      fetch(`/api/listeners?days=${days}`).then((r) => (r.ok ? r.json() : null)).catch(() => null),
-      fetch(`/api/rollup?days=${days}`).then((r) => (r.ok ? r.json() : null)).catch(() => null),
+      fetch(`/api/listeners?days=${days}${scope()}`).then((r) => (r.ok ? r.json() : null)).catch(() => null),
+      fetch(`/api/rollup?days=${days}${scope()}`).then((r) => (r.ok ? r.json() : null)).catch(() => null),
     ]);
 
     populateStreamFilter();

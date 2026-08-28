@@ -44,6 +44,12 @@
         </div>
       </div>
       <div class="header-right">
+        <!-- Hidden until there is more than one station: a picker with one
+             option is furniture, not a control. -->
+        <label class="station-picker hidden" id="station-picker">
+          <span class="material-symbols-outlined">radio</span>
+          <select id="station-select" aria-label="Station"></select>
+        </label>
         <div class="config-badge" id="storage-badge" title="Storage">
           <span class="material-symbols-outlined">database</span>
           <span id="storage-text">—</span>

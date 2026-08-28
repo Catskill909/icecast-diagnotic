@@ -1082,3 +1082,19 @@ a.help-btn { text-decoration: none; }
   font-weight: 700;
   font-variant-numeric: tabular-nums;
 }
+
+/* ── Station picker ─────────────────────────────────────────────────────────
+   Hidden until there is more than one station: a picker with one option is
+   furniture, not a control. */
+.station-picker {
+  display: inline-flex; align-items: center; gap: 6px;
+  background: var(--surface-2); border: 1px solid var(--surface-3);
+  border-radius: 9px; padding: 5px 10px 5px 11px;
+}
+.station-picker .material-symbols-outlined { font-size: 17px; color: var(--text-muted); }
+.station-picker select {
+  background: none; border: none; outline: none; color: var(--text-primary);
+  font: inherit; font-size: 13px; font-weight: 600; cursor: pointer; padding-right: 2px;
+}
+.station-picker select option { background: var(--surface-2); color: var(--text-primary); }
+.station-picker.hidden { display: none; }
