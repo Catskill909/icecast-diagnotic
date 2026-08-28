@@ -345,13 +345,20 @@ function findOpenOutage(streamId) {
 
 function getEvents(opts = {}) {
   const {
-    streamId, type, severity, cause, scope,
+    streamId, streamIds, type, severity, cause, scope,
     since, until, emailed, limit, offset = 0, order = 'desc',
   } = opts;
 
   let out = events;
 
   if (streamId) out = out.filter((e) => e.streamId === streamId);
+  // A whole station's worth of streams. Filtered here rather than by the caller
+  // so limit and offset still paginate over the right set — trimming afterwards
+  // would page through everyone's events and show a short page of one station's.
+  if (Array.isArray(streamIds)) {
+    const keep = new Set(streamIds);
+    out = out.filter((e) => keep.has(e.streamId));
+  }
   if (type) out = out.filter((e) => e.type === type);
   if (severity) out = out.filter((e) => e.severity === severity);
   if (cause) out = out.filter((e) => e.diagnosis?.cause === cause);

@@ -1496,17 +1496,22 @@ function getRollups(streamId) { return store.getRollups(streamId); }
  * Both come from one call so a chart can never render a series and its overlay
  * from two different moments in time.
  */
-function getListeners(windowMs, bucketMs) {
-  const ids = streams.map((s) => s.id);
+function getListeners(windowMs, bucketMs, stationId) {
+  const ids = streamIdsFor(stationId);
+  const inScope = new Set(ids);
+  const scoped = streams.filter((s) => inScope.has(s.id));
   const cutoff = Date.now() - windowMs;
 
   const series = {};
-  for (const s of streams) series[s.id] = store.getListenerSeries(s.id, windowMs, bucketMs);
+  for (const s of scoped) series[s.id] = store.getListenerSeries(s.id, windowMs, bucketMs);
 
   const outages = store
     .getEvents({ limit: Number.MAX_SAFE_INTEGER })
     .events.filter((e) => {
       if (e.type === 'up' || !e.durationMs) return false;
+      // Scoped too: an outage overlay from another station drawn across this
+      // station's audience would be worse than no overlay at all.
+      if (!inScope.has(e.streamId)) return false;
       return new Date(e.timestamp).getTime() > cutoff;
     })
     .map((e) => ({
@@ -1538,8 +1543,34 @@ function getListeners(windowMs, bucketMs) {
  * Period totals for the Overview line and the weekly roundup, with stream names
  * attached — the store keys everything by id and has no idea what they are called.
  */
-function getPeriodRollup(windowMs) {
-  const rollup = store.getPeriodRollup(streams.map((s) => s.id), windowMs);
+/**
+ * The stream ids an aggregate should be computed over.
+ *
+ * With one station this was always "all of them", and every figure hardcoded
+ * that. With two it stopped being true, quietly: uptime blended both stations,
+ * so a GM's number included another station's outages and nothing said so.
+ *
+ * An unknown station id returns nothing rather than everything. Falling back to
+ * the full set would answer a question about one station with a figure covering
+ * all of them — the exact failure this exists to prevent.
+ */
+function streamIdsFor(stationId) {
+  if (!stationId) return streams.map((s) => s.id);
+  return streams.filter((s) => s.stationId === stationId).map((s) => s.id);
+}
+
+/** The stations currently configured, for a station picker. */
+function getStations() {
+  const seen = new Map();
+  for (const s of streams) {
+    if (!s.stationId || seen.has(s.stationId)) continue;
+    seen.set(s.stationId, { id: s.stationId, name: s.stationName || s.stationId });
+  }
+  return [...seen.values()];
+}
+
+function getPeriodRollup(windowMs, stationId) {
+  const rollup = store.getPeriodRollup(streamIdsFor(stationId), windowMs);
   const nameOf = (id) => streams.find((s) => s.id === id)?.name || id;
   return {
     ...rollup,
@@ -1553,11 +1584,11 @@ function getPeriodRollup(windowMs) {
   };
 }
 
-function getSummary(windowMs) { return store.getSummary(streams.map((s) => s.id), windowMs); }
-function getOverallUptime(windowMs) { return store.getOverallUptime(streams.map((s) => s.id), windowMs); }
+function getSummary(windowMs, stationId) { return store.getSummary(streamIdsFor(stationId), windowMs); }
+function getOverallUptime(windowMs, stationId) { return store.getOverallUptime(streamIdsFor(stationId), windowMs); }
 /** Uptime as the audience experienced it — probe-only failures excluded. */
-function getAudioUptime(windowMs) { return store.getAudioUptime(streams.map((s) => s.id), windowMs); }
-function getCoverageStart() { return store.getCoverageStart(streams.map((s) => s.id)); }
+function getAudioUptime(windowMs, stationId) { return store.getAudioUptime(streamIdsFor(stationId), windowMs); }
+function getCoverageStart(stationId) { return store.getCoverageStart(streamIdsFor(stationId)); }
 function getDailyBuckets(days) { return store.getDailyBuckets(days, STATION_TZ); }
 function getCauseBreakdown(windowMs) { return store.getCauseBreakdown(windowMs); }
 function getStorageInfo() { return store.getStorageInfo(); }
@@ -1966,6 +1997,7 @@ module.exports = {
   getEvents, getSamples, getRollups, getListeners, getSummary, getOverallUptime, getAudioUptime, getCoverageStart,
   getDailyBuckets, getCauseBreakdown, getStorageInfo, getSnapshot,
   getStationConfig: () => store.getStationConfig(),
+  getStations, streamIdsFor,
   reloadConfig,
   saveStationConfig,
   abandonEpisode,

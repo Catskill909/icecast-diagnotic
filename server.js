@@ -168,6 +168,17 @@ app.get('/api/me', (req, res) => {
   });
 });
 
+// Every aggregate is scoped by station. Absent means "all stations", which is
+// what a fleet view wants and what a single-station deployment always got.
+const stationOf = (req) => (typeof req.query.stationId === 'string' && req.query.stationId.trim())
+  ? req.query.stationId.trim()
+  : undefined;
+
+// The stations available to a picker, cheap enough to poll.
+app.get('/api/stations/list', (req, res) => {
+  res.json({ stations: monitor.getStations() });
+});
+
 // ── API Endpoints ───────────────────────────────────────────────────────────
 app.get('/api/status', (req, res) => {
   res.json({
@@ -316,8 +327,12 @@ app.get('/api/events', (req, res) => {
     }
   }
 
+  const station = stationOf(req);
   const result = monitor.getEvents({
     streamId: q.streamId || undefined,
+    // Scoped before paging, not after: trimming afterwards would page through
+    // every station's events and return a short page of one station's.
+    streamIds: station ? monitor.streamIdsFor(station) : undefined,
     type: q.type || undefined,
     severity: q.severity || undefined,
     cause: q.cause || undefined,
@@ -351,12 +366,16 @@ app.get('/api/stats', (req, res) => {
 
   res.json({
     windowDays: days,
-    summary: monitor.getSummary(windowMs),
+    stationId: stationOf(req) || null,
+    summary: monitor.getSummary(windowMs, stationOf(req)),
     daily: monitor.getDailyBuckets(days),
     dailyTimeZone: monitor.getConfig().weeklyRoundup.timezone,
     causes: monitor.getCauseBreakdown(windowMs),
     storage: monitor.getStorageInfo(),
-    streams: monitor.getStreams().map((s) => ({ id: s.id, name: s.name, url: s.url })),
+    stations: monitor.getStations(),
+    streams: monitor.getStreams()
+      .filter((s) => !stationOf(req) || s.stationId === stationOf(req))
+      .map((s) => ({ id: s.id, name: s.name, url: s.url, stationId: s.stationId })),
     generatedAt: new Date().toISOString(),
   });
 });
@@ -368,7 +387,7 @@ app.get('/api/stats', (req, res) => {
 app.get('/api/uptime', (req, res) => {
   const days = Math.min(Math.max(parseInt(req.query.days, 10) || 1, 1), 3650);
   const windowMs = days * 24 * 60 * 60 * 1000;
-  const coverageStart = monitor.getCoverageStart();
+  const coverageStart = monitor.getCoverageStart(stationOf(req));
   const coverageDays = coverageStart
     ? Math.round(((Date.now() - new Date(coverageStart).getTime()) / (24 * 60 * 60 * 1000)) * 100) / 100
     : 0;
@@ -378,8 +397,8 @@ app.get('/api/uptime', (req, res) => {
     // Uptime as the audience experienced it: failures where Icecast kept
     // serving the mount are not counted against the station. `probeUptime` is
     // the older sample-based figure, kept for comparison.
-    uptime: monitor.getAudioUptime(windowMs),
-    probeUptime: monitor.getOverallUptime(windowMs),
+    uptime: monitor.getAudioUptime(windowMs, stationOf(req)),
+    probeUptime: monitor.getOverallUptime(windowMs, stationOf(req)),
     coverageStart,
     coverageDays,
   });
@@ -391,7 +410,7 @@ app.get('/api/uptime', (req, res) => {
 // so the dashboard and the inbox can never quote different figures.
 app.get('/api/rollup', (req, res) => {
   const days = Math.min(Math.max(parseFloat(req.query.days) || 7, 0.04), 3650);
-  res.json(monitor.getPeriodRollup(days * 24 * 60 * 60 * 1000));
+  res.json(monitor.getPeriodRollup(days * 24 * 60 * 60 * 1000, stationOf(req)));
 });
 
 // ── Per-stream Telemetry (raw samples + hourly rollups) ─────────────────────
@@ -414,6 +433,7 @@ app.get('/api/listeners', (req, res) => {
     monitor.getListeners(
       days * 24 * 60 * 60 * 1000,
       Number.isFinite(bucketMinutes) && bucketMinutes > 0 ? bucketMinutes * 60 * 1000 : undefined,
+      stationOf(req),
     ),
   );
 });
