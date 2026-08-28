@@ -151,6 +151,10 @@ let streams = [];
 let streamStatus = {};
 let silenceState = {};
 let episodes = {};        // { [streamId]: { eventId, startedAt, alerted, severity } }
+// Kept apart from `episodes` deliberately. A degraded channel is still
+// playing, so it must not close, reopen, or otherwise disturb the outage
+// episode for the same stream — the two can legitimately overlap.
+let degradedEpisodes = {};  // { [streamId]: { eventId, startedAt, missing, listenersBefore } }
 let snapshot = null;      // latest Icecast snapshot
 let prevSnapshot = null;
 let intervalHandle = null;
@@ -618,6 +622,128 @@ async function resolveDeadAir(stream, result, timestamp) {
   store.saveEvents();
 }
 
+/**
+ * Opens, holds, and closes the degradation episode for one channel.
+ *
+ * A degradation is recorded whenever Icecast stops listing one of a channel's
+ * mounts while still listing the others. Recording is decoupled from notifying,
+ * exactly as it is for outages: the event is always written, and the
+ * listener-impact verdict on it decides whether anyone should be told. A
+ * variant nobody was listening to is a real fact about the encoder and a
+ * non-event for the audience, and the record should be able to say both.
+ *
+ * No email is sent from here. A missing variant leaves the channel playing for
+ * most of its audience, which does not meet the bar the alert policy sets for
+ * waking someone up — see the listener-impact gate at the top of this file.
+ *
+ * One event spans the whole episode. A variant that has been down for a week is
+ * one degradation that has not ended yet, not ten thousand check cycles' worth
+ * of them.
+ */
+function trackVariantDegradation(stream, degradation, timestamp) {
+  const open = degradedEpisodes[stream.id];
+
+  if (degradation.degraded) {
+    if (open) {
+      // Held open. The set of missing mounts can grow while it runs — a second
+      // variant dropping is the same degradation getting worse, and losing that
+      // would leave the event describing only the first mount to go.
+      const seen = new Set(open.missing);
+      const added = degradation.missing.map((m) => m.path).filter((p) => !seen.has(p));
+      if (added.length) {
+        open.missing = [...open.missing, ...added];
+        // Newly-missing variants bring their own audience with them.
+        open.listenersBefore += degradation.missing
+          .filter((m) => added.includes(m.path))
+          .reduce((sum, m) => sum + (m.listenersBefore || 0), 0);
+        store.updateEvent(open.eventId, {
+          message: degradationMessage(stream, open.missing, degradation.total),
+          detail: { ...open.detail, missing: open.missing, listenersBefore: open.listenersBefore },
+          lastCheckAt: timestamp,
+        });
+      }
+      return;
+    }
+
+    const missing = degradation.missing.map((m) => m.path);
+    // Frozen now, while the previous snapshot still remembers the mount. By the
+    // next cycle the count is gone for good — see channelDegradation().
+    const listenersBefore = degradation.listenersBefore;
+    const impact = degradation.listenersKnown
+      ? (listenersBefore > 0 ? 'confirmed' : 'none')
+      // The variant was already missing when we started watching, so no listener
+      // count for it was ever observed. 'unknown' is the honest answer and, per
+      // the convention throughout this codebase, groups with 'confirmed' rather
+      // than being quietly written off.
+      : 'unknown';
+
+    const detail = {
+      present: degradation.present,
+      total: degradation.total,
+      missing,
+      listenersBefore,
+      listenersKnown: degradation.listenersKnown,
+    };
+
+    const event = store.addEvent({
+      timestamp,
+      streamId: stream.id,
+      streamName: stream.name,
+      type: 'degraded',
+      severity: 'degraded',
+      confirmed: true,   // Icecast's own inventory is the witness; no threshold to pass.
+      scope: 'stream',
+      message: degradationMessage(stream, missing, degradation.total),
+      detail,
+      diagnosis: {
+        causeLabel: 'Mount missing from Icecast',
+        listenerImpact: impact,
+        scope: 'stream',
+      },
+      email: {
+        attempted: false,
+        sent: null,
+        reason: 'channel still serving its remaining mounts — recorded, not alerted',
+      },
+    });
+
+    degradedEpisodes[stream.id] = {
+      eventId: event.id,
+      startedAt: timestamp,
+      missing,
+      listenersBefore,
+      detail,
+    };
+
+    console.warn(
+      `[Monitor] ◐ ${stream.name} degraded — serving ${degradation.present}/${degradation.total} mounts, ` +
+      `missing ${missing.join(' ')}` +
+      (degradation.listenersKnown ? ` (${listenersBefore} listener(s) were on them)` : ' (prior audience unknown)'),
+    );
+    return;
+  }
+
+  // Not degraded. Close any open episode — including when the channel has gone
+  // fully down, where the outage event is the truthful record of what happened
+  // and a still-open degradation alongside it would double-count the fault.
+  if (open) {
+    const durationMs = new Date(timestamp) - new Date(open.startedAt);
+    store.updateEvent(open.eventId, {
+      resolvedAt: timestamp,
+      durationMs,
+      durationLabel: diagnose.fmtDuration(durationMs),
+    });
+    delete degradedEpisodes[stream.id];
+    console.log(`[Monitor] ✓ ${stream.name} serving all mounts again after ${diagnose.fmtDuration(durationMs)}`);
+  }
+}
+
+/** One sentence naming what is missing — the message an operator acts on. */
+function degradationMessage(stream, missing, total) {
+  return `${stream.name} is serving ${total - missing.length} of ${total} mounts` +
+    ` — Icecast is not listing ${missing.join(', ')}`;
+}
+
 // ── Run Check Cycle ─────────────────────────────────────────────────────────
 async function runChecks() {
   // Cycles must not overlap. Each one writes a sample per channel stamped with
@@ -670,6 +796,9 @@ async function runChecksInner() {
     const mount = diagnose.findMount(snap, stream);
     // The channel as a whole: every bitrate variant, summed.
     const audience = diagnose.channelAudience(snap, stream);
+    // Whether the channel is serving all of its variants, which the probe
+    // cannot see: it only ever asks the primary mount.
+    const degradation = diagnose.channelDegradation(snap, prevSnapshot, stream);
 
     // ── Silence tracking (only meaningful while the stream is reachable) ────
     const st = silenceState[stream.id];
@@ -729,6 +858,11 @@ async function runChecksInner() {
       // still playing for most of its audience.
       variantsPresent: audience.present,
       variantsTotal: audience.total,
+      // The paths themselves, so the dashboard can name what is missing rather
+      // than leaving an operator to work out which of three mounts "2 of 3" is.
+      // Only meaningful while Icecast is reachable — see channelDegradation().
+      missingMounts: snap.reachable ? audience.missing : prev.missingMounts || [],
+      degraded: degradation.degraded,
       title: mount?.title || prev.title || '',
       bitrate: mount?.bitrate || prev.bitrate || 128,
       streamStart: mount?.streamStart || prev.streamStart || '',
@@ -746,6 +880,13 @@ async function runChecksInner() {
       error: result.error,
       errorCode: result.errorCode || null,
     });
+
+    // ── Variant degradation ────────────────────────────────────────────────
+    // Independent of the outage episode below: a channel can be degraded while
+    // it is up, and a channel that goes fully down is an outage, not a
+    // degradation. Ordered before the outage block only so that a channel
+    // failing outright closes its degradation episode first.
+    trackVariantDegradation(stream, degradation, timestamp);
 
     // ── Episode transitions ────────────────────────────────────────────────
     if (isDown) {
@@ -2071,4 +2212,5 @@ module.exports = {
   abandonEpisode,
   // Exported for tests.
   normaliseStreams, normaliseMounts, buildDefaultConfig, flattenChannels,
+  trackVariantDegradation,
 };

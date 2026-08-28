@@ -654,14 +654,60 @@ function channelAudience(snapshot, stream) {
   let listeners = 0;
   let peak = 0;
   let present = 0;
+  const missing = [];
   for (const p of paths) {
     const m = snapshot?.mounts?.[p];
-    if (!m) continue;
+    if (!m) { missing.push(p); continue; }
     present += 1;
     listeners += m.listeners || 0;
     peak += m.listenerPeak || 0;
   }
-  return { listeners, peak, present, total: paths.length };
+  // Named, not just counted: "2 of 3 mounts" tells an operator something is
+  // wrong, "/live_64 is not listed" tells them which encoder to restart.
+  return { listeners, peak, present, total: paths.length, missing };
+}
+
+/**
+ * A channel that is playing, but not on every mount it publishes.
+ *
+ * The probe watches ONE mount per channel — the highest bitrate — so a variant
+ * dropping on its own is invisible to it: the channel answers, the card reads
+ * ONLINE, and the listeners on the dropped variant are off the air with nothing
+ * recorded. On this host that is not a hypothetical share of the audience:
+ * /live_64 carries 22 of KPFT Main's 59 listeners.
+ *
+ * Icecast's own inventory is the witness. A mount it no longer lists is not
+ * being served to anyone, which needs no probe to establish.
+ *
+ * `listenersBefore` is read from the PREVIOUS snapshot, because the current one
+ * no longer has the mount to report on — a vanished mount reports no listeners
+ * precisely because nobody can reach it. It is therefore only knowable in the
+ * cycle the variant disappears, which is why the caller freezes it on the
+ * episode rather than re-deriving it later.
+ */
+function channelDegradation(snapshot, prevSnapshot, stream) {
+  const audience = channelAudience(snapshot, stream);
+  const missing = audience.missing.map((path) => ({
+    path,
+    listenersBefore: prevSnapshot?.mounts?.[path]?.listeners ?? null,
+  }));
+
+  // present === 0 is not degradation, it is the channel being off air, and the
+  // outage path already owns that. An unreachable Icecast also lands here: we
+  // cannot see any mount, which is not evidence that any of them are gone.
+  const degraded = !!snapshot?.reachable && audience.present > 0 && audience.present < audience.total;
+
+  return {
+    degraded,
+    present: audience.present,
+    total: audience.total,
+    missing,
+    // Summed over the missing variants only. Null counts contribute nothing:
+    // an unknown headcount is not a measured zero, and `listenersKnown` says
+    // which of the two this is.
+    listenersBefore: missing.reduce((sum, m) => sum + (m.listenersBefore || 0), 0),
+    listenersKnown: missing.some((m) => m.listenersBefore != null),
+  };
 }
 
 /** Exact-pathname mount lookup. Substring matching would confuse /HD3 with /HD3_128. */
@@ -979,6 +1025,7 @@ module.exports = {
   fetchIcecastSnapshot,
   channelMountPaths,
   channelAudience,
+  channelDegradation,
   parseIcecastStatus,
   repairIcecastJson,
   classify,

@@ -111,6 +111,7 @@
     probe_error:  { icon: 'sensors_off',  label: 'Probe Anomaly' },
     blip:         { icon: 'bolt',         label: 'Blip (legacy)' },
     dead_air:     { icon: 'volume_off',   label: 'Dead Air' },
+    degraded:     { icon: 'signal_cellular_alt_2_bar', label: 'Degraded Channel' },
     recovery:     { icon: 'check_circle', label: 'Recovered' },
   };
 
@@ -307,7 +308,7 @@
     // exposes every listener-impacting stream record, including brief ones.
     const CAP = 8;
     const impactful = allEvents
-      .filter((e) => e.type !== 'up' && costListeners(e))
+      .filter((e) => isFailureEvent(e) && costListeners(e))
       .map((e) => ({
         timestamp: e.timestamp,
         streams: [e.streamName || e.streamId],
@@ -1064,6 +1065,20 @@
     return (e.audience?.listenerImpact ?? e.diagnosis?.listenerImpact ?? 'unknown') !== 'none';
   }
 
+  /**
+   * Is this event a failure of the channel itself? Mirrors store.isFailureEvent
+   * — a 'degraded' event is a channel that kept playing while one bitrate
+   * variant went missing, so it is a real fault but not downtime, and counting
+   * it in the failure totals would disagree with the server's own rollup.
+   *
+   * TOTALS only. The per-event rendering below deliberately keeps testing
+   * `type !== 'up'`, because a degraded event does have a duration, a cause and
+   * an ongoing/resolved state, and should show all three.
+   */
+  function isFailureEvent(e) {
+    return e.type !== 'up' && e.type !== 'degraded';
+  }
+
   function renderSummary() {
     const UNCONFIRMED = new Set(['brief_outage', 'probe_error', 'blip']);
     // Overview figures are governed only by the range control above them. The
@@ -1077,7 +1092,7 @@
     // drop the mount, and confirmed outages Icecast proved were harmless — so
     // counting by severity put real outages under a heading the station reads
     // as "ignore me".
-    const failures = summaryEvents.filter((e) => e.type !== 'up');
+    const failures = summaryEvents.filter(isFailureEvent);
     const felt = failures.filter(costListeners);
     const unfelt = failures.filter((e) => !costListeners(e));
     // Sustained enough that the audience is gone, vs a gap the player rode out.

@@ -780,6 +780,7 @@ a.help-btn { text-decoration: none; }
 .evt-icon.brief_outage { background: rgba(234, 179, 8, 0.1); color: var(--blip); }
 .evt-icon.probe_error { background: var(--surface-3); color: var(--text-tertiary); }
 .evt-icon.dead_air { background: var(--warn-surface); color: var(--warn); }
+.evt-icon.degraded { background: var(--warn-surface); color: var(--warn); }
 .evt-icon.recovery { background: var(--status-up-surface); color: var(--status-up); }
 
 .evt-time {
@@ -824,6 +825,7 @@ a.help-btn { text-decoration: none; }
    so they must not compete for attention with events that did. */
 .badge.probe_error { background: var(--surface-3); color: var(--text-tertiary); }
 .badge.dead_air { background: var(--warn-surface); color: var(--warn); }
+.badge.degraded { background: var(--warn-surface); color: var(--warn); }
 .badge.recovery { background: var(--status-up-surface); color: var(--status-up); }
 .badge.scope-server { background: rgba(239, 68, 68, 0.15); color: #fca5a5; }
 .badge.scope-station { background: rgba(245, 158, 11, 0.12); color: #fcd34d; }

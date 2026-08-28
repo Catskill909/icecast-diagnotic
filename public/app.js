@@ -278,11 +278,32 @@
         silenceBadgeHtml = `<div class="silence-badge">⚠️ Silence Detected</div>`;
       }
 
+      // A channel is published as several mounts — one per bitrate — and the
+      // probe only ever asks the highest one. So a variant can vanish while the
+      // card still reads ONLINE, taking its listeners off the air silently. This
+      // is the only place that state is visible, so it names the missing mount
+      // rather than just counting it.
+      //
+      // Hidden for single-mount channels, where "1 of 1 mounts" is noise, and
+      // while Icecast is unreachable, where we cannot see any mount and an
+      // absence is not evidence that anything is gone.
+      let mountsHtml = '';
+      if (stream.icecastReachable && (stream.variantsTotal || 0) > 1) {
+        const missing = stream.missingMounts || [];
+        mountsHtml = missing.length
+          ? `<div class="stream-mounts degraded" title="Icecast is not listing ${escapeHtml(missing.join(', '))}">
+               <span class="material-symbols-outlined">warning</span>
+               ${stream.variantsPresent} of ${stream.variantsTotal} mounts — ${escapeHtml(missing.join(' '))} missing
+             </div>`
+          : `<div class="stream-mounts">${stream.variantsPresent} of ${stream.variantsTotal} mounts</div>`;
+      }
+
       card.innerHTML = `
         <div class="stream-header">
           <div class="stream-info">
             <div class="stream-name">${escapeHtml(stream.name)}</div>
             <div class="stream-url">${escapeHtml(truncateUrl(stream.url))}</div>
+            ${mountsHtml}
           </div>
           <div class="status-indicator ${dotClass}">
             <span class="status-dot ${dotClass}"></span>

@@ -1151,12 +1151,12 @@ function getDailyBuckets(days, timeZone = 'UTC', streamIds) {
         if (e.severity === 'probe_error') b.probeErrors++;
         else b.briefOutages++;
       }
-      if (e.type !== 'up' && costListeners(e)) b.impactStarts++;
+      if (isFailureEvent(e) && costListeners(e)) b.impactStarts++;
     }
 
     // Spread real off-air time across every station-local date it touched.
     // `impactMs` merges simultaneous streams; `streamMs` adds them separately.
-    if (e.type === 'up' || !e.durationMs || !costListeners(e)) continue;
+    if (!isFailureEvent(e) || !e.durationMs || !costListeners(e)) continue;
     let cursor = Math.max(t, cutoff);
     const eventEnd = Math.min(Date.now(), t + e.durationMs);
     if (eventEnd <= cursor) continue;
@@ -1301,6 +1301,22 @@ function getListeningDelivered(streamIds, windowMs) {
  */
 function settledImpact(e) {
   return e?.audience?.listenerImpact ?? e?.diagnosis?.listenerImpact ?? 'unknown';
+}
+
+/**
+ * Is this event a failure of the channel itself?
+ *
+ * 'up' is a recovery. 'degraded' is a channel that kept playing while one of
+ * its bitrate variants went missing — a real fault, recorded as one, but NOT
+ * downtime: the mount the probe watches never stopped serving, and folding it
+ * into the failure totals would charge the station off-air time it did not have
+ * and downtime minutes its listeners did not experience.
+ *
+ * Every "what went wrong this period" total funnels through here so that the
+ * question is answered the same way twice.
+ */
+function isFailureEvent(e) {
+  return e?.type !== 'up' && e?.type !== 'degraded';
 }
 
 /** Did this failure actually cost the audience audio? */
@@ -1500,7 +1516,7 @@ function getPeriodRollup(streamIds, windowMs) {
     return isFinite(t) && t > since && ids.has(e.streamId);
   });
 
-  const failures = inWindow.filter((e) => e.type !== 'up');
+  const failures = inWindow.filter(isFailureEvent);
   const outages = failures.filter((e) => e.severity === 'outage');
   const deadAir = failures.filter((e) => e.severity === 'dead_air');
   const unconfirmed = failures.filter((e) => isUnconfirmedSeverity(e.severity));
@@ -1877,7 +1893,7 @@ module.exports = {
   getPeriodRollup,
   getStatusCache, setStatusCache, getStorageInfo, getMeta, setMeta,
   ensureStreams, getStationConfig, setStationConfig,
-  isUnconfirmedSeverity, settledImpact, costListeners,
+  isUnconfirmedSeverity, settledImpact, costListeners, isFailureEvent,
   getAudienceContext, getHourOfDayProfile, buildAudienceImpact, deriveListenerImpact,
   getListenerSeries, getAudienceSummary, chooseBucketMs,
   SAMPLE_RETENTION_DAYS,
