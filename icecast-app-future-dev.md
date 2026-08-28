@@ -395,7 +395,8 @@ writes per day. Measured projections:
 - **Wave 2 (affiliates) is where it starts to matter** — ~200 ms of blocked
   event loop per minute begins to delay the probes themselves. Halving
   `SAMPLE_RETENTION_DAYS` buys most of that back without any code.
-- **SQLite is worth doing before Wave 3**, not before Phase 1. When it happens,
+- **SQLite is worth doing before Wave 3 — or before per-listener analytics,
+  whichever comes first.** Not before Phase 1. When it happens,
   `store.js`'s public API is a clean seam, and a single file keeps the "one
   persistent volume, no database server" deployment story intact.
 
@@ -403,6 +404,48 @@ Lowering `SAMPLE_RETENTION_DAYS` is safe for the audience model:
 `getHourOfDayProfile()` reads rollups as well as raw samples, so listener-loss
 estimates keep their full history — only the dashboard's raw-resolution window
 shrinks.
+
+### 3.5 Per-listener analytics moves the storage threshold
+
+**Correction to §3.3.** That section concludes SQLite is not needed until roughly
+fifty mounts. That holds for what is collected today — one sample per channel per
+minute — and stops holding the moment individual listeners are recorded.
+
+Audience analytics beyond counts (who, where, for how long) needs Icecast's
+**admin** API rather than the public status endpoint, and it produces data of a
+different order:
+
+| | Rows per day |
+|---|---|
+| Today: 5 channels, one sample a minute | ~7,000 |
+| Per-listener at ~250 concurrent, polled each minute | **~360,000** |
+
+That is fifty times the volume on day one, growing with the audience rather than
+with the station count. **Whichever arrives first — fifty mounts or the first
+per-listener record — is the point to move off flat files**, and it should be
+done before the collection starts rather than after, because migrating a
+per-listener table is a great deal more work than migrating an empty one.
+
+**Two prerequisites, both worth starting early because neither is code:**
+
+1. **Icecast admin credentials for the Pacifica hosts.** The public status
+   endpoint reports counts and nothing else. Everything in the audience-analytics
+   ambition — geography, session length, returning listeners — is gated on
+   admin access. It is a permissions conversation with a lead time, so it is
+   worth asking for before anyone is ready to build.
+2. **A retention and aggregation policy.** Listener IP addresses are personal
+   data, which is a category this system has not held before. Deciding what is
+   aggregated on the way in, and what is never stored at all, is much easier
+   before collection than after. The allowlist projection in `redact.js` is the
+   right machinery for it and already exists.
+
+**What already works in your favour:** the *when* half needs no new collection.
+Permanent hourly rollups carry `avgListeners` and `listenerPeak` per channel and
+are never pruned — 399 hours for `kpft-main` already. Hour-of-day, day-of-week
+and month-over-month trends are derivable from what is on disk today, and the
+record grows whether or not anyone builds the views.
+
+---
 
 ### 3.4 ✅ The `unknown` verdict — fixed 2026-08-27
 
@@ -500,7 +543,8 @@ better use of Phase 0 than a storage migration.
 ### Refactor sequence (this order matters)
 
 1. **Leave the store alone.** Flat JSON carries Phase 1 comfortably (§3.3).
-   SQLite is a Wave 3 concern, not a prerequisite.
+   SQLite is a Wave 3 concern — or a prerequisite of per-listener analytics,
+   whichever arrives first (§3.5). Not a prerequisite of Phase 1.
 2. **Make `diagnose.classify()` pure** — it mostly is. No module state.
 3. **Turn `monitor.js` state into a `StationMonitor` class.** The singletons
    (`streams`, `snapshot`, `episodes`, `silenceState`) become instance fields.
@@ -955,7 +999,7 @@ Low information density on purpose — its job is to be visible from across a ro
 | **3 — Fleet view & staff utilities** | Master panel · public status page · monthly board report · annotations · escalation + ack | The features non-engineers open the app for |
 | **3b — Discovery adapters** | Tier 1–5 fallbacks · per-station degraded-monitoring policy | Required before any off-network affiliate (§2.4) |
 | **3c — Roles & multi-user** | The role table in §5.5, built when a real GM asks for a login | Not before. A permission system without users is maintenance with no return |
-| **3d — Storage** | SQLite behind the existing `store.js` API, once mount count passes ~50 (§3.3) | Deferred deliberately; not needed before this point |
+| **3d — Storage** | SQLite behind the existing `store.js` API, once mount count passes ~50 **or per-listener collection begins** (§3.3, §3.5) | Deferred deliberately; not needed before whichever of those comes first |
 | **4 — Intelligence** | Audience anomaly detection · encoder health scoring · multi-region probes · alert-fatigue analytics | The state-of-the-art part |
 
 **The through-line:** every phase after 1 adds stations through the same panel.

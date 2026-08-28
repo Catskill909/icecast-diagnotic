@@ -194,10 +194,12 @@ diffs; the table below covers the ones that changed how the system behaves.
 Several claims made during that work were wrong and were retracted. They are
 marked in the scope document, but to save anyone re-deriving them:
 
-- **SQLite is not needed.** An earlier draft called it "the highest-leverage
+- **SQLite is not needed *yet*.** An earlier draft called it "the highest-leverage
   refactor" for Phase 0. Measured: Phase 1 is 28 MB on disk and a 54 ms
   serialisation pause per minute. Flat JSON is fine well past five stations.
-  Revisit around 50+ mounts.
+  Revisit at ~50 mounts **or when per-listener analytics begins, whichever comes
+  first** — that is ~360,000 rows a day against ~7,000 today, and it should be
+  done before collection starts rather than after (§3.5 of the scope doc).
 - **Storage volume is a non-issue.** 5.8 MB today, growing 63 KB/day, ~229 MB
   after ten years. The write *amplification* (rewriting whole files every 60 s)
   is inefficient but harmless — 97 KB/s averaged.
