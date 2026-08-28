@@ -1589,8 +1589,8 @@ function getOverallUptime(windowMs, stationId) { return store.getOverallUptime(s
 /** Uptime as the audience experienced it — probe-only failures excluded. */
 function getAudioUptime(windowMs, stationId) { return store.getAudioUptime(streamIdsFor(stationId), windowMs); }
 function getCoverageStart(stationId) { return store.getCoverageStart(streamIdsFor(stationId)); }
-function getDailyBuckets(days) { return store.getDailyBuckets(days, STATION_TZ); }
-function getCauseBreakdown(windowMs) { return store.getCauseBreakdown(windowMs); }
+function getDailyBuckets(days, stationId) { return store.getDailyBuckets(days, STATION_TZ, streamIdsFor(stationId)); }
+function getCauseBreakdown(windowMs, stationId) { return store.getCauseBreakdown(windowMs, streamIdsFor(stationId)); }
 function getStorageInfo() { return store.getStorageInfo(); }
 function getSnapshot() { return snapshot; }
 

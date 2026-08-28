@@ -1114,9 +1114,12 @@ function zonedMidnightMs(day, timeZone) {
 }
 
 /** Per-day counts plus elapsed listener-impacting off-air time for the heatmap. */
-function getDailyBuckets(days, timeZone = 'UTC') {
+function getDailyBuckets(days, timeZone = 'UTC', streamIds) {
   const out = new Map();
   const cutoff = Date.now() - days * 24 * 60 * 60 * 1000;
+  // Scoped like every other aggregate. Left unscoped, the heatmap paints one
+  // station's off-air days onto another's calendar.
+  const keep = Array.isArray(streamIds) ? new Set(streamIds) : null;
 
   const bucket = (day) => {
     if (!out.has(day)) {
@@ -1135,6 +1138,7 @@ function getDailyBuckets(days, timeZone = 'UTC') {
   for (const e of events) {
     const t = new Date(e.timestamp).getTime();
     if (!isFinite(t)) continue;
+    if (keep && !keep.has(e.streamId)) continue;
 
     if (t >= cutoff) {
       const b = bucket(zonedDayKey(t, timeZone));
@@ -1183,11 +1187,15 @@ function getDailyBuckets(days, timeZone = 'UTC') {
   return [...out.values()].sort((a, b) => a.day.localeCompare(b.day));
 }
 
-function getCauseBreakdown(windowMs) {
+function getCauseBreakdown(windowMs, streamIds) {
   const cutoff = Date.now() - windowMs;
+  // Scoped: an unfiltered breakdown attributes one station's encoder failures
+  // to whichever station is being looked at.
+  const keep = Array.isArray(streamIds) ? new Set(streamIds) : null;
   const counts = {};
   for (const e of events) {
     if (new Date(e.timestamp).getTime() < cutoff) continue;
+    if (keep && !keep.has(e.streamId)) continue;
     const c = e.diagnosis?.cause;
     if (!c) continue;
     if (!counts[c]) counts[c] = { cause: c, label: e.diagnosis.causeLabel, count: 0 };

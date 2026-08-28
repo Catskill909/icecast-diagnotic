@@ -368,9 +368,9 @@ app.get('/api/stats', (req, res) => {
     windowDays: days,
     stationId: stationOf(req) || null,
     summary: monitor.getSummary(windowMs, stationOf(req)),
-    daily: monitor.getDailyBuckets(days),
+    daily: monitor.getDailyBuckets(days, stationOf(req)),
     dailyTimeZone: monitor.getConfig().weeklyRoundup.timezone,
-    causes: monitor.getCauseBreakdown(windowMs),
+    causes: monitor.getCauseBreakdown(windowMs, stationOf(req)),
     storage: monitor.getStorageInfo(),
     stations: monitor.getStations(),
     streams: monitor.getStreams()
