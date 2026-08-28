@@ -47,6 +47,11 @@
         `Each check records HTTP status, content type, and a full
          DNS → TCP → TLS → first byte timing breakdown — which is what reveals
          <em>where</em> in the chain a failure happened rather than merely that one did.`,
+        `The check asks each channel's highest-bitrate mount. Its other bitrates are
+         checked less often — every fifth cycle — which is enough to catch one that has
+         stopped serving without opening a connection to every mount every minute.
+         Each connection both pulls audio from the station's own server and registers
+         as a listener on that mount, so they are not spent freely.`,
         `Press play on any stream card to confirm by ear what the monitor is reporting.`,
       ],
     },
@@ -101,6 +106,10 @@
          into one message rather than several.`,
         `Alerts lead with the root cause, the listener reach, and specific things to
          check. Every event records whether its alert actually sent.`,
+        `A <strong>degraded channel</strong> — still playing, but missing one of its
+         bitrates — emails only if the fault lasts <em>and</em> people were listening on
+         the mount that failed. The message says DEGRADED, never DOWN: describing a
+         playing channel as offline is the most damaging thing an alert can get wrong.`,
       ],
       note: `This assigns the side to investigate. It does not prove which physical
              device failed.`,
@@ -108,52 +117,96 @@
     {
       id: 'impact',
       icon: 'group',
-      title: 'Listener impact',
-      lead: 'Counts come straight from Icecast, summed across a channel.',
+      title: 'Who lost audio',
+      lead: 'What an interruption cost, in people rather than minutes.',
       body: [
         `A channel is usually served at several bitrates, each its own Icecast mount.
          Listener counts add them together, because they are one audience.`,
         `<strong>Listeners cut off</strong> is the audience present when each
          interruption began; someone affected twice counts twice.
-         <strong>Listening lost</strong> combines that reach with duration.`,
+         <strong>Listening lost</strong> combines that reach with duration — fifty
+         people missing an hour is fifty listener-hours. It is not a clock duration.`,
         `<strong>Audio uptime</strong> excludes probe failures where Icecast proves
          the mount kept playing — so it reflects what the audience experienced, not
          what our connection did.`,
-        `<strong>Peak</strong> is the most people connected at one moment, with every
-         channel added together. <strong>Average</strong> is how many are typically
-         connected.`,
-        `<strong>Total listeners</strong> is the headline: how many times someone tuned
-         in. Every rise in the listener count is somebody starting to listen. It runs
-         several times higher than the number listening at once — on this station about
-         four to nine times — and it is the reach figure to quote in a pledge drive or a
-         grant report. It is a <em>floor</em>: within a single check, one person leaving
-         as another arrives cancels out and cannot be seen, so the real number is higher,
-         never lower.`,
-        `Three different things get called "listeners", and only one of them is
-         measurable here. <strong>Concurrent</strong> is how many are connected at once —
-         that is what the numbers above show. <strong>Plays</strong> is how many times
-         someone started listening. <strong>Distinct listeners</strong> is how many
-         different people. Someone who tunes in three times is three plays and one
-         listener. Icecast's public status page reports only how many connections exist
-         at an instant, so <strong>total individual
-         listeners</strong> — how many different people, rather than how many tune-ins —
-         needs admin access to the streaming server and is shown as unavailable until
-         there is some.`,
-        `<strong>Listening hours (ATH)</strong> is one person listening for one hour.
-         It is the figure a US noncommercial station's SoundExchange royalty rate is
-         computed from — the annual fee covers each channel's first 159,140 per month.
-         The Audience page tracks it month to date and projects where the month will
-         land. <strong>It is an estimate</strong>, counted by polling listeners once a
-         minute rather than logging every connection, so use it as an early warning and
-         get the real number before filing.`,
-        `<strong>A degraded channel</strong> is one still playing, but not on every
-         mount it publishes: one bitrate has stopped, so the listeners on that
-         bitrate lost audio while everyone else carried on. The dashboard marks the
-         failing mount in amber on the channel's card. It is recorded as its own
-         incident, and is deliberately <em>not</em> counted as downtime — the
-         channel never went off air. You are emailed about one only if it lasts
-         (30 minutes by default) <em>and</em> people were listening on the mount
-         that failed.`,
+        `These figures are frozen when a fault ends, not calculated later. Icecast only
+         reports listeners while a mount exists, so once an outage is over the audience
+         it interrupted can never be recovered from anywhere.`,
+      ],
+    },
+    {
+      id: 'audience',
+      icon: 'groups',
+      title: 'The Audience page',
+      lead: 'How many people are listening — the reach figures, not the server ones.',
+      body: [
+        `<strong>Total listeners</strong> leads the page, and it is the number to quote
+         in a pledge drive, a grant application or an underwriting pitch. It counts how
+         many times someone tuned in: every rise in the listener count is somebody
+         starting to listen. On this station it runs roughly four to nine times higher
+         than the number listening at once.`,
+        `That gap is the whole point. Reporting "178 listeners" when 178 is the
+         <em>simultaneous</em> figure understates the station by an order of magnitude,
+         to exactly the people whose funding decisions depend on it.`,
+        `Total listeners is a <strong>floor</strong>. Within a single check, one person
+         leaving as another arrives cancels out and cannot be seen, so the real number is
+         higher — never lower. Where an earlier period was recorded incompletely, the
+         comparison is withheld rather than shown as a percentage that would be an
+         artefact of the missing data.`,
+        `<strong>Total individual listeners</strong> is the companion figure: how many
+         different <em>people</em>, rather than how many tune-ins. Someone who listens
+         ten times is ten total listeners and one individual listener. Telling one
+         listener from another needs admin access to the streaming server, so the card is
+         shown as unavailable rather than filled in with a number that would mean
+         something else.`,
+        `<strong>At once</strong> is the most people connected at a single moment, every
+         channel summed — a fact about server load rather than reach.
+         <strong>Typically</strong> is the average. Both are kept, ranked below the reach
+         figures.`,
+        `Below that: every channel on one shared scale, a day-by-day table, the split
+         <strong>by mount</strong> showing which bitrate carries the audience, and an
+         hour-of-day profile. Every period is compared against the <em>same elapsed
+         span</em> of the one before, so nine days of this month are measured against the
+         first nine days of last month rather than all thirty-one. <strong>Export
+         CSV</strong> downloads exactly what is on screen.`,
+      ],
+    },
+    {
+      id: 'royalties',
+      icon: 'hourglass_top',
+      title: 'Listening hours and royalties',
+      lead: 'The figure a US noncommercial station\'s SoundExchange rate is computed from.',
+      body: [
+        `<strong>ATH</strong> — aggregate tuning hours — is one person listening for one
+         hour. The annual noncommercial fee covers each channel's first 159,140 ATH per
+         month; above that, more is owed. The Audience page tracks the month to date
+         against that allowance and projects where the month will land.`,
+        `A projection is rated over the span actually <em>watched</em>, not the elapsed
+         month, so a monitor that started mid-month does not project two-thirds too low
+         on the one number with a threshold attached.`,
+        `<strong>It is an estimate.</strong> It is counted by polling listeners once a
+         minute, not by logging every connection. Use it as an early warning — if it says
+         you are approaching the allowance, go and get the real figure before filing
+         anything.`,
+      ],
+    },
+    {
+      id: 'degraded',
+      icon: 'signal_cellular_alt_2_bar',
+      title: 'Degraded channels',
+      lead: 'Still playing, but not on every mount it publishes.',
+      body: [
+        `A channel is published at several bitrates, each its own Icecast mount, and the
+         health check only asks the highest one. So a single bitrate can stop while the
+         card still reads ONLINE and the listeners on that bitrate are off the air.`,
+        `Each channel's card lists every mount it publishes, with that mount's own
+         listener count. A failing one turns amber: <strong>struck through</strong> if
+         Icecast has stopped listing it at all, <strong>underlined</strong> if it is
+         still listed but serving no audio.`,
+        `A degradation is recorded as its own incident and is deliberately
+         <em>not</em> counted as downtime — the channel never went off air. You are
+         emailed about one only if it lasts (thirty minutes by default) <em>and</em>
+         people were listening on the mount that failed.`,
       ],
     },
     {

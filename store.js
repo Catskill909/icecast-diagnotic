@@ -1591,18 +1591,36 @@ function getListenerCounts(streamIds, timeZone = 'UTC', now = Date.now()) {
     const tuneIns = getTuneIns(streamIds, startMs, now);
     const prevTuneIns = getTuneIns(streamIds, prevStartMs, prevStartMs + elapsed);
 
+    // A comparison is only honest if BOTH windows were fully counted.
+    //
+    // Tune-ins live in raw samples for the retention window, and in each hour's
+    // rollup after that — but only for hours compacted since tune-in recording
+    // began. An earlier window that predates it returns a partial total, and
+    // dividing by it manufactures a percentage: on the first day this shipped,
+    // last week came back 1,339 against this week's 5,813 and the page read
+    // "+376%", which was entirely an artefact of the older window being
+    // half-recorded. Withheld, exactly as the ATH trend is.
+    const comparable = prevTuneIns.hoursMissing === 0 && prevTuneIns.total > 0;
+
     return {
       start: new Date(startMs).toISOString(),
       elapsedMs: elapsed,
       ...current,
       totalListeners: tuneIns.total || null,
       totalListenersMeta: tuneIns,
-      previous: { ...previous, totalListeners: prevTuneIns.total || null },
+      previous: {
+        ...previous,
+        totalListeners: prevTuneIns.total || null,
+        totalListenersMeta: prevTuneIns,
+      },
       changePct: {
         peak: pct(current.peak, previous.peak),
         avg: pct(current.avg, previous.avg),
-        totalListeners: pct(tuneIns.total, prevTuneIns.total),
+        totalListeners: comparable ? pct(tuneIns.total, prevTuneIns.total) : null,
       },
+      // Why the reach comparison is absent, when it is. The UI says "not enough
+      // history yet" rather than leaving a bare dash that reads as a fault.
+      totalListenersComparable: comparable,
     };
   };
 

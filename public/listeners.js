@@ -204,8 +204,10 @@
         <div class="cc-label">${esc(p.label)}</div>
         <div class="cc-total">${d.totalListeners == null ? '—' : esc(d.totalListeners.toLocaleString())}</div>
         <div class="cc-total-l">total listeners — times someone tuned in</div>
-        ${delta(d.changePct && d.changePct.totalListeners, p.vs, 'strong')}
-        ${meta.hoursMissing ? `<div class="cc-partial">${esc(meta.hoursMissing)} hour(s) in this period predate tune-in recording and are not counted</div>` : ''}
+        ${d.totalListenersComparable === false
+          ? `<span class="cc-delta none">not enough recorded history to compare with ${esc(p.vs)}</span>`
+          : delta(d.changePct && d.changePct.totalListeners, p.vs, 'strong')}
+        ${meta.hoursMissing ? `<div class="cc-partial">A floor for this period: ${esc(Number(meta.hoursMissing).toLocaleString())} channel-hour(s) predate tune-in recording and are not counted at all.</div>` : ''}
         <div class="cc-secondary">
           <div class="cc-sec">
             <span class="cc-sec-v">${d.peak == null ? '—' : esc(d.peak.toLocaleString())}</span>

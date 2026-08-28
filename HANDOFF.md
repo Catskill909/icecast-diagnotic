@@ -18,7 +18,7 @@ shortest path to being useful.
 **Orient yourself (2 minutes).**
 
 ```bash
-npm test                                   # 245 tests, all should pass
+npm test                                   # 246 tests, all should pass
 curl -s https://kpft-icecast.supersoul.top/api/stations | jq   # what it monitors
 curl -s https://kpft-icecast.supersoul.top/api/status   | jq   # how it is doing
 ```
@@ -82,7 +82,7 @@ regression, however green the tests are.**
   Angeles), 5 channels, 1 Icecast host, ~456 events retained since 2026-08-04.
 - **All three stations share one Icecast host**, which is the whole affiliate
   economics: one snapshot fetch per cycle serves all of them.
-- **245 tests**, `npm test`, Node's built-in runner, no test framework dependency.
+- **246 tests**, `npm test`, Node's built-in runner, no test framework dependency.
 - **Dependencies: express, nodemailer 9, dotenv.** That is the whole list, and it
   is deliberate. Crypto, testing and HTTP are all Node built-ins. Adding a
   dependency should require an argument.
@@ -178,7 +178,7 @@ silently alters what lands in someone's inbox.
 | `public/listeners.js` | ~420 | **Audience page**: rendering only — ATH, charts, tables, CSV export |
 | `public/audience-stats.js` | ~190 | **Audience arithmetic**, deliberately separate so Node can test it. Loads as `window.AudienceStats` in the browser and `require()`s in tests |
 | `public/admin.js` | 363 | Admin panel: add, edit, remove stations |
-| `public/guide.js` | 230 | In-app guide (content lives here as data) |
+| `public/guide.js` | ~300 | In-app guide (content lives here as data) — 11 topics |
 | `public/login.js` | ~90 | Two-step sign-in |
 
 No framework, no build step. Every page loads plain files.
@@ -252,6 +252,7 @@ rounding error: `/live_64` regularly carries a third of KPFT Main's audience
 | **Audience page** (`listeners.html`) | Audience is a different question, for a different reader, than "what went wrong". Station-scoped like the history page, with the per-mount split that every other figure sums away, plus CSV export |
 | `getListeners()` scoped by station | It computed its series from the scoped set but returned the FULL stream list beside it. The chart filtered on which ids had a series, so nothing looked wrong — and the new page reads that list directly |
 | **TOTAL LISTENERS leads the page** | Reach, not concurrency. Every rise in the listener count is an arrival, so tune-ins are derivable with no credentials — 844 today against a concurrent peak of 178, and 1,269 against 193 on the busiest day. A listener-supported station quoting the concurrent figure understates itself four to nine fold to funders. Peak and average are kept, ranked below it |
+| Reach comparison withheld when the earlier period is under-recorded | Caught in the live audit the day tune-ins shipped: last week fell outside raw retention and its rollups predated tune-in recording, so it returned 1,339 against this week's 5,813 and the page announced **+376%** — entirely an artefact. Both windows must be fully recorded before a percentage is computed |
 | Tune-ins frozen onto rollups at compaction | An hourly average cannot show that forty listeners left as forty arrived. Miss the window when raw samples expire and the churn is unrecoverable |
 | **Listener NUMBERS lead the page** | The page had drifted to answering "how much listening was delivered" when the first question a station asks is "how many people". Headcounts for today / this week / this month now head it, each with peak and average against the same elapsed span of the previous period; listening hours moved to the bottom |
 | Distinct listeners shown as unavailable | Icecast reports how many connections exist, not who they are, so no polling rate yields "1,800 different people". The card states that rather than omitting it or quietly presenting a concurrent figure as a headcount |
@@ -387,6 +388,13 @@ Reviewed end to end on 2026-08-27; findings and reasoning in
   collapse every single month, for ever. `getListenerCounts()` builds the
   comparison window from `elapsedMs`; `test/listener-counts.test.js` has the
   fixture where getting it wrong flips a real 20% drop into an 86% rise.
+- **Never compute a percentage against a partially-recorded period.** Tune-ins
+  exist in raw samples for the retention window and on rollups only for hours
+  compacted since the feature shipped. An older window returns a partial total,
+  and dividing by it manufactures a number a station would repeat in a board
+  meeting. `getListenerCounts()` sets `totalListenersComparable: false` and
+  withholds the figure; the card says "not enough recorded history" rather than
+  showing a bare dash that reads as a fault.
 - **Reach is the headline, not concurrency.** "How many listened" and "how many
   at once" differ by four to nine times on this record. The concurrent figure is
   about server load; reach is what a listener-supported station reports to
@@ -500,7 +508,7 @@ Reviewed end to end on 2026-08-27; findings and reasoning in
 ## 9. Verifying a change
 
 ```bash
-npm test                                             # 245 tests
+npm test                                             # 246 tests
 node --check server.js monitor.js store.js diagnose.js auth.js
 
 # Against production

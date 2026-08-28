@@ -189,3 +189,34 @@ test('individual listeners stay a declared headline, not a fabricated one', () =
   // It must never be conflated with the tune-in count sitting beside it.
   assert.notEqual(u.value, c.today.totalListeners);
 });
+
+test('a reach comparison is withheld when the earlier window is under-recorded', () => {
+  // Caught in the live audit on the day this shipped: last week fell outside raw
+  // retention and its rollups predated tune-in recording, so it came back 1,339
+  // against this week's 5,813 and the page announced "+376%". Entirely an
+  // artefact of the older window being half-recorded — the kind of number a
+  // station would repeat in a board meeting.
+  const id = 'partial';
+  store.ensureStreams([id]);
+  const base = Date.parse('2026-08-28T06:00:00.000Z');
+  [10, 20].forEach((n, i) => {
+    store.addSample(id, {
+      timestamp: new Date(base + i * 60 * 1000).toISOString(),
+      status: 'up', responseTime: 10, listeners: n,
+    });
+  });
+  // An hour in the comparison window that was rolled up before tune-ins existed:
+  // present, but carrying no tuneIns figure.
+  store.getRollups(id).push({
+    hour: '2026-08-27T06:00:00.000Z',
+    checks: 60, up: 60, down: 0, silent: 0,
+    listenerCount: 60, avgListeners: 40, listenerPeak: 55,
+  });
+
+  const t = store.getTuneIns([id], Date.parse('2026-08-27T00:00:00.000Z'), Date.parse('2026-08-28T00:00:00.000Z'));
+  assert.ok(t.hoursMissing > 0, 'the gap in recording is detected');
+
+  const c = store.getListenerCounts([id], TZ, NOW);
+  assert.equal(c.today.totalListenersComparable, false, 'so the comparison is refused');
+  assert.equal(c.today.changePct.totalListeners, null, 'rather than dividing by a partial total');
+});
