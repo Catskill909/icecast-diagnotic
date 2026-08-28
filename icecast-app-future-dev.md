@@ -1123,7 +1123,7 @@ Low information density on purpose — its job is to be visible from across a ro
 | **3c — Roles & multi-user** | The role table in §5.5, built when a real GM asks for a login | Not before. A permission system without users is maintenance with no return |
 | **3d — Storage** | SQLite behind the existing `store.js` API, once mount count passes ~50 **or per-listener collection begins** (§3.3, §3.5) | Deferred deliberately; not needed before whichever of those comes first |
 | **3e — Audience, tiers 1–2** | A station's own counts, history and trends, on rollups already accumulating (§8b) | Needs nothing new. Densest value per unit of work |
-| **3f — Audience, tier 3** | Cross-station comparison, open to all — lead with uptime, recovery time and growth rate; audience size as context (§8b) | No roles needed now that it is open. Compare what a station can change |
+| **3f — Audience, tier 3** | Cross-station comparison, open by default, each station able to gate its own data (§8b) | No roles needed: the setting is binary. Compare what a station can change |
 | **3g — Audience, tier 4** | Per-listener geography and sessions — requires Icecast admin credentials, a PII policy, and the storage move (§3.5) | Start the credentials conversation early; it is not code |
 | **4 — Intelligence** | Audience anomaly detection · encoder health scoring · multi-region probes · alert-fatigue analytics | The state-of-the-art part |
 
