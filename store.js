@@ -1,5 +1,5 @@
 /* ═══════════════════════════════════════════════════════════════════════════
-   KPFT Icecast Monitor — Persistent Store
+   Pacifica Stream Monitor — Persistent Store
    ───────────────────────────────────────────────────────────────────────────
    Two independent files, on purpose:
 

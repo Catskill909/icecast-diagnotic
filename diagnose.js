@@ -1,5 +1,5 @@
 /* ═══════════════════════════════════════════════════════════════════════════
-   KPFT Icecast Monitor — Root Cause Diagnosis Engine
+   Pacifica Stream Monitor — Root Cause Diagnosis Engine
    ───────────────────────────────────────────────────────────────────────────
    Turns a bare transport error ("HTTP 404", "socket hang up") into an
    actionable diagnosis by correlating three independent signals:
@@ -141,7 +141,7 @@ const REMEDIATION = {
     // contact; the address itself adds nothing to the advice.
     'Contact the upstream server administrator.',
     'Verify the host stations1.pacifica.org is up and the service is running.',
-    'This affects ALL stations on the server, not just KPFT.',
+    'This affects ALL stations on the server, not just this one.',
   ],
   server_restart: [
     'Icecast was restarted — every mount dropped simultaneously.',
@@ -800,12 +800,12 @@ function classify({ stream, result, snapshot, prevSnapshot, cycle = [], deadAir 
 
       const siblingsPresent = siblingMounts.length;
       if (siblingsPresent === 0 && SIBLING_MOUNT_PATTERNS.length > 0) {
-        evidence.push('ALL KPFT mounts are absent — the station\'s entire source feed has dropped, not just this one stream.');
+        evidence.push(`ALL ${STATION_LABEL} mounts are absent — the station's entire source feed has dropped, not just this one stream.`);
       } else if (siblingsPresent > 0) {
         evidence.push(`${siblingsPresent} other ${STATION_LABEL} mount(s) are still connected — this is an isolated per-mount source failure.`);
       }
       if (foreignHealthy) {
-        evidence.push(`${foreignMounts.length} mount(s) from other Pacifica stations are streaming normally — the fault is on the KPFT side, not Pacifica's server.`);
+        evidence.push(`${foreignMounts.length} mount(s) from other stations on this server are streaming normally — the fault is on the ${STATION_LABEL} side, not the server.`);
       }
     } else if (serverReachable && mount) {
       // Listed but 404 on direct fetch — the edge/proxy layer disagrees with

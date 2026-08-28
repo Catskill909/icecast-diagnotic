@@ -8,7 +8,7 @@ RUN npm ci --omit=dev 2>/dev/null || npm install --omit=dev
 # ── Production Stage ─────────────────────────────────
 FROM node:20-alpine
 
-LABEL org.opencontainers.image.title="KPFT Icecast Monitor"
+LABEL org.opencontainers.image.title="Pacifica Stream Monitor"
 LABEL org.opencontainers.image.description="Real-time Icecast stream uptime monitor with email alerts"
 
 WORKDIR /app

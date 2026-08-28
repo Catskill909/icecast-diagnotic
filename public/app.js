@@ -1,5 +1,5 @@
 /* ═══════════════════════════════════════════════════════════════════════════
-   KPFT Stream Monitor — Frontend Application
+   Pacifica Stream Monitor — Frontend Application
    ═══════════════════════════════════════════════════════════════════════════ */
 
 (function () {

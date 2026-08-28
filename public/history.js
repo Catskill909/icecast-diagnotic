@@ -1,5 +1,5 @@
 /* ═══════════════════════════════════════════════════════════════════════════
-   KPFT Stream Monitor — Incident History
+   Pacifica Stream Monitor — Incident History
    ═══════════════════════════════════════════════════════════════════════════ */
 
 (function () {
@@ -298,7 +298,7 @@
     // a path, not a particular physical device, so the labels stay deliberately
     // narrower than "equipment failed" or "server failed".
     const FAULT = {
-      kpft: { label: 'KPFT source/feed path', cls: 'kpft' },
+      kpft: { label: 'Station source/feed path', cls: 'kpft' },
       pacifica: { label: 'Pacifica/Icecast path', cls: 'pacifica' },
       unknown: { label: 'cause unclear', cls: 'unknown' },
     };
@@ -484,7 +484,7 @@
 
     const META = {
       kpft: {
-        label: 'KPFT source/feed path', owner: 'Station / local feed owner', cls: 'kpft',
+        label: 'Station source/feed path', owner: 'Station / local feed owner', cls: 'kpft',
         sub: 'Evidence: Icecast answered, but the monitored source or mount was absent. This identifies the station-to-Icecast feed path, not a specific device.',
       },
       pacifica: {

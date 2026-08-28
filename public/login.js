@@ -56,7 +56,7 @@ const $ = (id) => document.getElementById(id);
     $('step2').classList.add('hidden');
     $('step1').classList.remove('hidden');
     $('title').textContent = 'Sign in';
-    $('sub').textContent = 'Stream monitor administration';
+    $('sub').textContent = 'Pacifica Stream Monitor · administration';
     $('username').focus();
   });
 
