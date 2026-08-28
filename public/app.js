@@ -291,19 +291,28 @@
       // cards and not others reads as missing data rather than as a channel that
       // simply has one mount.
       const mounts = channelMounts(stream);
-      // Only trust a missing-mount verdict while Icecast is answering. When it
-      // is unreachable we cannot see any mount, and greying them all out would
-      // report an outage we have no evidence for.
-      const missing = new Set(stream.icecastReachable ? stream.missingMounts || [] : []);
+      // Only trust a failing-mount verdict while Icecast is answering. When it is
+      // unreachable we cannot see any mount, and flagging them all would report
+      // an outage we have no evidence for.
+      //
+      // The two failures are shown differently because they need different
+      // actions: a MISSING mount is struck through — it is gone, and its source
+      // has to be reconnected. A STALLED one is still listed and still holding
+      // its listeners, who are connected to silence, so it stays legible.
+      const impaired = new Map(
+        (stream.icecastReachable ? stream.impairedMounts || [] : []).map((m) => [m.path, m.reason]),
+      );
       const mountsHtml = mounts.length
         ? `<div class="stream-mounts">${mounts.map((path, i) => {
-            const gone = missing.has(path);
-            const title = gone
+            const fault = impaired.get(path);
+            const title = fault === 'missing'
               ? 'Icecast is not listing this mount — nobody can play it'
+              : fault === 'stalled'
+              ? 'Icecast lists this mount but it is not serving audio'
               : i === 0
               ? 'Probed for health'
-              : 'Served by Icecast, not probed';
-            return `<span class="mount${i === 0 ? ' primary' : ''}${gone ? ' missing' : ''}" title="${escapeHtml(title)}">${escapeHtml(path)}</span>`;
+              : 'Served by Icecast, checked every few minutes';
+            return `<span class="mount${i === 0 ? ' primary' : ''}${fault ? ' ' + fault : ''}" title="${escapeHtml(title)}">${escapeHtml(path)}</span>`;
           }).join('')}</div>`
         : '';
 
@@ -529,6 +538,10 @@
       probe_error: { icon: 'sensors_off', label: 'Probe Anomaly', cls: 'probe-error' },
       blip: { icon: 'bolt', label: 'Blip', cls: 'blip' },
       dead_air: { icon: 'volume_off', label: 'Dead Air', cls: 'dead-air' },
+      // A channel that kept playing while one of its bitrate mounts went
+      // missing. Without an entry here it fell through to META.outage and
+      // rendered as a red 'Outage' — the opposite of what happened.
+      degraded: { icon: 'signal_cellular_alt_2_bar', label: 'Degraded Channel', cls: 'degraded' },
       recovery: { icon: 'check_circle', label: 'Recovered', cls: 'up' },
     };
 

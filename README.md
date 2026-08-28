@@ -379,10 +379,23 @@ measured live at 57 of 88 listeners, with 35% of the audience invisible.
 | KPFT HD2 | `/HD3_128` | `/HD3`, `/HD3_64` |
 | KPFT HD3 | `/classic_country` | — |
 
-Probing and dead-air detection still run against the primary mount alone, so a
-channel produces one alert, not one per variant. Samples additionally carry
-`variantsPresent` / `variantsTotal`: `present === 0` is a channel outage, while
-`0 < present < total` is a degraded channel still playing for most of its audience.
+The primary mount is probed every cycle, so a channel produces one alert, not
+one per variant. The other variants are probed every `VARIANT_PROBE_EVERY`
+cycles (default 5) — often enough to catch a mount Icecast still lists but is
+not actually serving, rarely enough that the audio pulled and the connections
+opened stay a fraction of probing them all every minute.
+
+Samples carry `variantsPresent` / `variantsTotal` and a per-mount
+`mountListeners` breakdown: `present === 0` is a channel outage, while
+`0 < present < total` is a degraded channel still playing for most of its
+audience. The breakdown is the only per-mount history there is — the summed
+count can hold steady while one variant's audience collapses inside it.
+
+**The Icecast snapshot is fetched before any probe connection is opened.**
+Icecast counts every connection as a listener, ours included: opening one
+connection to `/kpfk` was measured taking it from 1 listener to 2. Probing
+first would put the monitor's own probes inside the listener counts it then
+records.
 
 ### Streams Monitored
 | Name | Mount Point | M3U Source | Default URL |

@@ -40,6 +40,23 @@ rather than read from the probed mount alone. `variantsPresent` distinguishes a
 channel that is off air (`0`) from one that lost a single encoder but is still
 playing (`0 < present < total`).
 
+**b-3. Degraded channels.** A variant fails in two ways, and they need different
+evidence. **Missing** — Icecast no longer lists the mount; the inventory is the
+witness and no probe is needed. **Stalled** — Icecast still lists it, but it
+does not serve audio; only a direct probe can see this, so the non-primary
+mounts are probed every `VARIANT_PROBE_EVERY` cycles. Both raise one `degraded`
+event per episode, held open until every mount is serving again.
+
+The listener figures come from opposite places on purpose. A missing mount
+reports no listeners *because* nobody can reach it, so its audience is only
+knowable from the previous snapshot and is frozen on the episode. A stalled
+mount is still listed and still holding its listeners — connected, hearing
+nothing — so its current count is the right one.
+
+A degraded channel is **not** counted as downtime (`store.isFailureEvent`). The
+probed mount never stopped serving, and folding it into the failure totals would
+charge the station off-air time its listeners did not experience.
+
 **c. Cross-stream correlation.** All three KPFT streams are checked in the same cycle. One stream failing is a stream problem; all three failing in the same second is not a coincidence.
 
 ## 3. The decisive rule

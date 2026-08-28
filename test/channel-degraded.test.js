@@ -161,6 +161,7 @@ test('a degradation lasting many cycles is recorded once', () => {
   assert.equal(evts.length, 1, 'thirteen cycles, one event');
   assert.equal(evts[0].resolvedAt, undefined, 'still open while the mount is gone');
   assert.equal(evts[0].detail.listenersBefore, 22, 'the audience frozen at the moment it was still knowable');
+  assert.deepEqual(evts[0].detail.impaired.map((m) => m.path), ['/live_64']);
   assert.equal(evts[0].diagnosis.listenerImpact, 'confirmed');
   assert.match(evts[0].message, /\/live_64/, 'the message names the missing mount');
 });
@@ -196,6 +197,220 @@ test('a second variant dropping updates the open event rather than opening anoth
   const evts = degradedEvents();
   assert.equal(evts.length, opened + 1, 'one event for the whole worsening episode');
   const open = evts.find((e) => !e.resolvedAt);
-  assert.deepEqual([...open.detail.missing].sort(), ['/live_32', '/live_64']);
+  assert.deepEqual(open.detail.impaired.map((m) => m.path).sort(), ['/live_32', '/live_64']);
   assert.equal(open.detail.listenersBefore, 27, 'both lost audiences counted');
+});
+
+// ── Stalled mounts ──────────────────────────────────────────────────────────
+// The half the inventory cannot see. Icecast lists the mount, so nothing is
+// "missing", but connecting to it fails or returns silence — and the listeners
+// still attached to it are hearing nothing. Only a probe can tell.
+
+const ok = { ok: true, reason: null };
+const bad = (reason) => ({ ok: false, reason });
+
+test('a mount Icecast lists but does not serve is a degradation', () => {
+  const d = channelDegradation(FULL, FULL, CH, { '/live_64': bad('not serving') });
+  assert.equal(d.degraded, true);
+  assert.deepEqual(d.stalled.map((m) => m.path), ['/live_64']);
+  assert.deepEqual(d.missing, [], 'it is present — just broken');
+});
+
+test('a stalled mount counts the listeners still attached to it', () => {
+  // The opposite of a missing mount, and deliberately so. A stalled mount is
+  // still listed and still holding its audience, so the CURRENT count is the
+  // right one — those people are connected and hearing nothing.
+  const d = channelDegradation(FULL, FULL, CH, { '/live_64': bad('serving silence') });
+  assert.equal(d.listenersBefore, 22);
+  assert.equal(d.listenersKnown, true);
+});
+
+test('healthy variant probes are not a degradation', () => {
+  const d = channelDegradation(FULL, FULL, CH, { '/live_64': ok });
+  assert.equal(d.degraded, false);
+});
+
+test('a mount that is stalled AND then vanishes is reported once, as missing', () => {
+  // Otherwise one fault is counted twice, and the affected audience with it.
+  const d = channelDegradation(snap({ '/live_128': mount(37) }), FULL, CH, { '/live_64': bad('not serving') });
+  assert.deepEqual(d.missing.map((m) => m.path), ['/live_64']);
+  assert.deepEqual(d.stalled, [], 'a mount that is gone cannot also be stalled');
+  assert.equal(d.listenersBefore, 22, 'counted once, not 44');
+});
+
+test('every mount stalled is an outage, not a degradation', () => {
+  // Nothing is serving. The outage path owns that, and recording a degradation
+  // as well would describe one silent channel as two different faults.
+  const d = channelDegradation(FULL, FULL, CH, {
+    '/live_128': bad('serving silence'),
+    '/live_64': bad('serving silence'),
+  });
+  assert.equal(d.working, 0);
+  assert.equal(d.degraded, false);
+});
+
+test('a stale verdict for a mount Icecast no longer lists is ignored', () => {
+  // variantHealth persists between probe cycles by design. It must not keep
+  // asserting things about mounts that are no longer in the inventory.
+  const d = channelDegradation(snap({ '/live_128': mount(37) }), FULL, CH, { '/live_999': bad('not serving') });
+  assert.deepEqual(d.stalled, []);
+});
+
+test('missing and stalled mounts are reported together', () => {
+  const three = { ...CH, mounts: ['/live_128', '/live_64', '/live_32'] };
+  const before = snap({ '/live_128': mount(37), '/live_64': mount(22), '/live_32': mount(5) });
+  const now = snap({ '/live_128': mount(37), '/live_32': mount(5) });
+  const d = channelDegradation(now, before, three, { '/live_32': bad('serving silence') });
+
+  assert.equal(d.degraded, true);
+  assert.equal(d.working, 1, 'only the primary is actually serving');
+  assert.deepEqual(d.impaired.map((m) => m.path).sort(), ['/live_32', '/live_64']);
+  assert.equal(d.listenersBefore, 27, '22 from the missing mount, 5 from the stalled one');
+});
+
+// ── Measurement must not perturb what it measures ───────────────────────────
+// Icecast counts every connection as a listener, ours included. Measured against
+// the production host: opening a single connection took /kpfk from 1 listener to
+// 2. So the order of these two operations inside a cycle is not a style choice —
+// probing first puts our own probes inside the listener counts we then record
+// and store, permanently, on every probed mount.
+
+const diagnose = require('../diagnose');
+
+test('the Icecast snapshot is read before any probe opens a connection', async () => {
+  store.setStationConfig({
+    version: 1,
+    hosts: [{ id: 'h', host: 'stream.example.org:9000', statusUrl: 'https://stream.example.org:9000/status-json.xsl' }],
+    stations: [{
+      id: 'st',
+      name: 'Station',
+      timezone: 'UTC',
+      channels: [{ id: 'seq', name: 'Seq', url: 'https://stream.example.org:9000/a_128', mounts: ['/a_128', '/a_64'] }],
+    }],
+  });
+  monitor.reloadConfig();
+
+  const order = [];
+  const realSnapshot = diagnose.fetchIcecastSnapshot;
+  const realProbe = diagnose.probeStream;
+
+  diagnose.fetchIcecastSnapshot = async () => {
+    order.push('snapshot');
+    return {
+      reachable: true,
+      mountCount: 2,
+      mounts: { '/a_128': mount(10), '/a_64': mount(5) },
+    };
+  };
+  diagnose.probeStream = async () => {
+    order.push('probe');
+    return { status: 'up', responseTime: 12, isSilent: false, audioEnergy: 9, timings: {} };
+  };
+
+  try {
+    await monitor.runChecks();
+  } finally {
+    diagnose.fetchIcecastSnapshot = realSnapshot;
+    diagnose.probeStream = realProbe;
+  }
+
+  assert.ok(order.length >= 2, 'the cycle ran');
+  assert.equal(order[0], 'snapshot', 'the inventory must be read before we connect to anything');
+  assert.ok(order.slice(1).every((o) => o === 'probe'), 'and every probe comes after it');
+});
+
+test('a sample carries the per-mount listener breakdown, not just the sum', () => {
+  // The summed count can hold steady while one variant's audience collapses
+  // inside it, so the sum alone cannot answer "which variant lost its
+  // listeners" after the fact. Raw samples are the only per-mount history there
+  // is, and they expire — so if it is not written here it is unrecoverable.
+  const samples = store.getSamples('seq');
+  const latest = samples[samples.length - 1];
+  assert.ok(latest, 'the cycle above wrote a sample');
+  assert.equal(latest.listeners, 15, 'the channel total');
+  assert.deepEqual(latest.mountListeners, { '/a_128': 10, '/a_64': 5 });
+  assert.equal(latest.variantsPresent, 2);
+  assert.equal(latest.variantsTotal, 2);
+});
+
+// ── What the variant probe actually connects to ─────────────────────────────
+// Every connection here costs audio off the station's own server and adds a
+// listener to the mount it touches, so what it skips matters as much as what it
+// checks.
+
+test('variant probing skips the primary and any mount Icecast has already dropped', async () => {
+  const probed = [];
+  const realProbe = diagnose.probeStream;
+  diagnose.probeStream = async (s) => {
+    probed.push(new URL(s.url).pathname);
+    return { status: 'up', responseTime: 5, isSilent: false, audioEnergy: 9, timings: {} };
+  };
+
+  store.setStationConfig({
+    version: 1,
+    hosts: [{ id: 'h', host: 'stream.example.org:9000', statusUrl: 'https://stream.example.org:9000/status-json.xsl' }],
+    stations: [{
+      id: 'st',
+      name: 'Station',
+      timezone: 'UTC',
+      channels: [{
+        id: 'vp',
+        name: 'VP',
+        url: 'https://stream.example.org:9000/v_128',
+        mounts: ['/v_128', '/v_64', '/v_32'],
+      }],
+    }],
+  });
+  monitor.reloadConfig();
+
+  try {
+    // /v_32 is absent from the inventory. Icecast already told us it is gone;
+    // spending a connection to rediscover that buys nothing.
+    await monitor.probeVariants(snap({ '/v_128': mount(10), '/v_64': mount(5) }));
+  } finally {
+    diagnose.probeStream = realProbe;
+  }
+
+  assert.deepEqual(probed, ['/v_64'], 'not the primary, not the mount already known missing');
+});
+
+test('a variant probe failure is conclusive, a single silent read is not', async () => {
+  // Connection failure means Icecast advertised a mount it would not serve —
+  // no second opinion needed. Silence is ambiguous: one quiet 8 KB read is a
+  // quiet passage at least as often as it is dead air, so it has to repeat
+  // before it is allowed to mark a mount stalled.
+  const realProbe = diagnose.probeStream;
+  const inventory = snap({ '/v_128': mount(10), '/v_64': mount(5), '/v_32': mount(2) });
+
+  try {
+    diagnose.probeStream = async () => ({ status: 'up', responseTime: 5, isSilent: true, audioEnergy: 0, timings: {} });
+
+    await monitor.probeVariants(inventory);
+    assert.equal(monitor.getVariantHealth('vp')['/v_64'].ok, true, 'one silent read settles nothing');
+    assert.equal(monitor.getVariantHealth('vp')['/v_64'].silentStreak, 1);
+
+    await monitor.probeVariants(inventory);
+    assert.equal(monitor.getVariantHealth('vp')['/v_64'].ok, false, 'the second consecutive one does');
+    assert.equal(monitor.getVariantHealth('vp')['/v_64'].reason, 'serving silence');
+
+    // And it feeds through to a real degradation.
+    const d = channelDegradation(inventory, inventory, monitor.getStreams()[0], monitor.getVariantHealth('vp'));
+    assert.equal(d.degraded, true);
+    assert.deepEqual(d.stalled.map((m) => m.path).sort(), ['/v_32', '/v_64']);
+
+    // A failed connection needs no streak at all.
+    diagnose.probeStream = async () => ({ status: 'down', responseTime: 5, error: 'HTTP 404', errorCode: 'MOUNT_NOT_FOUND', timings: {} });
+    await monitor.probeVariants(inventory);
+    assert.equal(monitor.getVariantHealth('vp')['/v_64'].ok, false);
+    assert.equal(monitor.getVariantHealth('vp')['/v_64'].reason, 'HTTP 404');
+
+    // Audio returning clears it immediately — a recovered mount must not stay
+    // marked stalled until some streak decays.
+    diagnose.probeStream = async () => ({ status: 'up', responseTime: 5, isSilent: false, audioEnergy: 9, timings: {} });
+    await monitor.probeVariants(inventory);
+    assert.equal(monitor.getVariantHealth('vp')['/v_64'].ok, true);
+    assert.equal(monitor.getVariantHealth('vp')['/v_64'].silentStreak, 0);
+  } finally {
+    diagnose.probeStream = realProbe;
+  }
 });

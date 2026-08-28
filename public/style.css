@@ -400,10 +400,14 @@ body::before {
   text-overflow: ellipsis;
 }
 
+/* One mount per line, under the host. A wrapped row read as a single run-on
+   string at these widths; stacked, each mount is its own scannable item and a
+   struck-through amber one is impossible to miss. */
 .stream-mounts {
   display: flex;
-  flex-wrap: wrap;
-  gap: 4px;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 3px;
   margin-top: 7px;
 }
 
@@ -425,13 +429,24 @@ body::before {
   background: var(--surface-4);
 }
 
-/* Amber, not red: the channel is still playing for the rest of its audience,
-   and a red chip beside a green ONLINE badge reads as a contradiction. */
+/* Amber, not red, for both faults: the channel is still playing for the rest of
+   its audience, and a red chip beside a green ONLINE badge reads as a
+   contradiction. */
+
+/* Gone from Icecast entirely. Struck through, because there is nothing there. */
 .mount.missing {
   color: var(--warn);
   background: var(--warn-surface);
   text-decoration: line-through;
   text-decoration-thickness: 1px;
+}
+
+/* Still listed, still holding its listeners, but not serving them audio. Not
+   struck through — the mount exists, which is the whole difference. */
+.mount.stalled {
+  color: var(--warn);
+  background: var(--warn-surface);
+  border-bottom: 1px dotted var(--warn);
 }
 
 .status-indicator {
@@ -1190,6 +1205,19 @@ body::before {
 .incident-badge.dead-air {
   background: rgba(245, 158, 11, 0.1);
   color: #f59e0b;
+  border: 1px solid rgba(245, 158, 11, 0.2);
+}
+
+/* Amber, matching the mount chip it refers to. Not red: the channel kept
+   playing for the rest of its audience. */
+.incident-icon.degraded {
+  background: var(--warn-surface);
+  color: var(--warn);
+}
+
+.incident-badge.degraded {
+  background: var(--warn-surface);
+  color: var(--warn);
   border: 1px solid rgba(245, 158, 11, 0.2);
 }
 

@@ -64,6 +64,21 @@ const DEFAULT_STREAMS = [
 
 // ── Configuration ───────────────────────────────────────────────────────────
 const CHECK_INTERVAL = parseInt(process.env.CHECK_INTERVAL_MS, 10) || 60000;
+// How often the NON-primary mounts get probed, counted in check cycles.
+//
+// Every cycle would be simplest and is wrong twice over. Each probe pulls audio
+// (8 KB per mount), so probing every variant every minute roughly doubles the
+// monitor's bandwidth against the station's own server. And Icecast counts every
+// connection as a listener — measured: one connection took /kpfk from 1 to 2 —
+// so a probe on a mount with a handful of listeners is a large fraction of its
+// reported audience. At 5 it costs about a fifth of that on both counts and
+// still catches a stalled variant inside five minutes.
+const VARIANT_PROBE_EVERY = parseInt(process.env.VARIANT_PROBE_EVERY, 10) || 5;
+// Consecutive silent variant probes before a mount is called stalled. The
+// primary mount has a whole verification engine for this; a variant checked
+// every five minutes gets a cheaper version of the same caution, because one
+// quiet 8 KB read is a quiet passage at least as often as it is a fault.
+const VARIANT_SILENCE_STREAK = 2;
 const FAILURE_THRESHOLD = parseInt(process.env.FAILURE_THRESHOLD, 10) || 2;
 const SILENCE_PROBE_INTERVAL_MS = parseInt(process.env.SILENCE_PROBE_INTERVAL_MS, 10) || 5000;
 const SILENCE_FAILURE_THRESHOLD = parseInt(process.env.SILENCE_FAILURE_THRESHOLD, 10) || 3;
@@ -154,7 +169,13 @@ let episodes = {};        // { [streamId]: { eventId, startedAt, alerted, severi
 // Kept apart from `episodes` deliberately. A degraded channel is still
 // playing, so it must not close, reopen, or otherwise disturb the outage
 // episode for the same stream — the two can legitimately overlap.
-let degradedEpisodes = {};  // { [streamId]: { eventId, startedAt, missing, listenersBefore } }
+let degradedEpisodes = {};  // { [streamId]: { eventId, startedAt, impaired, listenersBefore } }
+// Per-mount probe verdicts, held BETWEEN variant-probe cycles. Recomputing
+// degradation from an empty map on the four cycles in between would make a
+// stalled variant look healthy again and flap the episode open and closed
+// every minute.
+let variantHealth = {};   // { [streamId]: { [mountPath]: { ok, reason, silentStreak } } }
+let cycleCount = 0;
 let snapshot = null;      // latest Icecast snapshot
 let prevSnapshot = null;
 let intervalHandle = null;
@@ -367,11 +388,33 @@ function reloadConfig() {
       abandonEpisode(s.id, ep, timestamp);
       delete episodes[s.id];
     }
+
+    // A degradation episode is an open, unresolved event exactly like an outage
+    // one. Left behind, it stays open forever and is counted as an ongoing fault
+    // on a channel nobody is watching any more.
+    const dep = degradedEpisodes[s.id];
+    if (dep) {
+      abandonEpisode(s.id, dep, timestamp);
+      delete degradedEpisodes[s.id];
+    }
+    delete variantHealth[s.id];
   }
 
   // Definitions of surviving channels are replaced, so an edited mount list or a
   // renamed channel takes effect without a restart.
   streams = next;
+
+  // Drop per-mount verdicts for mounts a surviving channel no longer publishes.
+  // Kept, they would hold a degradation open against a mount the operator has
+  // deliberately removed, which cannot recover because nothing probes it now.
+  for (const s of streams) {
+    const health = variantHealth[s.id];
+    if (!health) continue;
+    const live = new Set(diagnose.channelMountPaths(s));
+    for (const path of Object.keys(health)) {
+      if (!live.has(path)) delete health[path];
+    }
+  }
   store.setStatusCache(streamStatus);
 
   const changed = added.length > 0 || removed.length > 0;
@@ -623,6 +666,62 @@ async function resolveDeadAir(stream, result, timestamp) {
 }
 
 /**
+ * Probes the non-primary mounts of every channel.
+ *
+ * Only mounts Icecast currently lists are probed. One it has already dropped is
+ * MISSING, which the inventory reports for free — spending a connection to
+ * rediscover that would cost bandwidth to learn nothing.
+ *
+ * A failed connection is conclusive on its own: Icecast advertised the mount and
+ * would not serve it. Silence is not, so it has to repeat before it counts —
+ * one quiet 8 KB read is a quiet passage at least as often as it is dead air.
+ */
+async function probeVariants(snap) {
+  const jobs = [];
+  for (const stream of streams) {
+    const paths = diagnose.channelMountPaths(stream);
+    // Skip paths[0]: that is the primary, probed every cycle by the main loop.
+    for (const path of paths.slice(1)) {
+      if (!snap?.mounts?.[path]) continue;
+      jobs.push({ stream, path });
+    }
+  }
+  if (!jobs.length) return;
+
+  const results = await Promise.all(
+    jobs.map((j) => diagnose.probeStream({ ...j.stream, url: diagnose.mountUrl(j.stream, j.path) })),
+  );
+
+  jobs.forEach((job, i) => {
+    const result = results[i];
+    const byStream = (variantHealth[job.stream.id] ||= {});
+    const prev = byStream[job.path] || { silentStreak: 0 };
+
+    if (result.status === 'down') {
+      byStream[job.path] = {
+        ok: false,
+        reason: result.error || result.errorCode || 'not serving',
+        silentStreak: 0,
+      };
+      console.warn(`[Monitor] ◐ ${job.stream.name} variant ${job.path} is listed but not serving — ${result.error || result.errorCode}`);
+      return;
+    }
+
+    if (result.isSilent) {
+      const silentStreak = (prev.silentStreak || 0) + 1;
+      const ok = silentStreak < VARIANT_SILENCE_STREAK;
+      byStream[job.path] = { ok, reason: ok ? null : 'serving silence', silentStreak };
+      if (!ok) {
+        console.warn(`[Monitor] ◐ ${job.stream.name} variant ${job.path} is serving silence (${silentStreak} consecutive probes)`);
+      }
+      return;
+    }
+
+    byStream[job.path] = { ok: true, reason: null, silentStreak: 0 };
+  });
+}
+
+/**
  * Opens, holds, and closes the degradation episode for one channel.
  *
  * A degradation is recorded whenever Icecast stops listing one of a channel's
@@ -645,33 +744,33 @@ function trackVariantDegradation(stream, degradation, timestamp) {
 
   if (degradation.degraded) {
     if (open) {
-      // Held open. The set of missing mounts can grow while it runs — a second
-      // variant dropping is the same degradation getting worse, and losing that
-      // would leave the event describing only the first mount to go.
-      const seen = new Set(open.missing);
-      const added = degradation.missing.map((m) => m.path).filter((p) => !seen.has(p));
+      // Held open, and widened if the fault spreads. The recorded set is the
+      // UNION over the episode, not a snapshot of this instant: a second variant
+      // dropping is the same degradation getting worse, and a variant that comes
+      // back mid-episode was still down for part of it. An event that only
+      // described the current instant would end up describing the last cycle
+      // rather than what happened.
+      const known = new Set(open.impaired.map((m) => m.path));
+      const added = degradation.impaired.filter((m) => !known.has(m.path));
       if (added.length) {
-        open.missing = [...open.missing, ...added];
-        // Newly-missing variants bring their own audience with them.
-        open.listenersBefore += degradation.missing
-          .filter((m) => added.includes(m.path))
-          .reduce((sum, m) => sum + (m.listenersBefore || 0), 0);
+        open.impaired = [...open.impaired, ...added.map(summariseImpaired)];
+        open.listenersBefore += added.reduce((sum, m) => sum + (m.listenersBefore || 0), 0);
         store.updateEvent(open.eventId, {
-          message: degradationMessage(stream, open.missing, degradation.total),
-          detail: { ...open.detail, missing: open.missing, listenersBefore: open.listenersBefore },
+          message: degradationMessage(stream, open.impaired, degradation.total),
+          detail: { ...open.detail, impaired: open.impaired, listenersBefore: open.listenersBefore },
           lastCheckAt: timestamp,
         });
       }
       return;
     }
 
-    const missing = degradation.missing.map((m) => m.path);
-    // Frozen now, while the previous snapshot still remembers the mount. By the
-    // next cycle the count is gone for good — see channelDegradation().
+    const impaired = degradation.impaired.map(summariseImpaired);
+    // Frozen now. For a missing mount the previous snapshot is the last place
+    // its audience is recorded at all — see channelDegradation().
     const listenersBefore = degradation.listenersBefore;
     const impact = degradation.listenersKnown
       ? (listenersBefore > 0 ? 'confirmed' : 'none')
-      // The variant was already missing when we started watching, so no listener
+      // The variant was already failing when we started watching, so no listener
       // count for it was ever observed. 'unknown' is the honest answer and, per
       // the convention throughout this codebase, groups with 'confirmed' rather
       // than being quietly written off.
@@ -680,7 +779,7 @@ function trackVariantDegradation(stream, degradation, timestamp) {
     const detail = {
       present: degradation.present,
       total: degradation.total,
-      missing,
+      impaired,
       listenersBefore,
       listenersKnown: degradation.listenersKnown,
     };
@@ -691,12 +790,14 @@ function trackVariantDegradation(stream, degradation, timestamp) {
       streamName: stream.name,
       type: 'degraded',
       severity: 'degraded',
-      confirmed: true,   // Icecast's own inventory is the witness; no threshold to pass.
+      confirmed: true,   // Icecast's inventory, or a direct probe. No threshold to pass.
       scope: 'stream',
-      message: degradationMessage(stream, missing, degradation.total),
+      message: degradationMessage(stream, impaired, degradation.total),
       detail,
       diagnosis: {
-        causeLabel: 'Mount missing from Icecast',
+        causeLabel: impaired.every((m) => m.reason === 'stalled')
+          ? 'Mount listed but not serving'
+          : 'Mount missing from Icecast',
         listenerImpact: impact,
         scope: 'stream',
       },
@@ -710,15 +811,15 @@ function trackVariantDegradation(stream, degradation, timestamp) {
     degradedEpisodes[stream.id] = {
       eventId: event.id,
       startedAt: timestamp,
-      missing,
+      impaired,
       listenersBefore,
       detail,
     };
 
     console.warn(
-      `[Monitor] ◐ ${stream.name} degraded — serving ${degradation.present}/${degradation.total} mounts, ` +
-      `missing ${missing.join(' ')}` +
-      (degradation.listenersKnown ? ` (${listenersBefore} listener(s) were on them)` : ' (prior audience unknown)'),
+      `[Monitor] ◐ ${stream.name} degraded — ${degradation.working}/${degradation.total} mounts serving, ` +
+      `${impaired.map((m) => `${m.path} (${m.reason})`).join(' ')}` +
+      (degradation.listenersKnown ? ` — ${listenersBefore} listener(s) affected` : ' — prior audience unknown'),
     );
     return;
   }
@@ -738,10 +839,19 @@ function trackVariantDegradation(stream, degradation, timestamp) {
   }
 }
 
-/** One sentence naming what is missing — the message an operator acts on. */
-function degradationMessage(stream, missing, total) {
-  return `${stream.name} is serving ${total - missing.length} of ${total} mounts` +
-    ` — Icecast is not listing ${missing.join(', ')}`;
+/** The storable form: the path, why it is failing, and the detail if there is one. */
+function summariseImpaired(m) {
+  return { path: m.path, reason: m.reason, detail: m.detail || null };
+}
+
+/** One sentence naming what is failing and how — the message an operator acts on. */
+function degradationMessage(stream, impaired, total) {
+  const missing = impaired.filter((m) => m.reason === 'missing').map((m) => m.path);
+  const stalled = impaired.filter((m) => m.reason === 'stalled').map((m) => m.path);
+  const parts = [];
+  if (missing.length) parts.push(`Icecast is not listing ${missing.join(', ')}`);
+  if (stalled.length) parts.push(`${stalled.join(', ')} listed but not serving audio`);
+  return `${stream.name} is serving ${total - impaired.length} of ${total} mounts — ${parts.join('; ')}`;
 }
 
 // ── Run Check Cycle ─────────────────────────────────────────────────────────
@@ -768,12 +878,29 @@ async function runChecks() {
 async function runChecksInner() {
   const timestamp = new Date().toISOString();
 
+  cycleCount += 1;
   prevSnapshot = snapshot;
-  const [results, snap] = await Promise.all([
-    Promise.all(streams.map((s) => diagnose.probeStream(s))),
-    diagnose.fetchIcecastSnapshot(),
-  ]);
+
+  // The snapshot is fetched BEFORE any probe connection is opened, not
+  // alongside it.
+  //
+  // Icecast counts every connection as a listener, ours included — measured
+  // directly: opening one connection took /kpfk from 1 listener to 2. These two
+  // used to run in the same Promise.all, which put our own probe inside the
+  // listener counts we then recorded and stored, on every probed mount. Reading
+  // the inventory first means the only connections in it are real ones; ours
+  // open afterwards and are gone long before the next cycle reads it again.
+  const snap = await diagnose.fetchIcecastSnapshot();
   snapshot = snap;
+
+  const results = await Promise.all(streams.map((s) => diagnose.probeStream(s)));
+
+  // The other bitrate variants, on a slower schedule — see VARIANT_PROBE_EVERY.
+  // This is the only thing that can see a mount Icecast still lists but which
+  // is not actually serving audio.
+  if (cycleCount % VARIANT_PROBE_EVERY === 1 % VARIANT_PROBE_EVERY) {
+    await probeVariants(snap);
+  }
 
   const cycle = streams.map((s, i) => ({ stream: s, result: results[i] }));
   const downCount = cycle.filter((c) => c.result.status === 'down').length;
@@ -798,7 +925,7 @@ async function runChecksInner() {
     const audience = diagnose.channelAudience(snap, stream);
     // Whether the channel is serving all of its variants, which the probe
     // cannot see: it only ever asks the primary mount.
-    const degradation = diagnose.channelDegradation(snap, prevSnapshot, stream);
+    const degradation = diagnose.channelDegradation(snap, prevSnapshot, stream, variantHealth[stream.id] || {});
 
     // ── Silence tracking (only meaningful while the stream is reachable) ────
     const st = silenceState[stream.id];
@@ -858,10 +985,13 @@ async function runChecksInner() {
       // still playing for most of its audience.
       variantsPresent: audience.present,
       variantsTotal: audience.total,
-      // The paths themselves, so the dashboard can name what is missing rather
-      // than leaving an operator to work out which of three mounts "2 of 3" is.
-      // Only meaningful while Icecast is reachable — see channelDegradation().
-      missingMounts: snap.reachable ? audience.missing : prev.missingMounts || [],
+      // The failing paths themselves, each with WHY, so the dashboard can name
+      // them rather than leaving an operator to work out which of three mounts
+      // "2 of 3" refers to. Only meaningful while Icecast is reachable — see
+      // channelDegradation().
+      impairedMounts: snap.reachable
+        ? degradation.impaired.map((m) => ({ path: m.path, reason: m.reason }))
+        : prev.impairedMounts || [],
       degraded: degradation.degraded,
       title: mount?.title || prev.title || '',
       bitrate: mount?.bitrate || prev.bitrate || 128,
@@ -879,6 +1009,14 @@ async function runChecksInner() {
       silenceState: st.state,
       error: result.error,
       errorCode: result.errorCode || null,
+      // The channel's listeners broken out per mount, plus how many of its
+      // variants were being served. The summed count above answers "how big was
+      // this channel"; only these answer "which variant lost its audience", and
+      // a sum can hold steady while one variant collapses inside it. Roughly 90
+      // bytes a sample, against a 7-day raw retention — a few MB.
+      variantsPresent: audience.present,
+      variantsTotal: audience.total,
+      mountListeners: audience.perMount,
     });
 
     // ── Variant degradation ────────────────────────────────────────────────
@@ -2212,5 +2350,6 @@ module.exports = {
   abandonEpisode,
   // Exported for tests.
   normaliseStreams, normaliseMounts, buildDefaultConfig, flattenChannels,
-  trackVariantDegradation,
+  trackVariantDegradation, runChecks, probeVariants,
+  getVariantHealth: (streamId) => variantHealth[streamId] || {},
 };

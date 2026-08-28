@@ -288,11 +288,15 @@ one, and they are the demo that justifies everything after.
 > Verified live: **57 → 88 listeners**, so 35% of KPFT's audience had been
 > invisible. 11 regression tests in `test/channel-audience.test.js`.
 >
-> Probing still runs against the primary mount only, so a channel produces one
-> alert rather than one per variant, and stream IDs are unchanged — stored
-> history stays comparable. Samples now also carry `variantsPresent` /
-> `variantsTotal`, which is what will later distinguish "one encoder dropped"
-> from "the channel is off air".
+> Stream IDs are unchanged, so stored history stays comparable.
+>
+> **Follow-up, 2026-08-28.** This paragraph previously claimed samples carried
+> `variantsPresent` / `variantsTotal`. They did not — those existed only on the
+> live status record and were never written to a sample, so there was no
+> per-mount history at all. They are now written, alongside a per-mount
+> `mountListeners` breakdown, and the non-primary mounts are probed every fifth
+> cycle so a mount that is listed but not serving is caught too. See
+> `test/channel-degraded.test.js`.
 
 The original analysis follows.
 

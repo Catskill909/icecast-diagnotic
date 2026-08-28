@@ -655,58 +655,98 @@ function channelAudience(snapshot, stream) {
   let peak = 0;
   let present = 0;
   const missing = [];
+  // Per-mount counts, kept alongside the sum. The sum answers "how big is this
+  // channel"; only the breakdown answers "which variant lost its audience", and
+  // a summed figure can hold steady while one variant collapses inside it.
+  const perMount = {};
   for (const p of paths) {
     const m = snapshot?.mounts?.[p];
     if (!m) { missing.push(p); continue; }
     present += 1;
     listeners += m.listeners || 0;
     peak += m.listenerPeak || 0;
+    perMount[p] = m.listeners || 0;
   }
   // Named, not just counted: "2 of 3 mounts" tells an operator something is
   // wrong, "/live_64 is not listed" tells them which encoder to restart.
-  return { listeners, peak, present, total: paths.length, missing };
+  return { listeners, peak, present, total: paths.length, missing, perMount };
+}
+
+/** The same channel's URL, pointed at one of its other mounts. */
+function mountUrl(stream, pathname) {
+  const u = new URL(stream.url);
+  u.pathname = pathname;
+  return u.href;
 }
 
 /**
  * A channel that is playing, but not on every mount it publishes.
  *
  * The probe watches ONE mount per channel — the highest bitrate — so a variant
- * dropping on its own is invisible to it: the channel answers, the card reads
- * ONLINE, and the listeners on the dropped variant are off the air with nothing
+ * failing on its own is invisible to it: the channel answers, the card reads
+ * ONLINE, and the listeners on that variant are off the air with nothing
  * recorded. On this host that is not a hypothetical share of the audience:
  * /live_64 carries 22 of KPFT Main's 59 listeners.
  *
- * Icecast's own inventory is the witness. A mount it no longer lists is not
- * being served to anyone, which needs no probe to establish.
+ * A variant fails in two distinct ways, and both are caught here:
  *
- * `listenersBefore` is read from the PREVIOUS snapshot, because the current one
- * no longer has the mount to report on — a vanished mount reports no listeners
- * precisely because nobody can reach it. It is therefore only knowable in the
- * cycle the variant disappears, which is why the caller freezes it on the
- * episode rather than re-deriving it later.
+ *   MISSING  Icecast no longer lists the mount. Its source or transcoder
+ *            dropped. Nobody can connect, which needs no probe to establish —
+ *            Icecast's own inventory is the witness.
+ *
+ *   STALLED  Icecast still lists it, but connecting to it fails or returns
+ *            silence. The inventory cannot see this; only a probe can, which is
+ *            why `variantHealth` is passed in from the caller that runs them.
+ *
+ * The listener figures come from different places for the two, deliberately. A
+ * MISSING mount reports no listeners precisely because nobody can reach it, so
+ * its audience is only knowable from the PREVIOUS snapshot — and only in the
+ * cycle it disappears, which is why the caller freezes it on the episode. A
+ * STALLED mount is still listed and still holding its listeners; they are
+ * connected and hearing nothing, so the CURRENT count is the right one and is
+ * live for as long as the fault lasts.
  */
-function channelDegradation(snapshot, prevSnapshot, stream) {
+function channelDegradation(snapshot, prevSnapshot, stream, variantHealth = {}) {
   const audience = channelAudience(snapshot, stream);
+
   const missing = audience.missing.map((path) => ({
     path,
+    reason: 'missing',
     listenersBefore: prevSnapshot?.mounts?.[path]?.listeners ?? null,
   }));
 
-  // present === 0 is not degradation, it is the channel being off air, and the
-  // outage path already owns that. An unreachable Icecast also lands here: we
-  // cannot see any mount, which is not evidence that any of them are gone.
-  const degraded = !!snapshot?.reachable && audience.present > 0 && audience.present < audience.total;
+  // Only mounts Icecast still lists can be stalled. A mount that has since
+  // vanished is MISSING, and reporting it as both would double-count one fault.
+  const stalled = Object.entries(variantHealth)
+    .filter(([path, h]) => h && h.ok === false && snapshot?.mounts?.[path])
+    .map(([path, h]) => ({
+      path,
+      reason: 'stalled',
+      detail: h.reason || null,
+      listenersBefore: snapshot.mounts[path].listeners ?? null,
+    }));
+
+  const impaired = [...missing, ...stalled];
+
+  // At least one mount has to still be working for this to be a degradation
+  // rather than an outage. If every mount is gone or stalled the channel is off
+  // air, and the outage path is the truthful record of that.
+  const working = audience.present - stalled.length;
+  const degraded = !!snapshot?.reachable && working > 0 && impaired.length > 0;
 
   return {
     degraded,
     present: audience.present,
     total: audience.total,
+    working,
     missing,
-    // Summed over the missing variants only. Null counts contribute nothing:
+    stalled,
+    impaired,
+    // Summed over the impaired variants only. Null counts contribute nothing:
     // an unknown headcount is not a measured zero, and `listenersKnown` says
     // which of the two this is.
-    listenersBefore: missing.reduce((sum, m) => sum + (m.listenersBefore || 0), 0),
-    listenersKnown: missing.some((m) => m.listenersBefore != null),
+    listenersBefore: impaired.reduce((sum, m) => sum + (m.listenersBefore || 0), 0),
+    listenersKnown: impaired.some((m) => m.listenersBefore != null),
   };
 }
 
@@ -1026,6 +1066,7 @@ module.exports = {
   channelMountPaths,
   channelAudience,
   channelDegradation,
+  mountUrl,
   parseIcecastStatus,
   repairIcecastJson,
   classify,
