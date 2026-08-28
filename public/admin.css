@@ -43,6 +43,7 @@ button:disabled { opacity: .5; cursor: not-allowed; }
          display: inline-flex; align-items: center; }
 .ghost:hover { color: var(--text-primary); background: var(--surface-3); }
 
+#list-msg { margin-top: 0; margin-bottom: 12px; }
 .stations { display: grid; gap: 10px; }
 .station { background: var(--surface-2); border: 1px solid var(--surface-3);
            border-radius: 10px; padding: 13px 15px; }

@@ -77,7 +77,11 @@
   // ── Discovery ─────────────────────────────────────────────────────────────
   $('discover-form').addEventListener('submit', async (e) => {
     e.preventDefault();
+    // Clear every message, not just this one. A confirmation left over from an
+    // edit reads as though it describes the station being added now.
     clear($('discover-msg'));
+    clear($('save-msg'));
+    clear($('list-msg'));
     $('results').classList.add('hidden');
     const btn = $('discover-btn');
     btn.disabled = true; btn.textContent = 'Looking…';
@@ -181,7 +185,7 @@
 
   $('cancel-btn').addEventListener('click', () => {
     $('results').classList.add('hidden');
-    clear($('save-msg')); clear($('discover-msg'));
+    clear($('save-msg')); clear($('discover-msg')); clear($('list-msg'));
     discovered = null; idTouched = false;
   });
 
@@ -233,6 +237,7 @@
       return;
     }
 
+    clear($('list-msg'));
     show($('save-msg'),
       `${r.body.station.name} added and being monitored now — ` +
       `${r.body.monitoring.added.length} channel(s), no restart needed.`, 'ok');
@@ -313,7 +318,7 @@
       return;
     }
     const dropped = (r.body.removedChannels || []);
-    show($('save-msg'),
+    show($('list-msg'),
       `${r.body.station.name} updated.` +
       (dropped.length ? ` Stopped monitoring ${dropped.join(', ')} — its recorded history is kept.` : ''),
       'ok');
@@ -342,8 +347,8 @@
   async function removeStation(s) {
     const r = await api(`/api/stations/${encodeURIComponent(s.id)}`, { method: 'DELETE' });
     if (!r) return;
-    if (!r.ok) { show($('save-msg'), r.body.error || 'Could not remove.'); return; }
-    show($('save-msg'),
+    if (!r.ok) { show($('list-msg'), r.body.error || 'Could not remove.'); return; }
+    show($('list-msg'),
       `${r.body.removed.name} is no longer monitored. Its recorded history is kept — ` +
       `re-adding it with the same channel identifiers reconnects to it.`, 'ok');
     loadStations();
