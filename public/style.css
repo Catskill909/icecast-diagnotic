@@ -221,9 +221,10 @@ body::before {
   transition: all var(--transition);
 }
 
+/* Summary tiles are read, not clicked. A lift on hover promises an interaction
+ * that does not exist. */
 .summary-card:hover {
   border-color: var(--border-hover);
-  transform: translateY(-1px);
   box-shadow: var(--shadow-md);
 }
 
@@ -353,9 +354,17 @@ body::before {
   opacity: 1;
 }
 
+/* No transform on hover.
+ *
+ * The card holds a play button, so lifting the card moves that button out from
+ * under the cursor as it approaches — the target retreats from the pointer
+ * aiming at it. Feedback that changes an element's POSITION belongs on things
+ * that are themselves the target; a container holding its own control is not.
+ *
+ * The border and shadow still respond, so the card is visibly live. Nothing
+ * moves. */
 .stream-card:hover {
   border-color: var(--border-hover);
-  transform: translateY(-2px);
   box-shadow: var(--shadow-lg);
 }
 
