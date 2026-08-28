@@ -119,98 +119,29 @@
     </div>
 
     <!-- Help / Documentation Modal -->
-    <div class="modal-overlay" id="help-modal" style="display: none;">
-      <div class="modal-card fade-in">
-        <div class="modal-header">
-          <div class="modal-title">
-            <span class="material-symbols-outlined">info</span>
-            KPFT Stream Monitor — User Guide
+    <!-- Guide. One topic at a time: the content is dense enough that stacking
+         all of it in a single scroll made none of it readable. -->
+    <div class="guide-overlay" id="help-modal" style="display: none;">
+      <div class="guide-card">
+        <header class="guide-header">
+          <div>
+            <div class="guide-eyebrow">Guide</div>
+            <h2 class="guide-heading" id="guide-heading">How this monitor works</h2>
           </div>
-          <button class="modal-close" id="modal-close-btn">&times;</button>
+          <button class="guide-close" id="guide-close" aria-label="Close guide">&times;</button>
+        </header>
+
+        <div class="guide-body">
+          <nav class="guide-nav" id="guide-nav" aria-label="Guide topics"></nav>
+          <article class="guide-content" id="guide-content" tabindex="-1"></article>
         </div>
-        <div class="modal-body">
-          <div class="guide-grid">
 
-            <div class="guide-item featured">
-              <div class="guide-icon"><span class="material-symbols-outlined">troubleshoot</span></div>
-              <div>
-                <h4>It tells you which end broke — the studio or the server</h4>
-                <p>This is the point of the tool. A dropout is not just reported, it is diagnosed. Every check compares the stream against Icecast's live mount inventory and against the other streams, so an alert names the cause instead of leaving you to guess who to call.</p>
-                <div class="guide-split">
-                  <div class="guide-case studio">
-                    <strong>🎙️ Studio side — the Barix encoder</strong>
-                    <span>The mount returns <code>404</code> and has vanished from Icecast's inventory, while the server keeps serving every other station normally. The encoder has dropped its connection. <strong>Everyone listening is cut off</strong> and the audience takes a long time to rebuild.</span>
-                  </div>
-                  <div class="guide-case server">
-                    <strong>🖥️ Server side — Icecast / Pacifica</strong>
-                    <span>The connection is reset or refused, often on several streams at the same second. People already listening are usually unaffected, but <strong>new listeners cannot start playback</strong> during the window.</span>
-                  </div>
-                </div>
-              </div>
-            </div>
-
-            <div class="guide-item">
-              <div class="guide-icon"><span class="material-symbols-outlined">cell_tower</span></div>
-              <div>
-                <h4>Real-Time Monitoring</h4>
-                <p>Checks <span id="help-stream-list">KPFT Main, HD2 and HD3</span> every <span id="help-check-interval">60 seconds</span> — HTTP status, content type, and a full <strong>DNS → TCP → TLS → first byte</strong> timing breakdown, which reveals where in the chain a failure happened. Press play on any stream card to confirm by ear what the monitor is reporting.</p>
-              </div>
-            </div>
-
-            <div class="guide-item">
-              <div class="guide-icon"><span class="material-symbols-outlined">bolt</span></div>
-              <div>
-                <h4>What counts as an outage</h4>
-                <p><span id="help-failure-threshold">2</span> consecutive failed checks confirm an <strong>outage</strong>. A failure that clears sooner is either a <strong>Brief Outage</strong> — the mount vanished and listeners were cut off — or a <strong>Probe Anomaly</strong>, where Icecast kept serving the mount and only this monitor's connection failed. Both remain in the long-term record.</p>
-              </div>
-            </div>
-
-            <div class="guide-item">
-              <div class="guide-icon"><span class="material-symbols-outlined">volume_off</span></div>
-              <div>
-                <h4>Silence &amp; Dead Air Detection</h4>
-                <p>Catches the case where the stream is connected but silent. To avoid false alarms during speech pauses, suspected silence triggers re-probes every <span id="help-silence-interval">5 seconds</span>; any detected audio instantly resets the count. Dead air is declared after <span id="help-silence-threshold">3</span> consecutive silent probes.</p>
-              </div>
-            </div>
-
-            <div class="guide-item">
-              <div class="guide-icon"><span class="material-symbols-outlined">mail</span></div>
-              <div>
-                <h4>Actionable Email Alerts</h4>
-                <p>Alerts lead with the root cause, listener reach, and specific things to check. <span id="help-alert-policy">After the confirmation threshold, an outage emails only when listeners were affected or Icecast was unreachable and impact could not be ruled out.</span> Simultaneous failures are correlated to distinguish a KPFT source/feed-path problem from a Pacifica/Icecast-path problem, and consolidated into one message. This assigns the side to investigate; it does not prove which physical device failed. Each event records <strong>whether its alert actually sent</strong>.</p>
-              </div>
-            </div>
-
-            <div class="guide-item">
-              <div class="guide-icon"><span class="material-symbols-outlined">history</span></div>
-              <div>
-                <h4>Long-Term History</h4>
-                <p>Incidents are not pruned after 24 hours or by age. The newest <span id="help-event-limit">100,000</span> events are retained as a safety limit. Open <a href="history.html" style="color: var(--primary-light);">History</a> for filters, an outage heatmap, root-cause breakdowns, listener-impact reporting, and the evidence behind every event.</p>
-              </div>
-            </div>
-
-            <div class="guide-item">
-              <div class="guide-icon"><span class="material-symbols-outlined">group</span></div>
-              <div>
-                <h4>Listener Impact</h4>
-                <p>Live listener counts come straight from Icecast. <strong>Listeners cut off</strong> is the audience present when each interruption began; someone affected twice counts twice. <strong>Listening lost</strong> combines that reach with duration. Audio uptime excludes probe failures where Icecast proves the mount kept playing.</p>
-              </div>
-            </div>
-
-            <div class="guide-item">
-              <div class="guide-icon"><span class="material-symbols-outlined">summarize</span></div>
-              <div>
-                <h4>Weekly Roundup</h4>
-                <p id="help-roundup-policy">When enabled, a scheduled weekly report summarizes audio uptime, listener impact, downtime, fault ownership, and alert delivery. It arrives even after a quiet week, confirming that monitoring is still active.</p>
-              </div>
-            </div>
-
-          </div>
-        </div>
-        <div class="modal-footer">
-          <span>Powered by Pacifica Foundation · KPFT Houston</span>
-          <button class="btn-primary" id="modal-ok-btn">Got It</button>
-        </div>
+        <footer class="guide-footer">
+          <span class="guide-hint">
+            <kbd>←</kbd><kbd>→</kbd> to move · <kbd>Esc</kbd> to close
+          </span>
+          <button class="guide-done" id="guide-done">Done</button>
+        </footer>
       </div>
     </div>
 
@@ -222,6 +153,7 @@
 </div>
 
 <script src="event-detail.js?v=dev"></script>
+<script src="guide.js?v=dev"></script>
 <script src="app.js?v=dev"></script>
 </body>
 </html>
