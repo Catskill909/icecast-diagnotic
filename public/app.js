@@ -312,7 +312,15 @@
               : i === 0
               ? 'Probed for health'
               : 'Served by Icecast, checked every few minutes';
-            return `<span class="mount${i === 0 ? ' primary' : ''}${fault ? ' ' + fault : ''}" title="${escapeHtml(title)}">${escapeHtml(path)}</span>`;
+            // The listener count for this mount specifically. This is the whole
+            // point of listing mounts rather than counting them: on this host
+            // /live_64 regularly carries a third of the channel's audience, and
+            // a summed figure never showed that.
+            const n = (stream.mountListeners || {})[path];
+            const count = fault == null && typeof n === 'number'
+              ? `<span class="mount-n">${n}</span>`
+              : '';
+            return `<span class="mount${i === 0 ? ' primary' : ''}${fault ? ' ' + fault : ''}" title="${escapeHtml(title)}">${escapeHtml(path)}${count}</span>`;
           }).join('')}</div>`
         : '';
 

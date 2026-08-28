@@ -1164,7 +1164,9 @@
     // This tile counts a DIFFERENT population from every other one on the page:
     // outage alerts AND their "back online" counterparts. Unstated, 92 sitting
     // beside "9 outages" reads as impossible. So it says which is which.
-    const downAlerts = summaryEvents.filter((e) => e.email?.sent === true && e.type !== 'up').length;
+    // Degraded channels can email too, and one is not an outage alert — counting
+    // it as one would report more outages than the record contains.
+    const downAlerts = summaryEvents.filter((e) => e.email?.sent === true && isFailureEvent(e)).length;
     const upAlerts = summaryEvents.filter((e) => e.email?.sent === true && e.type === 'up').length;
     $('#stat-emailed').textContent = emailed;
     let emailedDetail = upAlerts

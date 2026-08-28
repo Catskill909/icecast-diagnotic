@@ -823,7 +823,12 @@ function getListenerSeries(streamId, windowMs, bucketMs) {
   const slot = (t) => {
     const key = Math.floor(t / bucket) * bucket;
     if (!out.has(key)) {
-      out.set(key, { t: key, sum: 0, count: 0, peak: null, up: 0, down: 0, checks: 0 });
+      // `mounts` is per-bitrate-variant. It exists only for buckets built from
+      // RAW samples: hourly rollups compact the per-mount breakdown away, so
+      // per-mount audience history reaches back exactly as far as
+      // SAMPLE_RETENTION_DAYS and no further. The UI must say so rather than
+      // silently drawing a shorter line than the one beside it.
+      out.set(key, { t: key, sum: 0, count: 0, peak: null, up: 0, down: 0, checks: 0, mounts: new Map() });
     }
     return out.get(key);
   };
@@ -839,6 +844,15 @@ function getListenerSeries(streamId, windowMs, bucketMs) {
         b.sum += s.listeners;
         b.count++;
         b.peak = b.peak == null ? s.listeners : Math.max(b.peak, s.listeners);
+      }
+      if (s.mountListeners) {
+        for (const [path, n] of Object.entries(s.mountListeners)) {
+          if (typeof n !== 'number') continue;
+          const m = b.mounts.get(path) || { sum: 0, count: 0 };
+          m.sum += n;
+          m.count += 1;
+          b.mounts.set(path, m);
+        }
       }
     } else if (s.status === 'down') {
       b.down++;
@@ -871,6 +885,13 @@ function getListenerSeries(streamId, windowMs, bucketMs) {
       up: b.up,
       down: b.down,
       checks: b.checks,
+      // Absent rather than empty on buckets with no per-mount data, so a caller
+      // can tell "before we recorded this" from "every mount had zero".
+      byMount: b.mounts.size
+        ? Object.fromEntries(
+          [...b.mounts].map(([path, m]) => [path, Math.round((m.sum / m.count) * 10) / 10]),
+        )
+        : undefined,
     }));
 }
 

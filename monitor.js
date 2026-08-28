@@ -81,6 +81,16 @@ const VARIANT_PROBE_EVERY = Math.max(1, parseInt(process.env.VARIANT_PROBE_EVERY
 // every five minutes gets a cheaper version of the same caution, because one
 // quiet 8 KB read is a quiet passage at least as often as it is a fault.
 const VARIANT_SILENCE_STREAK = 2;
+// How long a degraded channel must stay degraded before anyone is emailed.
+//
+// A degradation is not an outage: the channel keeps playing for most of its
+// audience, so it does not warrant the 3am treatment a dead channel gets. But a
+// variant that has been dead for half an hour with listeners on it is a real
+// loss that nobody would otherwise find out about — the dashboard would show it
+// and no one is watching the dashboard at 4am. Sustained AND costing listeners
+// is the bar; either one alone stays silent and recorded.
+// Set to 0 to disable degraded alerting entirely.
+const DEGRADED_ALERT_AFTER_MS = Math.max(0, parseInt(process.env.DEGRADED_ALERT_AFTER_MS, 10) || 30 * 60 * 1000);
 const FAILURE_THRESHOLD = parseInt(process.env.FAILURE_THRESHOLD, 10) || 2;
 const SILENCE_PROBE_INTERVAL_MS = parseInt(process.env.SILENCE_PROBE_INTERVAL_MS, 10) || 5000;
 const SILENCE_FAILURE_THRESHOLD = parseInt(process.env.SILENCE_FAILURE_THRESHOLD, 10) || 3;
@@ -741,7 +751,7 @@ async function probeVariants(snap) {
  * one degradation that has not ended yet, not ten thousand check cycles' worth
  * of them.
  */
-function trackVariantDegradation(stream, degradation, timestamp) {
+function trackVariantDegradation(stream, degradation, timestamp, notices = null) {
   const open = degradedEpisodes[stream.id];
 
   if (degradation.degraded) {
@@ -762,6 +772,19 @@ function trackVariantDegradation(stream, degradation, timestamp) {
           detail: { ...open.detail, impaired: open.impaired, listenersBefore: open.listenersBefore },
           lastCheckAt: timestamp,
         });
+      }
+
+      // Sustained, and it cost listeners. Escalate once — never per cycle.
+      const heldMs = new Date(timestamp) - new Date(open.startedAt);
+      if (
+        notices
+        && !open.alerted
+        && DEGRADED_ALERT_AFTER_MS > 0
+        && heldMs >= DEGRADED_ALERT_AFTER_MS
+        && open.listenersBefore > 0
+      ) {
+        open.alerted = true;
+        notices.alerts.push({ stream, episode: open, heldMs });
       }
       return;
     }
@@ -838,7 +861,78 @@ function trackVariantDegradation(stream, degradation, timestamp) {
     });
     delete degradedEpisodes[stream.id];
     console.log(`[Monitor] ✓ ${stream.name} serving all mounts again after ${diagnose.fmtDuration(durationMs)}`);
+
+    // An alert that never gets an all-clear trains people to ignore the next
+    // one. Only episodes that actually emailed produce one — a degradation
+    // nobody was told about needs no announcement that it ended.
+    if (notices && open.alerted) {
+      notices.recoveries.push({ stream, episode: open, durationMs });
+    }
   }
+}
+
+/**
+ * Sends at most one degradation email and one all-clear per cycle.
+ *
+ * Separate from dispatchNotifications() on purpose. That function consolidates
+ * OUTAGES, and folding a degraded channel into an outage message would tell a
+ * station its stream is down when it is playing — the single most damaging thing
+ * an alert can get wrong.
+ */
+async function dispatchDegradedNotices({ alerts, recoveries }) {
+  if (alerts.length) {
+    const entries = alerts.map(({ stream, episode, heldMs }) => ({
+      stream,
+      // The probe never failed — that is the whole point of a degradation — so
+      // there is no result to report. Synthesised the same way
+      // previewAlertForEvent() does it, from what the episode knows.
+      result: { httpStatus: null, error: null, errorCode: null, responseTime: 0, timings: {} },
+      diagnosis: {
+        causeLabel: degradationCauseLabel(episode.impaired),
+        listenerImpact: 'confirmed',
+        scope: 'stream',
+        evidence: [
+          `${episode.impaired.map((m) => `${m.path} (${m.reason})`).join(', ')} — unserved for ${diagnose.fmtDuration(heldMs)}.`,
+          'The channel is still playing on its remaining mounts, so most listeners are unaffected.',
+        ],
+      },
+      audience: { listenersBefore: episode.listenersBefore },
+    }));
+
+    const emailResult = await sendAlert({
+      kind: 'degraded',
+      entries,
+      scope: 'stream',
+      consolidated: entries.length > 1,
+    });
+    for (const { episode } of alerts) store.updateEvent(episode.eventId, { email: emailResult });
+  }
+
+  if (recoveries.length) {
+    const entries = recoveries.map(({ stream, episode, durationMs }) => ({
+      stream,
+      result: { httpStatus: null, error: null, errorCode: null, responseTime: 0, timings: {} },
+      diagnosis: { causeLabel: degradationCauseLabel(episode.impaired), scope: 'stream' },
+      audience: { listenersBefore: episode.listenersBefore },
+      durationMs,
+    }));
+    await sendAlert({
+      kind: 'recovery',
+      entries,
+      scope: 'stream',
+      consolidated: entries.length > 1,
+      recoveredFrom: 'a degraded channel',
+    });
+  }
+
+  if (alerts.length || recoveries.length) store.saveEvents();
+}
+
+/** Which of the two variant faults to name, when an episode carries both. */
+function degradationCauseLabel(impaired) {
+  return (impaired || []).every((m) => m.reason === 'stalled')
+    ? 'Mount listed but not serving'
+    : 'Mount missing from Icecast';
 }
 
 /** The storable form: the path, why it is failing, and the detail if there is one. */
@@ -915,6 +1009,9 @@ async function runChecksInner() {
 
   const newlyNotable = [];   // episodes that just became worth emailing
   const recoveries = [];     // episodes that just ended
+  // Degradation alerts are collected rather than sent inline, so several
+  // channels degrading together produce one message instead of five.
+  const degradedNotices = { alerts: [], recoveries: [] };
 
   for (let i = 0; i < streams.length; i++) {
     const stream = streams[i];
@@ -987,6 +1084,10 @@ async function runChecksInner() {
       // still playing for most of its audience.
       variantsPresent: audience.present,
       variantsTotal: audience.total,
+      // Live per-mount counts, so the card can show which variant actually
+      // carries the audience. Carried forward when Icecast is unreachable for
+      // the same reason the summed count is: no reading is not a reading of nil.
+      mountListeners: snap.reachable ? audience.perMount : prev.mountListeners || {},
       // The failing paths themselves, each with WHY, so the dashboard can name
       // them rather than leaving an operator to work out which of three mounts
       // "2 of 3" refers to. Only meaningful while Icecast is reachable — see
@@ -1026,7 +1127,7 @@ async function runChecksInner() {
     // it is up, and a channel that goes fully down is an outage, not a
     // degradation. Ordered before the outage block only so that a channel
     // failing outright closes its degradation episode first.
-    trackVariantDegradation(stream, degradation, timestamp);
+    trackVariantDegradation(stream, degradation, timestamp, degradedNotices);
 
     // ── Episode transitions ────────────────────────────────────────────────
     if (isDown) {
@@ -1200,6 +1301,7 @@ async function runChecksInner() {
 
   // ── Notification pass ─────────────────────────────────────────────────────
   await dispatchNotifications(newlyNotable, recoveries, { allDown, timestamp, snapshot: snap });
+  await dispatchDegradedNotices(degradedNotices);
 
   store.prune();
   store.saveEvents();
@@ -1653,10 +1755,15 @@ async function sendAlert(opts) {
 function composeAlert({ kind, entries, scope, consolidated = false, recoveredFrom = null }) {
   const isDeadAir = kind === 'dead_air';
   const isRecovery = kind === 'recovery';
-  const isDown = !isRecovery;
+  // A degraded channel is NOT down, and must never be described as though it
+  // were. It is its own state: playing, on fewer mounts than it publishes.
+  const isDegraded = kind === 'degraded';
+  const isDown = !isRecovery && !isDegraded;
 
-  const emoji = isDeadAir ? '🔇' : isDown ? '🔴' : '🟢';
-  const statusText = isDeadAir ? 'DEAD AIR (SILENCE)' : isDown ? 'DOWN' : 'RECOVERED';
+  const emoji = isDeadAir ? '🔇' : isDegraded ? '🟠' : isDown ? '🔴' : '🟢';
+  const statusText = isDeadAir ? 'DEAD AIR (SILENCE)'
+    : isDegraded ? 'DEGRADED'
+    : isDown ? 'DOWN' : 'RECOVERED';
 
   const names = entries.map((e) => e.stream.name);
   const nameList = names.length > 2
@@ -1688,10 +1795,10 @@ function composeAlert({ kind, entries, scope, consolidated = false, recoveredFro
   if (consolidated) {
     subject = `${emoji} ${alertOwner} Alert: ${entries.length} streams ${statusText}${primaryCause ? ` — ${primaryCause}` : ''}${subjectCost}`;
   } else {
-    subject = `${emoji} ${alertOwner} Alert: ${nameList} — ${statusText}${primaryCause && isDown ? ` (${primaryCause})` : ''}${subjectCost}`;
+    subject = `${emoji} ${alertOwner} Alert: ${nameList} — ${statusText}${primaryCause && (isDown || isDegraded) ? ` (${primaryCause})` : ''}${subjectCost}`;
   }
 
-  const headerBg = isDeadAir
+  const headerBg = isDeadAir || isDegraded
     ? 'linear-gradient(135deg, #d97706, #b45309)'
     : isDown
     ? 'linear-gradient(135deg, #dc2626, #991b1b)'
@@ -1709,6 +1816,9 @@ function composeAlert({ kind, entries, scope, consolidated = false, recoveredFro
 
   const subtitle = isDeadAir
     ? `${nameList} is connected but silent — dead air confirmed across ${SILENCE_FAILURE_THRESHOLD} consecutive probes.${audienceNote}`
+    : isDegraded
+    ? `${nameList} ${entries.length > 1 ? 'are' : 'is'} still on air, but not on every mount published. `
+      + `Listeners on the affected mount lost audio; everyone else is unaffected.${audienceNote}`
     : isDown
     ? `${nameList} ${entries.length > 1 ? 'have' : 'has'} gone offline.${scopeNote}${audienceNote}`
     : `${nameList} ${entries.length > 1 ? 'are' : 'is'} back online${recoveredFrom ? ` (recovered from ${recoveredFrom})` : ''}.${audienceNote}`;
@@ -1761,7 +1871,11 @@ function previewAlertForEvent(eventId) {
   };
 
   return composeAlert({
-    kind: event.severity === 'dead_air' ? 'dead_air' : event.type === 'up' ? 'recovery' : 'down',
+    kind: event.severity === 'dead_air' ? 'dead_air'
+      // Degraded events can email now, so previewing one as a DOWN alert would
+      // show a red "stream offline" message for a channel that was playing.
+      : event.type === 'degraded' ? 'degraded'
+      : event.type === 'up' ? 'recovery' : 'down',
     entries: [{
       stream, result, diagnosis: event.diagnosis,
       audience: event.audience, durationMs: event.durationMs,
@@ -1844,7 +1958,10 @@ function getListeners(windowMs, bucketMs, stationId) {
   const outages = store
     .getEvents({ limit: Number.MAX_SAFE_INTEGER })
     .events.filter((e) => {
-      if (e.type === 'up' || !e.durationMs) return false;
+      // Failures only. A degraded channel kept playing, so drawing an outage
+      // band across the audience chart for it would show a dip that never
+      // happened on a channel that never went off air.
+      if (!store.isFailureEvent(e) || !e.durationMs) return false;
       // Scoped too: an outage overlay from another station drawn across this
       // station's audience would be worse than no overlay at all.
       if (!inScope.has(e.streamId)) return false;

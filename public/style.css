@@ -400,14 +400,14 @@ body::before {
   text-overflow: ellipsis;
 }
 
-/* One mount per line, under the host. A wrapped row read as a single run-on
-   string at these widths; stacked, each mount is its own scannable item and a
-   struck-through amber one is impossible to miss. */
+/* One row, under the host. Chips wrap only if a channel publishes more mounts
+   than fit; each chip stays whole either way, so a path is never broken across
+   lines the way the old full-URL line was. */
 .stream-mounts {
   display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: 3px;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
   margin-top: 7px;
 }
 
@@ -448,6 +448,19 @@ body::before {
   background: var(--warn-surface);
   border-bottom: 1px dotted var(--warn);
 }
+
+/* This mount's own listeners, set apart from the path so the two read as
+   separate facts rather than one long token. Hidden on a failing mount, where
+   Icecast's count is either gone or meaningless. */
+.mount-n {
+  margin-left: 6px;
+  padding-left: 6px;
+  border-left: 1px solid var(--surface-4);
+  color: var(--primary-light);
+  font-weight: 600;
+}
+
+.mount.primary .mount-n { border-left-color: rgba(255, 255, 255, 0.14); }
 
 .status-indicator {
   display: flex;

@@ -57,6 +57,15 @@ A degraded channel is **not** counted as downtime (`store.isFailureEvent`). The
 probed mount never stopped serving, and folding it into the failure totals would
 charge the station off-air time its listeners did not experience.
 
+**Alerting.** A degradation emails only when it is BOTH sustained
+(`DEGRADED_ALERT_AFTER_MS`, default 30 min) AND cost listeners — one message per
+episode, plus an all-clear when it ends. Either condition alone stays silent and
+recorded. A variant nobody was listening to is a fact about an encoder; a variant
+dead for half an hour with an audience on it is a loss nobody would otherwise
+find out about, because the dashboard shows it and nobody is watching the
+dashboard at 4am. The email says DEGRADED, never DOWN — describing a playing
+channel as offline is the most damaging thing an alert can get wrong.
+
 **c. Cross-stream correlation.** All three KPFT streams are checked in the same cycle. One stream failing is a stream problem; all three failing in the same second is not a coincidence.
 
 ## 3. The decisive rule

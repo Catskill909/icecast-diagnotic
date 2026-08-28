@@ -82,7 +82,7 @@ regression, however green the tests are.**
   Angeles), 5 channels, 1 Icecast host, ~456 events retained since 2026-08-04.
 - **All three stations share one Icecast host**, which is the whole affiliate
   economics: one snapshot fetch per cycle serves all of them.
-- **202 tests**, `npm test`, Node's built-in runner, no test framework dependency.
+- **209 tests**, `npm test`, Node's built-in runner, no test framework dependency.
 - **Dependencies: express, nodemailer 9, dotenv.** That is the whole list, and it
   is deliberate. Crypto, testing and HTTP are all Node built-ins. Adding a
   dependency should require an argument.
@@ -245,21 +245,35 @@ rounding error: `/live_64` regularly carries a third of KPFT Main's audience
 | **Snapshot fetched before probes, not alongside them** | Icecast counts our probes as listeners. Measured: one connection took `/kpfk` from 1 to 2. The old `Promise.all` put our own probes inside the audience figures we stored |
 | Samples carry `mountListeners`, `variantsPresent`, `variantsTotal` | The summed count can hold steady while one variant's audience collapses inside it. This is the only per-mount history there is, and raw samples expire |
 | `store.isFailureEvent()` | A degradation is not downtime, and every failure total had to learn the difference |
-| Mount chips on the dashboard card | The card showed one URL — the probed mount — and never said so. Now every mount is listed, with the failing one marked |
+| Mount chips on the dashboard card | The card showed one URL — the probed mount — and never said so. Now every mount is listed, with its own listener count and the failing one marked |
+| `byMount` in the listener series | Per-mount audience history. Only reaches back `SAMPLE_RETENTION_DAYS` — hourly rollups compact the breakdown away, and the UI must say so rather than drawing a short line beside a long one |
+| Degraded channels email when sustained AND costing listeners | A variant dead for half an hour with an audience on it is a real loss nobody would find out about. `DEGRADED_ALERT_AFTER_MS`, default 30 min, one message per episode plus an all-clear. The mail says DEGRADED, never DOWN |
 
 ### Corrections worth inheriting
 
 - **The variant counts were never in samples.** `icecast-app-future-dev.md` said
   they were. They existed only on the live status record, so there was no
   per-mount history at all. Now written, and the claim now true.
-- **Four accounting sites, not three.** The first pass at `isFailureEvent` fixed
+- **Seven accounting sites, not three.** The first pass at `isFailureEvent` fixed
   the period rollup, the daily buckets and the downtime spread — found by
-  grepping `type !== 'up'`. It missed `getAudioUptime()`, `getAudienceSummary()`
-  and `backfillAudience()`, which express the same assumption as
-  `type === 'up'` in a `continue` guard. Left unfixed, a one-hour degradation on
-  a healthy channel would have been reported as an hour off air, and the backfill
-  would have written a fabricated channel-wide loss figure onto the event as a
-  *measured* value. **If a new event type is ever added, grep both spellings.**
+  grepping `type !== 'up'` in `store.js` and the history page. Three more express
+  the same assumption as `type === 'up'` in a `continue` guard
+  (`getAudioUptime()`, `getAudienceSummary()`, `backfillAudience()`), and a
+  further three lived outside the files first searched: the listener-chart outage
+  overlay and the alert-preview `kind` in `monitor.js`, and
+  `scripts/backfill-audience.js`. Left unfixed, a one-hour degradation on a
+  healthy channel would have been reported as an hour off air, drawn as an outage
+  band across the audience chart, and given a fabricated channel-wide loss figure
+  written onto the event as a *measured* value.
+  **If a new event type is ever added: grep BOTH spellings, across ALL files,
+  including `scripts/`.**
+- **The HD2 / HD3 mount naming is Pacifica's, not ours — do not "fix" it.**
+  KPFT HD2 is served from `/HD3`, `/HD3_128`, `/HD3_64`, which looks like a
+  configuration error and is not. Icecast's own metadata on all three mounts
+  reads `server_name: "KPFT HD2 Live Stream"`, so the mount PATH is misnamed
+  upstream while our channel name matches the actual programme. KPFT HD3 is
+  `/classic_country`, which carries no name to contradict. Renaming our channel
+  to match the path would make the dashboard wrong.
 - **Single-mount channels must still show their mount row.** It was first hidden
   as redundant ("1 of 1"), which read as missing data next to cards that showed
   a count. Consistency beat concision.

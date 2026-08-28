@@ -492,3 +492,96 @@ test('a resolved degradation moves no downtime, uptime or listener-loss figure',
   assert.equal(stored.audience, undefined, 'no reconstructed loss figure');
   assert.equal(stored.detail.listenersBefore, 22, 'the variant-scoped count is the one that stands');
 });
+
+// ── When a degradation is worth an email ────────────────────────────────────
+// Never on its own: the channel is still playing for most of its audience, and
+// a message that reads like an outage for something that is not one is how a
+// station learns to ignore the next alert. But a variant dead for half an hour
+// with listeners on it is a real loss nobody would otherwise find out about —
+// the dashboard shows it and nobody is watching the dashboard at 4am.
+//
+// Sustained AND costing listeners. Either alone stays silent and recorded.
+
+const ALERT_STREAM = { id: 'alrt', name: 'Alert Channel', url: CH.url, mounts: CH.mounts };
+const notices = () => ({ alerts: [], recoveries: [] });
+const gone = () => channelDegradation(snap({ '/live_128': mount(37) }), FULL, ALERT_STREAM);
+const whole = () => channelDegradation(FULL, FULL, ALERT_STREAM);
+
+test('a short degradation is recorded and not emailed', () => {
+  const n = notices();
+  monitor.trackVariantDegradation(ALERT_STREAM, gone(), at(0), n);
+  monitor.trackVariantDegradation(ALERT_STREAM, gone(), at(5), n);
+  assert.deepEqual(n.alerts, [], 'five minutes is not sustained');
+});
+
+test('a sustained degradation with listeners on it escalates exactly once', () => {
+  const n = notices();
+  monitor.trackVariantDegradation(ALERT_STREAM, gone(), at(30), n);
+  assert.equal(n.alerts.length, 1, 'the 30-minute threshold is crossed');
+  assert.equal(n.alerts[0].episode.listenersBefore, 22);
+
+  monitor.trackVariantDegradation(ALERT_STREAM, gone(), at(40), n);
+  monitor.trackVariantDegradation(ALERT_STREAM, gone(), at(90), n);
+  assert.equal(n.alerts.length, 1, 'still one — not one per cycle for as long as it lasts');
+});
+
+test('recovery after an alert sends an all-clear', () => {
+  // An alert with no all-clear trains people to ignore the next one.
+  const n = notices();
+  monitor.trackVariantDegradation(ALERT_STREAM, whole(), at(100), n);
+  assert.equal(n.recoveries.length, 1);
+  assert.equal(n.alerts.length, 0);
+});
+
+test('a degradation nobody was told about gets no all-clear', () => {
+  const quiet = { id: 'quiet', name: 'Quiet', url: CH.url, mounts: CH.mounts };
+  const n = notices();
+  monitor.trackVariantDegradation(quiet, channelDegradation(snap({ '/live_128': mount(37) }), FULL, quiet), at(0), n);
+  monitor.trackVariantDegradation(quiet, channelDegradation(FULL, FULL, quiet), at(10), n);
+  assert.deepEqual(n.recoveries, [], 'announcing the end of something never announced is noise');
+});
+
+test('a sustained degradation nobody was listening to stays silent', () => {
+  const empty = { id: 'empty', name: 'Empty', url: CH.url, mounts: CH.mounts };
+  const before = snap({ '/live_128': mount(37), '/live_64': mount(0) });
+  const now = snap({ '/live_128': mount(37) });
+  const n = notices();
+  for (const m of [0, 30, 60, 120]) {
+    monitor.trackVariantDegradation(empty, channelDegradation(now, before, empty), at(m), n);
+  }
+  assert.deepEqual(n.alerts, [], 'sustained, but it cost nobody anything');
+});
+
+// ── Per-mount audience history ──────────────────────────────────────────────
+
+test('the listener series carries a per-mount breakdown', () => {
+  const id = 'series';
+  store.ensureStreams([id]);
+  const now = Date.now();
+  for (let i = 0; i < 10; i++) {
+    store.addSample(id, {
+      timestamp: new Date(now - (10 - i) * 60 * 1000).toISOString(),
+      status: 'up',
+      responseTime: 10,
+      listeners: 60,
+      mountListeners: { '/live_128': 40, '/live_64': 20 },
+    });
+  }
+  const series = store.getListenerSeries(id, 60 * 60 * 1000);
+  const last = series[series.length - 1];
+  assert.equal(last.avg, 60, 'the summed figure is unchanged');
+  assert.deepEqual(last.byMount, { '/live_128': 40, '/live_64': 20 });
+});
+
+test('buckets with no per-mount data say so by absence, not by zero', () => {
+  // Samples written before this existed, and hourly rollups, carry no
+  // breakdown. Reporting {} would claim every mount had no listeners.
+  const id = 'legacy';
+  store.ensureStreams([id]);
+  store.addSample(id, {
+    timestamp: new Date(Date.now() - 5 * 60 * 1000).toISOString(),
+    status: 'up', responseTime: 10, listeners: 60,
+  });
+  const series = store.getListenerSeries(id, 60 * 60 * 1000);
+  assert.equal(series[series.length - 1].byMount, undefined);
+});

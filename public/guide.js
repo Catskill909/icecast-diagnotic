@@ -124,7 +124,9 @@
          bitrate lost audio while everyone else carried on. The dashboard marks the
          failing mount in amber on the channel's card. It is recorded as its own
          incident, and is deliberately <em>not</em> counted as downtime — the
-         channel never went off air.`,
+         channel never went off air. You are emailed about one only if it lasts
+         (30 minutes by default) <em>and</em> people were listening on the mount
+         that failed.`,
       ],
     },
     {

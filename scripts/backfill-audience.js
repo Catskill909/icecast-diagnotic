@@ -28,7 +28,10 @@ function main() {
   store.load(streamIds);
 
   const events = store.getEvents({ limit: Number.MAX_SAFE_INTEGER }).events || [];
-  const failures = events.filter((e) => e.type !== 'up' && e.durationMs);
+  // Failures only. A 'degraded' event is a channel that kept playing while one
+  // bitrate variant failed; costing it from the channel's samples would invent a
+  // whole-channel loss. Mirrors store.isFailureEvent().
+  const failures = events.filter((e) => e.type !== 'up' && e.type !== 'degraded' && e.durationMs);
 
   console.log(`Scanned ${events.length} events — ${failures.length} resolved failures.\n`);
 
