@@ -387,35 +387,51 @@ body::before {
   margin-bottom: 4px;
 }
 
-.stream-url {
+/* The host, on one line. It used to carry the mount path too, which pushed it
+   past the column width and broke mid-path on every card — "…/liv" then
+   "e_128". The path now lives in the mount chips, so this always fits, and it
+   is a step brighter because it is the address an operator reads back. */
+.stream-host {
   font-size: 12px;
-  color: var(--text-tertiary);
+  color: var(--text-secondary);
   font-family: 'SF Mono', 'Fira Code', monospace;
-  word-break: break-all;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .stream-mounts {
-  display: inline-flex;
-  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
   gap: 4px;
-  margin-top: 6px;
-  font-size: 11px;
-  font-weight: 600;
-  letter-spacing: 0.02em;
-  color: var(--text-tertiary);
+  margin-top: 7px;
 }
 
-/* Amber, not red: the channel is still playing for most of its audience, and a
-   red chip beside a green ONLINE badge reads as a contradiction. */
-.stream-mounts.degraded {
+.mount {
+  font-family: 'SF Mono', 'Fira Code', monospace;
+  font-size: 11px;
+  line-height: 1.5;
+  padding: 2px 7px;
+  border-radius: 5px;
+  background: var(--surface-3);
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+
+/* The mount the health check actually asks. Worth distinguishing: it is the one
+   whose failure turns the card red, and the others can drop without it. */
+.mount.primary {
+  color: var(--text-primary);
+  background: var(--surface-4);
+}
+
+/* Amber, not red: the channel is still playing for the rest of its audience,
+   and a red chip beside a green ONLINE badge reads as a contradiction. */
+.mount.missing {
   color: var(--warn);
   background: var(--warn-surface);
-  padding: 3px 8px;
-  border-radius: 6px;
-}
-
-.stream-mounts .material-symbols-outlined {
-  font-size: 14px;
+  text-decoration: line-through;
+  text-decoration-thickness: 1px;
 }
 
 .status-indicator {

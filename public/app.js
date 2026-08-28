@@ -278,31 +278,40 @@
         silenceBadgeHtml = `<div class="silence-badge">⚠️ Silence Detected</div>`;
       }
 
-      // A channel is published as several mounts — one per bitrate — and the
-      // probe only ever asks the highest one. So a variant can vanish while the
-      // card still reads ONLINE, taking its listeners off the air silently. This
-      // is the only place that state is visible, so it names the missing mount
-      // rather than just counting it.
+      // A channel is published as one mount per bitrate, and the probe only ever
+      // asks the highest one — so a variant can stop being served while the card
+      // still reads ONLINE and its listeners are off the air.
       //
-      // Hidden for single-mount channels, where "1 of 1 mounts" is noise, and
-      // while Icecast is unreachable, where we cannot see any mount and an
-      // absence is not evidence that anything is gone.
-      let mountsHtml = '';
-      if (stream.icecastReachable && (stream.variantsTotal || 0) > 1) {
-        const missing = stream.missingMounts || [];
-        mountsHtml = missing.length
-          ? `<div class="stream-mounts degraded" title="Icecast is not listing ${escapeHtml(missing.join(', '))}">
-               <span class="material-symbols-outlined">warning</span>
-               ${stream.variantsPresent} of ${stream.variantsTotal} mounts — ${escapeHtml(missing.join(' '))} missing
-             </div>`
-          : `<div class="stream-mounts">${stream.variantsPresent} of ${stream.variantsTotal} mounts</div>`;
-      }
+      // Every mount is LISTED rather than counted. "2 of 3" tells an operator
+      // something is wrong; the paths tell them which encoder to restart. The
+      // host moves up to its own line so the paths are not competing with it for
+      // width — the old single line wrapped mid-path on every card.
+      //
+      // Single-mount channels list their one mount too. Showing the row on some
+      // cards and not others reads as missing data rather than as a channel that
+      // simply has one mount.
+      const mounts = channelMounts(stream);
+      // Only trust a missing-mount verdict while Icecast is answering. When it
+      // is unreachable we cannot see any mount, and greying them all out would
+      // report an outage we have no evidence for.
+      const missing = new Set(stream.icecastReachable ? stream.missingMounts || [] : []);
+      const mountsHtml = mounts.length
+        ? `<div class="stream-mounts">${mounts.map((path, i) => {
+            const gone = missing.has(path);
+            const title = gone
+              ? 'Icecast is not listing this mount — nobody can play it'
+              : i === 0
+              ? 'Probed for health'
+              : 'Served by Icecast, not probed';
+            return `<span class="mount${i === 0 ? ' primary' : ''}${gone ? ' missing' : ''}" title="${escapeHtml(title)}">${escapeHtml(path)}</span>`;
+          }).join('')}</div>`
+        : '';
 
       card.innerHTML = `
         <div class="stream-header">
           <div class="stream-info">
             <div class="stream-name">${escapeHtml(stream.name)}</div>
-            <div class="stream-url">${escapeHtml(truncateUrl(stream.url))}</div>
+            <div class="stream-host">${escapeHtml(hostOf(stream.url))}</div>
             ${mountsHtml}
           </div>
           <div class="status-indicator ${dotClass}">
@@ -622,13 +631,31 @@
     });
   }
 
-  function truncateUrl(url) {
+  /** The Icecast host alone. The path belongs to the mount chips below it. */
+  function hostOf(url) {
     try {
-      const u = new URL(url);
-      return `${u.hostname}:${u.port}${u.pathname}`;
+      return new URL(url).host;
     } catch {
       return url;
     }
+  }
+
+  /**
+   * Every mount of the channel, the probed one first.
+   *
+   * Mirrors diagnose.channelMountPaths(). The configured mount list normally
+   * already contains the probed path, but nothing requires it to, and a channel
+   * whose own probed mount was missing from its own list would be the one card
+   * that quietly told the truth about nothing.
+   */
+  function channelMounts(stream) {
+    let primary = '';
+    try {
+      primary = new URL(stream.url).pathname;
+    } catch {
+      // An unparseable URL still has whatever the config listed.
+    }
+    return [...new Set([primary, ...(stream.mounts || [])].filter(Boolean))];
   }
 
   function escapeHtml(str) {
