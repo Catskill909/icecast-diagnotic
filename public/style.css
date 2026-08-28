@@ -372,12 +372,19 @@ body::before {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
-  margin-bottom: 20px;
+  /* The mounts row below owns the gap down to the player. Kept small here so
+     the mounts sit with the host they belong to rather than floating between
+     the two blocks. */
+  margin-bottom: 12px;
   position: relative;
 }
 
+/* min-width: 0 so a long host name shrinks and ellipsises instead of pushing
+   the status badge off the card. A flex item defaults to min-width: auto,
+   which refuses to shrink below its content. */
 .stream-info {
   flex: 1;
+  min-width: 0;
 }
 
 .stream-name {
@@ -400,15 +407,20 @@ body::before {
   text-overflow: ellipsis;
 }
 
-/* One row, under the host. Chips wrap only if a channel publishes more mounts
-   than fit; each chip stays whole either way, so a path is never broken across
-   lines the way the old full-URL line was. */
+/* A full-width row of its own, NOT part of the header flex line.
+   
+   It lived inside .stream-info, which shares the header row with the status
+   badge — so it only ever received about three quarters of the card and wrapped
+   a three-mount channel onto three lines however the chips were styled. Sitting
+   here it gets the whole card, and wraps only when the mounts genuinely do not
+   fit across it. Each chip stays whole either way, so a mount path is never
+   broken mid-token the way the old full-URL line was. */
 .stream-mounts {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 4px;
-  margin-top: 7px;
+  gap: 5px;
+  margin: 0 0 18px;
 }
 
 .mount {

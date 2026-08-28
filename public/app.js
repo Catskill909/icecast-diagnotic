@@ -329,13 +329,19 @@
           <div class="stream-info">
             <div class="stream-name">${escapeHtml(stream.name)}</div>
             <div class="stream-host">${escapeHtml(hostOf(stream.url))}</div>
-            ${mountsHtml}
           </div>
           <div class="status-indicator ${dotClass}">
             <span class="status-dot ${dotClass}"></span>
             ${statusLabel}
           </div>
         </div>
+
+        <!-- Outside .stream-header on purpose. Inside it, this row was a flex
+             child sharing the line with the status badge, so it only ever got
+             about three quarters of the card and wrapped a three-mount channel
+             onto three lines. Out here it spans the full card and wraps only
+             when the mounts genuinely do not fit. -->
+        ${mountsHtml}
 
         <!-- Live Audio Preview Player -->
         <div class="audio-player-box">

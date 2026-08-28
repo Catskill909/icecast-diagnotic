@@ -18,7 +18,7 @@ shortest path to being useful.
 **Orient yourself (2 minutes).**
 
 ```bash
-npm test                                   # 168 tests, all should pass
+npm test                                   # 241 tests, all should pass
 curl -s https://kpft-icecast.supersoul.top/api/stations | jq   # what it monitors
 curl -s https://kpft-icecast.supersoul.top/api/status   | jq   # how it is doing
 ```
@@ -398,6 +398,14 @@ Reviewed end to end on 2026-08-27; findings and reasoning in
   definition is a unique IP + user-agent pair, so a household or office behind
   one NAT collapses to one, and one person on a phone and a laptop counts as two.
   Label it wherever it is shown, the way ATH is labelled an estimate.
+- **The dashboard mount row must stay OUTSIDE `.stream-header`.** It began
+  inside `.stream-info`, which is a flex child sharing the header line with the
+  status badge — so the chips only ever received about three quarters of the card
+  and a three-mount channel wrapped onto three lines. That was restyled three
+  times before the cause was found, because the cause was structural and every
+  attempted fix was cosmetic. `.stream-mounts` is now a direct child of the card
+  and gets its full width. If it ever wraps again when it should not, check where
+  it sits in the DOM before touching the CSS.
 - **Never sum per-channel peaks.** Two channels peaking at different moments do
   not add up to a moment. Any station-wide maximum must come from the channels
   summed per bucket (`stationSeries()` in `public/audience-stats.js`), which is
@@ -485,7 +493,7 @@ Reviewed end to end on 2026-08-27; findings and reasoning in
 ## 9. Verifying a change
 
 ```bash
-npm test                                             # 168 tests
+npm test                                             # 241 tests
 node --check server.js monitor.js store.js diagnose.js auth.js
 
 # Against production
