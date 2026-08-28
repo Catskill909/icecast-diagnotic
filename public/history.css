@@ -1086,6 +1086,9 @@ a.help-btn { text-decoration: none; }
 /* ── Station picker ─────────────────────────────────────────────────────────
    Hidden until there is more than one station: a picker with one option is
    furniture, not a control. */
+/* The station is the subject of this page, so it carries the emphasis. */
+.header-title { color: var(--text-primary); letter-spacing: -0.02em; }
+
 .station-picker {
   display: inline-flex; align-items: center; gap: 6px;
   background: var(--surface-2); border: 1px solid var(--surface-3);

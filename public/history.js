@@ -13,9 +13,41 @@
      an unscoped aggregate is not merely broader — it is wrong. A GM reading
      "uptime" would be reading their own outages plus somebody else's.
      Absent means all stations, which is what a fleet view wants.            */
+  // The URL wins over the remembered choice, so a link to one station always
+  // opens that station — which is what makes it sendable to a GM.
   let stationId = null;
-  try { stationId = localStorage.getItem('historyStationId') || null; } catch (e) { /* private mode */ }
+  try {
+    stationId = new URLSearchParams(location.search).get('station')
+      || localStorage.getItem('historyStationId')
+      || null;
+  } catch (e) { /* private mode */ }
   const scope = () => (stationId ? '&stationId=' + encodeURIComponent(stationId) : '');
+
+  /**
+   * Puts the station where it cannot be missed: in the page's own title, in the
+   * browser tab, and in the address bar.
+   *
+   * The selection persists between visits, which is right — a GM cares about one
+   * station and re-picking it every time would be worse. But persistence is only
+   * safe if the current scope is unmistakable. A remembered choice that is only
+   * visible inside a dropdown means opening the page and reading another
+   * station's numbers without noticing.
+   */
+  function reflectStation(stations) {
+    const s = stations && stations.find((x) => x.id === stationId);
+    const label = s ? s.name : 'All stations';
+    const titleEl = document.querySelector('.header-title');
+    if (titleEl) titleEl.textContent = label;
+    const subEl = document.getElementById('retention-note');
+    if (subEl && !subEl.dataset.base) subEl.dataset.base = subEl.textContent;
+    if (subEl) subEl.textContent = 'Incident history · ' + (subEl.dataset.base || '');
+    document.title = label + ' · Incident History';
+
+    const url = new URL(location.href);
+    if (stationId) url.searchParams.set('station', stationId);
+    else url.searchParams.delete('station');
+    history.replaceState(null, '', url);
+  }
 
   async function initStationPicker() {
     let stations = [];
@@ -24,8 +56,9 @@
       stations = (await r.json()).stations || [];
     } catch (e) { return; }
 
-    // A picker with one option is furniture, not a control.
-    if (stations.length < 2) return;
+    // A picker with one option is furniture, not a control — but the title
+    // still names the station, because that is a label rather than a control.
+    if (stations.length < 2) { reflectStation(stations); return; }
 
     // A remembered station that has since been removed would scope every figure
     // on the page to nothing, silently. Fall back to all stations.
@@ -42,6 +75,7 @@
     sel.innerHTML = opts.join('');
     sel.value = stationId || '';
     document.getElementById('station-picker').classList.remove('hidden');
+    reflectStation(stations);
 
     sel.addEventListener('change', () => {
       stationId = sel.value || null;
@@ -49,6 +83,7 @@
         if (stationId) localStorage.setItem('historyStationId', stationId);
         else localStorage.removeItem('historyStationId');
       } catch (e) { /* private mode */ }
+      reflectStation(stations);
       reload();
     });
   }
