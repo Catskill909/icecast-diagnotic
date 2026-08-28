@@ -631,3 +631,108 @@ test('the audience payload carries what the page renders from', () => {
   assert.equal(s.hourProfile.length, 24);
   assert.ok('current' in s, 'live listener count, which no windowed average shows');
 });
+
+// ── Aggregate Tuning Hours ──────────────────────────────────────────────────
+// ATH is the figure a US noncommercial webcaster's royalty rate is computed
+// from — the annual fee covers each channel's first 159,140 per month. So it is
+// not an engagement metric that can be roughly right: it is a number with a
+// threshold and money attached, and the ways it can mislead are specific.
+//
+// It is also an ESTIMATE, derived from polling counts once a minute rather than
+// from a log of connections. The tests below cover both the arithmetic and the
+// labelling, because an unqualified figure someone files on is the worst thing
+// this page could produce.
+
+const MIN = 60 * 1000;
+
+function seedAth(id, { listeners, minutes, endingMsAgo = 0 }) {
+  store.ensureStreams([id]);
+  const end = Date.now() - endingMsAgo;
+  for (let i = minutes; i > 0; i--) {
+    store.addSample(id, {
+      timestamp: new Date(end - i * MIN).toISOString(),
+      status: 'up',
+      responseTime: 10,
+      listeners,
+    });
+  }
+}
+
+test('ATH is listener-hours: ten listeners for an hour is ten', () => {
+  seedAth('ath1', { listeners: 10, minutes: 60 });
+  assert.equal(Math.round(store.getAth(['ath1'], 2 * 60 * MIN)), 10);
+});
+
+test('the same listening split across two channels totals the same', () => {
+  // The allowance is per channel, but a station-level figure has to be the sum —
+  // if these disagreed, the two views of one month would contradict each other.
+  seedAth('ath2a', { listeners: 5, minutes: 60 });
+  seedAth('ath2b', { listeners: 5, minutes: 60 });
+  const combined = store.getAth(['ath2a', 'ath2b'], 2 * 60 * MIN);
+  assert.equal(Math.round(combined), 10);
+});
+
+test('the month runs on the station clock, not UTC', () => {
+  // A month boundary is only meaningful in a timezone. Chicago's month starts
+  // five or six hours after UTC's, and a station near the threshold on the 1st
+  // would otherwise be shown someone else's month.
+  const chi = store.getMonthToDateAth(['ath1'], 'America/Chicago');
+  const utc = store.getMonthToDateAth(['ath1'], 'UTC');
+  assert.notEqual(chi.monthStart, utc.monthStart);
+  assert.match(chi.monthStart, /T0[56]:00:00/, 'Chicago midnight expressed in UTC');
+  assert.equal(chi.timeZone, 'America/Chicago');
+});
+
+test('the figure always declares itself an estimate', () => {
+  // Not a cosmetic flag. It is polled counts, not a connection census, and the
+  // UI keys its caveat off this. It must not be droppable by accident.
+  const m = store.getMonthToDateAth(['ath1'], 'UTC');
+  assert.equal(m.estimated, true);
+  assert.equal(m.allowance, 159140, 'the SoundExchange noncommercial allowance');
+});
+
+test('a month that began before monitoring did is flagged partial', () => {
+  // Otherwise the month-to-date figure reads as a total when it is a floor.
+  const m = store.getMonthToDateAth(['ath1'], 'UTC');
+  assert.equal(m.partial, true, 'this stream has minutes of history, not a month');
+  assert.ok(m.coveredMs < m.elapsedMs, 'and the covered span says so');
+});
+
+test('the projection is rated over what was watched, not the elapsed month', () => {
+  // The failure this prevents: a monitor that started recently has an empty
+  // stretch of month in its record that was not a stretch of no listeners.
+  // Rating over elapsed time would project far too low — on the one number whose
+  // entire purpose is warning about a threshold.
+  const m = store.getMonthToDateAth(['ath1'], 'UTC');
+  const elapsedRate = (m.ath / m.elapsedMs) * (new Date(m.monthEnd) - new Date(m.monthStart));
+  assert.ok(
+    m.projected > elapsedRate * 2,
+    `projection ${m.projected} must not be rated over the whole elapsed month (${Math.round(elapsedRate)})`,
+  );
+});
+
+test('the trend is withheld rather than guessed when history is too short', () => {
+  // A monitor watching for four days comparing week against week would report a
+  // collapse in listening that only ever happened to the recording.
+  store.setStationConfig({
+    version: 1,
+    hosts: [{ id: 'h', host: 'stream.example.org:9000', statusUrl: 'https://stream.example.org:9000/status-json.xsl' }],
+    stations: [{
+      id: 'trend',
+      name: 'Trend',
+      timezone: 'America/Chicago',
+      channels: [{ id: 'ath1', name: 'Ath1', url: 'https://stream.example.org:9000/a_128', mounts: ['/a_128'] }],
+    }],
+  });
+  monitor.reloadConfig();
+
+  const payload = monitor.getListeners(30 * 24 * 60 * MIN, undefined, 'trend');
+  const w = payload.streams[0].ath.window;
+  assert.equal(w.previous, null, 'no comparable earlier window exists');
+  assert.equal(w.changePct, null);
+});
+
+test('the station timezone reaches ATH from the station config', () => {
+  const payload = monitor.getListeners(24 * 60 * MIN, undefined, 'trend');
+  assert.equal(payload.streams[0].ath.month.timeZone, 'America/Chicago');
+});

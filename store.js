@@ -1318,6 +1318,84 @@ function getListeningDelivered(streamIds, windowMs) {
   return Math.round(listenerMinutes);
 }
 
+/* ── Aggregate Tuning Hours ─────────────────────────────────────────────────
+   ATH — one person listening for one hour — is the metric a US noncommercial
+   webcaster's royalty rate is computed from, not merely an engagement figure.
+   The SoundExchange noncommercial rate covers each channel's first 159,140 ATH
+   per month; above that, more is owed. So this is a number with a threshold and
+   dollars attached, and the station has no other way to see it.
+
+   IT IS AN ESTIMATE, and every caller must say so. It is derived from polling
+   listener COUNTS once a minute, not from a census of connections: see
+   getListeningDelivered(). A real figure needs per-connection data, which needs
+   Icecast admin credentials. This is an early-warning indicator — "you are
+   approaching the threshold, go and get the real number" — and must never be
+   presented as filing-grade.
+   ─────────────────────────────────────────────────────────────────────────── */
+
+/** The SoundExchange noncommercial allowance, per channel per month. */
+const ATH_MONTHLY_ALLOWANCE = parseInt(process.env.ATH_MONTHLY_ALLOWANCE, 10) || 159140;
+
+/** "2026-08-14" → "2026-09-01". */
+function firstOfNextMonth(day) {
+  const [y, m] = day.split('-').map(Number);
+  return m === 12
+    ? `${y + 1}-01-01`
+    : `${y}-${String(m + 1).padStart(2, '0')}-01`;
+}
+
+/** Start of the current calendar month, in the station's own timezone. */
+function monthStartMs(timeZone, now = Date.now()) {
+  return zonedMidnightMs(zonedDayKey(now, timeZone).slice(0, 8) + '01', timeZone);
+}
+
+/** Listening hours over a window. The unit ATH is quoted in. */
+function getAth(streamIds, windowMs) {
+  return getListeningDelivered(streamIds, windowMs) / 60;
+}
+
+/**
+ * Month-to-date ATH for one channel, with a projection to month end.
+ *
+ * The projection is rated over what we actually WATCHED, not over the elapsed
+ * month. A monitor that started on the 20th has ten days of silence in its
+ * sample record that were not ten days of no listeners, and rating over elapsed
+ * time would project a figure roughly two-thirds too low — on a number whose
+ * whole purpose is warning about a threshold. `partial` says when that applies
+ * so the UI can mark the figure rather than quietly showing a smaller one.
+ */
+function getMonthToDateAth(streamIds, timeZone = 'UTC') {
+  const now = Date.now();
+  const startMs = monthStartMs(timeZone, now);
+  const endMs = zonedMidnightMs(firstOfNextMonth(zonedDayKey(now, timeZone)), timeZone);
+
+  const elapsedMs = Math.max(1, now - startMs);
+  const ath = getAth(streamIds, elapsedMs);
+
+  const coverageStart = getCoverageStart(streamIds);
+  const coveredFromMs = coverageStart
+    ? Math.max(startMs, new Date(coverageStart).getTime())
+    : startMs;
+  const coveredMs = Math.max(1, now - coveredFromMs);
+
+  return {
+    ath: Math.round(ath),
+    allowance: ATH_MONTHLY_ALLOWANCE,
+    pctOfAllowance: Math.round((ath / ATH_MONTHLY_ALLOWANCE) * 1000) / 10,
+    projected: Math.round((ath / coveredMs) * (endMs - startMs)),
+    monthStart: new Date(startMs).toISOString(),
+    monthEnd: new Date(endMs).toISOString(),
+    elapsedMs,
+    coveredMs,
+    // True when the month began before we were watching, so the figure is a
+    // floor rather than a total.
+    partial: coveredMs < elapsedMs - 60000,
+    timeZone,
+    // Never let a caller forget. Nothing here is a connection census.
+    estimated: true,
+  };
+}
+
 /**
  * The authoritative listener-impact verdict for a stored event.
  *
@@ -1932,6 +2010,7 @@ module.exports = {
   isUnconfirmedSeverity, settledImpact, costListeners, isFailureEvent,
   getAudienceContext, getHourOfDayProfile, buildAudienceImpact, deriveListenerImpact,
   getListenerSeries, getAudienceSummary, chooseBucketMs,
+  getListeningDelivered, getAth, getMonthToDateAth, ATH_MONTHLY_ALLOWANCE,
   SAMPLE_RETENTION_DAYS,
   MAX_EVENTS,
 };

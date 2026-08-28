@@ -126,14 +126,21 @@ real figure."
 
 **Phase 1 — from data we already have.** No new collection, no credentials.
 
-1. **ATH / listening hours**, per channel and per station, with month-to-date
-   tracking against the 159,140 threshold and an explicit "estimated" label.
-   Export `getListeningDelivered()` and surface it.
+1. ✅ **SHIPPED 2026-08-28. ATH / listening hours**, per channel, month-to-date
+   against the 159,140 threshold, projected to month end, with an explicit
+   "estimated" label in the panel itself rather than only in a popover.
+   Measured on real data: KPFT Main runs ≈39,100 ATH/month, about 25% of the
+   allowance. The month runs on the STATION's clock, and the projection is rated
+   over the span actually watched rather than the elapsed month — a monitor that
+   started mid-month would otherwise project roughly two-thirds too low, on the
+   one number whose entire purpose is warning about a threshold.
 2. **Day-of-week × hour heatmap.** The hour-of-day profile flattens the
    difference between a Tuesday and a Saturday, which for a community station
    with volunteer-programmed weekends is most of the story.
-3. **Trend against the previous period.** "+12% vs the previous 7 days" is what
-   makes a number mean something without a second screen.
+3. ✅ **SHIPPED 2026-08-28. Trend against the previous period.** Withheld — null,
+   not zero — unless we watched for the whole of the earlier window, because a
+   monitor running four days comparing week against week reports a collapse in
+   listening that only happened to the recording.
 4. **Audience retained through an outage.** We hold the outage record and the
    audience curve in the same store; nobody else can join those two.
 5. **Per-mount trend over time**, not just the current split — does the

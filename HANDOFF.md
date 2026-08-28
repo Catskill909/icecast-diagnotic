@@ -82,7 +82,7 @@ regression, however green the tests are.**
   Angeles), 5 channels, 1 Icecast host, ~456 events retained since 2026-08-04.
 - **All three stations share one Icecast host**, which is the whole affiliate
   economics: one snapshot fetch per cycle serves all of them.
-- **211 tests**, `npm test`, Node's built-in runner, no test framework dependency.
+- **219 tests**, `npm test`, Node's built-in runner, no test framework dependency.
 - **Dependencies: express, nodemailer 9, dotenv.** That is the whole list, and it
   is deliberate. Crypto, testing and HTTP are all Node built-ins. Adding a
   dependency should require an argument.
@@ -250,6 +250,7 @@ rounding error: `/live_64` regularly carries a third of KPFT Main's audience
 | `byMount` in the listener series | Per-mount audience history. Only reaches back `SAMPLE_RETENTION_DAYS` — hourly rollups compact the breakdown away, and the UI must say so rather than drawing a short line beside a long one |
 | **Audience page** (`listeners.html`) | Audience is a different question, for a different reader, than "what went wrong". Station-scoped like the history page, with the per-mount split that every other figure sums away, plus CSV export |
 | `getListeners()` scoped by station | It computed its series from the scoped set but returned the FULL stream list beside it. The chart filtered on which ids had a series, so nothing looked wrong — and the new page reads that list directly |
+| **ATH against the royalty allowance** | Aggregate Tuning Hours is what a US noncommercial webcaster's SoundExchange rate is computed from — the fee covers each channel's first 159,140 per month. `getListeningDelivered()` had computed the listener-minutes since day one and surfaced them nowhere. KPFT Main runs ≈39,100/month, ≈25% of the allowance |
 | Degraded channels email when sustained AND costing listeners | A variant dead for half an hour with an audience on it is a real loss nobody would find out about. `DEGRADED_ALERT_AFTER_MS`, default 30 min, one message per episode plus an all-clear. The mail says DEGRADED, never DOWN |
 
 ### Corrections worth inheriting
@@ -309,11 +310,10 @@ Build order, with the current position marked:
    is ever told about them. This is the first genuinely GM-facing screen
 8. ✅ Listener analytics page — audience as its own destination, station-scoped,
    with per-channel and per-mount breakdowns and CSV export
-9. **Audience page phase 1** — [`docs/AUDIENCE-ROADMAP.md`](docs/AUDIENCE-ROADMAP.md)
-   §4. All from data already collected: ATH tracked against the SoundExchange
-   159,140/month threshold (labelled an estimate — it is derived from 60s
-   polling, not a connection census), day-of-week × hour heatmap, trend vs
-   previous period, audience retained through an outage
+9. 🔶 **Audience page phase 1** — [`docs/AUDIENCE-ROADMAP.md`](docs/AUDIENCE-ROADMAP.md)
+   §4. ATH against the SoundExchange threshold ✅ and trend vs previous period ✅
+   shipped 2026-08-28. Still to do: day-of-week × hour heatmap, audience retained
+   through an outage, per-mount trend over time
 10. Fleet view
 11. **SMS alerting** — [`docs/SMS-ALERTING.md`](docs/SMS-ALERTING.md). ~$3–4.50/mo
     plus a one-time ~$15–20 10DLC registration. Depends on item 7: phone numbers
@@ -375,6 +375,13 @@ Reviewed end to end on 2026-08-27; findings and reasoning in
   `VARIANT_PROBE_EVERY` cycles. Making the cycle "faster" by fetching the
   snapshot and probing in parallel again would corrupt every audience figure
   the system stores, permanently and invisibly.
+- **ATH is an ESTIMATE and every surface must say so.** It comes from polling
+  listener counts once a minute, not from a log of connections. It is shown
+  against a threshold with money attached, so somebody will eventually be tempted
+  to file a royalty return on it. `getMonthToDateAth()` returns
+  `estimated: true` and the panel prints the caveat in the panel body, not only
+  in a popover — do not "tidy" either away. A filing-grade figure needs
+  per-connection data, which needs admin credentials.
 - **Listener IPs are personal data.** `/admin/listclients` returns an IP and a
   user agent per listener, and reading in this app is public. The natural
   implementation of any geography or device chart — send the rows to the browser

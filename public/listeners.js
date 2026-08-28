@@ -168,6 +168,7 @@
       return;
     }
     renderTiles();
+    renderAth();
     renderLines();
     renderChannelTable();
     renderMounts();
@@ -188,12 +189,74 @@
     const tiles = [
       { v: now, l: 'listening right now' },
       { v: fmt(avg), l: `average across the last ${days === 1 ? '24 hours' : days + ' days'}` },
+      { v: Number(list.reduce((a, s) => a + ((s.ath && s.ath.month && s.ath.month.ath) || 0), 0)).toLocaleString(), l: 'listening hours this month (estimated)' },
       { v: peak, l: 'sum of each channel’s peak — not one moment' },
       { v: list.length, l: 'channels with audience data' },
     ];
     $('#aud-tiles').innerHTML = tiles
       .map((t) => `<div class="aud-tile"><div class="aud-tile-v">${esc(t.v)}</div><div class="aud-tile-l">${esc(t.l)}</div></div>`)
       .join('');
+  }
+
+  /**
+   * Listening hours, month to date, against the royalty allowance.
+   *
+   * The bar is the point. "61% of your allowance" says something "8,214 hours"
+   * cannot, and the projection is what turns it into a decision: 61% on the 9th
+   * is a problem, 61% on the 27th is fine.
+   *
+   * Every figure here is labelled an estimate, in the panel and not only in a
+   * popover. It is derived from polling counts once a minute, and somebody will
+   * eventually be tempted to file a royalty return on it.
+   */
+  function renderAth() {
+    const list = rows();
+    let anyPartial = false;
+
+    const blocks = list.map((s, i) => {
+      const a = s.ath || {};
+      const m = a.month || {};
+      const w = a.window || {};
+      if (m.partial) anyPartial = true;
+
+      const pct = Math.min(100, m.pctOfAllowance || 0);
+      const projPct = m.allowance ? Math.min(100, (m.projected / m.allowance) * 100) : 0;
+      // Over the allowance is the one state worth shouting about.
+      const over = (m.projected || 0) > (m.allowance || Infinity);
+
+      const trend = w.changePct == null
+        ? '<span class="ath-trend none" title="Not enough history to compare with the previous period">no comparison yet</span>'
+        : `<span class="ath-trend ${w.changePct >= 0 ? 'up' : 'down'}">${w.changePct >= 0 ? '▲' : '▼'} ${esc(Math.abs(w.changePct))}% vs previous ${days === 1 ? '24h' : days + 'd'}</span>`;
+
+      return `<div class="ath-row">
+        <div class="ath-head">
+          <span class="ath-name"><i class="swatch" style="background:${colorFor(i)}"></i>${esc(s.name)}</span>
+          ${trend}
+        </div>
+        <div class="ath-bar${over ? ' over' : ''}">
+          <i class="ath-actual" style="width:${pct.toFixed(1)}%;background:${colorFor(i)}"></i>
+          <i class="ath-proj" style="width:${projPct.toFixed(1)}%"></i>
+        </div>
+        <div class="ath-figures">
+          <span><b>${esc(Number(m.ath || 0).toLocaleString())}</b> hours this month${m.partial ? ' <em>(from when monitoring began)</em>' : ''}</span>
+          <span class="ath-sep">·</span>
+          <span>${esc(m.pctOfAllowance ?? 0)}% of ${esc(Number(m.allowance || 0).toLocaleString())}</span>
+          <span class="ath-sep">·</span>
+          <span class="${over ? 'ath-over' : ''}">on track for <b>${esc(Number(m.projected || 0).toLocaleString())}</b> by month end</span>
+        </div>
+      </div>`;
+    }).join('');
+
+    $('#ath-panel').innerHTML = blocks
+      + `<div class="ath-note">
+           <span class="material-symbols-outlined">info</span>
+           Estimated from listener counts polled every minute — not a log of individual
+           connections. Use as an early warning, not as a filing figure.
+           ${anyPartial ? 'Some months are counted only from when monitoring began.' : ''}
+         </div>`;
+
+    const tz = (list[0] && list[0].ath && list[0].ath.month && list[0].ath.month.timeZone) || 'UTC';
+    $('#ath-hint').textContent = `calendar month · ${tz}`;
   }
 
   /** Every channel on one shared scale, so they can be compared directly. */

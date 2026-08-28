@@ -232,3 +232,99 @@
   height: 12px;
   white-space: nowrap;
 }
+
+/* ── Listening hours (ATH) ──────────────────────────────────────────────── */
+
+.ath-row { padding: 12px 0; }
+.ath-row + .ath-row { border-top: 1px solid var(--surface-2); }
+
+.ath-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+
+.ath-name {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.ath-trend {
+  margin-left: auto;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 5px;
+  background: var(--surface-3);
+}
+
+.ath-trend.up { color: var(--status-up); background: var(--status-up-surface); }
+.ath-trend.down { color: var(--warn); background: var(--warn-surface); }
+.ath-trend.none { color: var(--text-tertiary); font-weight: 500; }
+
+/* Two bars in one track: the solid one is hours actually delivered, the ghost
+   behind it is where the month is heading. The projection has to be visible
+   without ever being mistaken for a figure already earned. */
+.ath-bar {
+  position: relative;
+  height: 10px;
+  border-radius: 5px;
+  background: var(--surface-3);
+  overflow: hidden;
+}
+
+.ath-bar i {
+  position: absolute;
+  top: 0;
+  left: 0;
+  height: 100%;
+  border-radius: 5px;
+}
+
+.ath-actual { z-index: 2; }
+
+.ath-proj {
+  z-index: 1;
+  background: repeating-linear-gradient(
+    135deg,
+    var(--surface-4) 0 6px,
+    transparent 6px 12px
+  );
+}
+
+/* Projected to exceed the allowance — the one state with money attached. */
+.ath-bar.over { box-shadow: inset 0 0 0 1px var(--warn); }
+
+.ath-figures {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-top: 8px;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.ath-figures b { color: var(--text-primary); font-variant-numeric: tabular-nums; }
+.ath-figures em { color: var(--text-tertiary); font-style: normal; }
+.ath-sep { color: var(--text-tertiary); }
+.ath-over { color: var(--warn); }
+
+.ath-note {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px solid var(--surface-2);
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--text-tertiary);
+}
+
+.ath-note .material-symbols-outlined { font-size: 15px; flex: 0 0 auto; }

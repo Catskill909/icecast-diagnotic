@@ -119,6 +119,13 @@
         `<strong>Audio uptime</strong> excludes probe failures where Icecast proves
          the mount kept playing — so it reflects what the audience experienced, not
          what our connection did.`,
+        `<strong>Listening hours (ATH)</strong> is one person listening for one hour.
+         It is the figure a US noncommercial station's SoundExchange royalty rate is
+         computed from — the annual fee covers each channel's first 159,140 per month.
+         The Audience page tracks it month to date and projects where the month will
+         land. <strong>It is an estimate</strong>, counted by polling listeners once a
+         minute rather than logging every connection, so use it as an early warning and
+         get the real number before filing.`,
         `<strong>A degraded channel</strong> is one still playing, but not on every
          mount it publishes: one bitrate has stopped, so the listeners on that
          bitrate lost audio while everyone else carried on. The dashboard marks the

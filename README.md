@@ -81,7 +81,13 @@ If you are an AI assistant or developer picking up this project, here is the ess
 - **`store.js`**: Persistence. Splits the long-term event record from rolling telemetry; handles atomic writes, hourly compaction, and legacy migration.
 - **`public/index.html` / `app.js`**: Live dashboard.
 - **`public/history.html` / `history.js` / `history.css`**: Long-term incident history — heatmap, listener-audience chart, filters, per-event drill-down.
-- **`public/listeners.html` / `listeners.js` / `listeners.css`**: Audience analytics — every channel on one scale, the per-mount split that every other figure sums away, hour-of-day profile, and CSV export. Station-scoped like the history page.
+- **`public/listeners.html` / `listeners.js` / `listeners.css`**: Audience analytics — listening hours (ATH) against the SoundExchange allowance, every channel on one scale, the per-mount split that every other figure sums away, hour-of-day profile, and CSV export. Station-scoped like the history page.
+
+**ATH is an estimate and is labelled as one.** It is derived from polling listener
+counts once a minute, not from a log of individual connections, so it is an early
+warning about the royalty threshold — not a filing figure. A real one needs
+per-connection data, which needs Icecast admin credentials; see
+[`docs/AUDIENCE-ROADMAP.md`](docs/AUDIENCE-ROADMAP.md).
 - **`scripts/backfill-audience.js`**: Reporting/repair tool for the `audience` block. **Not normally needed** — `store.load()` backfills automatically at every startup, before `prune()` runs. Use this to preview the numbers (dry-run by default) or to repair after a manual data edit. Safe to re-run; it never overwrites a measured figure.
 - **`public/style.css`**: Dark Material Design 3 theme system using CSS variables.
 - **`Dockerfile`**: Production build on `node:20-alpine` with `curl` for Coolify health probes.
@@ -437,6 +443,9 @@ SILENCE_PROBE_INTERVAL_MS=5000   # Rapid probe interval during silence evaluatio
 SILENCE_FAILURE_THRESHOLD=3      # Consecutive silent probes before confirming Dead Air (default: 3)
 REQUEST_TIMEOUT_MS=15000         # Individual stream-probe timeout
 ICECAST_STATUS_TIMEOUT_MS=10000  # Icecast inventory request timeout
+ATH_MONTHLY_ALLOWANCE=159140     # SoundExchange noncommercial allowance per channel per
+                                 # month, used only to draw the "% of allowance" bar.
+                                 # Change if the station is on a different rate category.
 DEGRADED_ALERT_AFTER_MS=1800000  # A degraded channel emails only once it has lasted this
                                  # long AND cost listeners. Either alone stays silent and
                                  # recorded. 0 disables degraded alerting entirely.

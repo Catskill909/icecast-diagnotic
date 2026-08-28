@@ -304,7 +304,16 @@ function flattenChannels(cfg) {
   const out = [];
   for (const station of cfg?.stations || []) {
     for (const channel of station.channels || []) {
-      out.push({ ...channel, stationId: station.id, stationName: station.name });
+      // The station's timezone travels with the channel because ATH is a
+      // CALENDAR-MONTH figure and a month boundary is only meaningful in a
+      // timezone. Reading it back off the config at every call site is how two
+      // figures for the same month end up an hour apart.
+      out.push({
+        ...channel,
+        stationId: station.id,
+        stationName: station.name,
+        stationTimezone: station.timezone || 'UTC',
+      });
     }
   }
   return out;
@@ -1942,6 +1951,34 @@ function getSamples(streamId, sinceMs) { return store.getSamples(streamId, since
 function getRollups(streamId) { return store.getRollups(streamId); }
 
 /**
+ * This window's listening hours against the one before it.
+ *
+ * "+12% on the previous 7 days" is what makes a number mean something without a
+ * second screen. It is withheld — null, not zero — unless we were actually
+ * watching for the whole of that earlier window: a monitor that started four
+ * days ago comparing week to week would report a collapse in listening that
+ * only ever happened to the recording.
+ */
+function windowTrend(streamId, windowMs) {
+  const current = store.getAth([streamId], windowMs);
+  const coverage = store.getCoverageStart([streamId]);
+  const watchedMs = coverage ? Date.now() - new Date(coverage).getTime() : 0;
+  if (watchedMs < windowMs * 2) {
+    return { current: Math.round(current), previous: null, changePct: null };
+  }
+  // The preceding window is everything in twice the span, less this one — no
+  // second traversal, and the two figures cannot disagree about the boundary.
+  const previous = store.getAth([streamId], windowMs * 2) - current;
+  return {
+    current: Math.round(current),
+    previous: Math.round(previous),
+    changePct: previous > 0
+      ? Math.round(((current - previous) / previous) * 1000) / 10
+      : null,
+  };
+}
+
+/**
  * Audience over time for every stream, plus the outage windows to draw over it.
  * Both come from one call so a chart can never render a series and its overlay
  * from two different moments in time.
@@ -2004,6 +2041,14 @@ function getListeners(windowMs, bucketMs, stationId) {
       // Whole retained history, not the selected window — the point of an
       // hour-of-day profile is the shape across every day we have.
       hourProfile: store.getHourOfDayProfile(s.id),
+      // Listening hours: this window against the last, and the calendar month
+      // against the royalty allowance. Per channel, because the SoundExchange
+      // allowance is per channel — and in the STATION's timezone, because a
+      // calendar month is only meaningful in one.
+      ath: {
+        window: windowTrend(s.id, windowMs),
+        month: store.getMonthToDateAth([s.id], s.stationTimezone || 'UTC'),
+      },
     })),
     series,
     outages,
