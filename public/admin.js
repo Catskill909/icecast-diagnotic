@@ -167,18 +167,29 @@
     const s = d.suggestedStation || {};
     $('st-name').value = s.name || '';
     $('st-id').value = s.id || '';
-    idTouched = false;
+    // A suggested id is a decision, not a placeholder. Only fall back to
+    // slugging the name when discovery could not work one out.
+    idFixed = !!s.id;
     $('st-tz').value = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
     $('results').classList.remove('hidden');
     $('st-name').focus();
     $('st-name').select();
   }
 
-  // Suggest an identifier from the name, but never overwrite a typed one.
-  let idTouched = false;
-  $('st-id').addEventListener('input', () => { idTouched = true; });
+  // The identifier is derived from the name only while nothing better is known.
+  //
+  // Discovery works out a good one from the call sign — "KPFK HiRes Stream"
+  // gives kpfk — and once it has, typing a friendlier station name must not
+  // overwrite it. That is how "KPFK Los Angeles" turned kpfk into
+  // kpfk-los-angeles: a permanent identifier, which keys this station's entire
+  // history, silently rewritten from a display name.
+  //
+  // A name and an identifier are different things. The name is for people and
+  // can be changed later; the identifier cannot.
+  let idFixed = false;                 // suggested by discovery, or typed by hand
+  $('st-id').addEventListener('input', () => { idFixed = true; });
   $('st-name').addEventListener('input', () => {
-    if (idTouched) return;
+    if (idFixed) return;
     $('st-id').value = $('st-name').value.trim().toLowerCase()
       .replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40);
   });
@@ -186,7 +197,7 @@
   $('cancel-btn').addEventListener('click', () => {
     $('results').classList.add('hidden');
     clear($('save-msg')); clear($('discover-msg')); clear($('list-msg'));
-    discovered = null; idTouched = false;
+    discovered = null; idFixed = false;
   });
 
   // ── Save ──────────────────────────────────────────────────────────────────
@@ -242,7 +253,7 @@
       `${r.body.station.name} added and being monitored now — ` +
       `${r.body.monitoring.added.length} channel(s), no restart needed.`, 'ok');
     $('results').classList.add('hidden');
-    $('url').value = ''; discovered = null; idTouched = false;
+    $('url').value = ''; discovered = null; idFixed = false;
     loadStations();
   });
 
