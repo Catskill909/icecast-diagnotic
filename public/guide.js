@@ -119,6 +119,12 @@
         `<strong>Audio uptime</strong> excludes probe failures where Icecast proves
          the mount kept playing — so it reflects what the audience experienced, not
          what our connection did.`,
+        `<strong>A degraded channel</strong> is one still playing, but not on every
+         mount it publishes: one bitrate has stopped, so the listeners on that
+         bitrate lost audio while everyone else carried on. The dashboard marks the
+         failing mount in amber on the channel's card. It is recorded as its own
+         incident, and is deliberately <em>not</em> counted as downtime — the
+         channel never went off air.`,
       ],
     },
     {

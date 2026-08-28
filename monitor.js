@@ -73,7 +73,9 @@ const CHECK_INTERVAL = parseInt(process.env.CHECK_INTERVAL_MS, 10) || 60000;
 // so a probe on a mount with a handful of listeners is a large fraction of its
 // reported audience. At 5 it costs about a fifth of that on both counts and
 // still catches a stalled variant inside five minutes.
-const VARIANT_PROBE_EVERY = parseInt(process.env.VARIANT_PROBE_EVERY, 10) || 5;
+// Floored at 1 so a stray 0 or negative value means "every cycle" rather than
+// a modulo that fires on an arbitrary pattern.
+const VARIANT_PROBE_EVERY = Math.max(1, parseInt(process.env.VARIANT_PROBE_EVERY, 10) || 5);
 // Consecutive silent variant probes before a mount is called stalled. The
 // primary mount has a whole verification engine for this; a variant checked
 // every five minutes gets a cheaper version of the same caution, because one
@@ -898,7 +900,7 @@ async function runChecksInner() {
   // The other bitrate variants, on a slower schedule — see VARIANT_PROBE_EVERY.
   // This is the only thing that can see a mount Icecast still lists but which
   // is not actually serving audio.
-  if (cycleCount % VARIANT_PROBE_EVERY === 1 % VARIANT_PROBE_EVERY) {
+  if (cycleCount % VARIANT_PROBE_EVERY === 1 % VARIANT_PROBE_EVERY) {  // cycles 1, 6, 11, … at the default of 5
     await probeVariants(snap);
   }
 

@@ -414,3 +414,81 @@ test('a variant probe failure is conclusive, a single silent read is not', async
     diagnose.probeStream = realProbe;
   }
 });
+
+// ── A degradation is not downtime ───────────────────────────────────────────
+// Every "what went wrong" figure in the system reads the event log, and most of
+// them were written when any non-'up' event with a duration meant the channel
+// had been off air. A degraded event is the first one that is neither: a real
+// recorded fault on a channel that never stopped playing.
+//
+// Four separate places embedded that assumption — the period rollup, the daily
+// buckets, audio uptime, and the audience backfill. This covers the class: no
+// figure anywhere may move because a degradation was recorded.
+
+test('a resolved degradation moves no downtime, uptime or listener-loss figure', () => {
+  const id = 'acct';
+  store.ensureStreams([id]);
+
+  const now = Date.now();
+  const WINDOW = 6 * 60 * 60 * 1000;
+  for (let i = 0; i < 180; i++) {
+    store.addSample(id, {
+      timestamp: new Date(now - (180 - i) * 60 * 1000).toISOString(),
+      status: 'up',
+      responseTime: 10,
+      listeners: 50,
+    });
+  }
+
+  const before = {
+    audioUptime: store.getAudioUptime([id], WINDOW),
+    rollup: store.getPeriodRollup([id], WINDOW),
+    audience: store.getAudienceSummary([id], WINDOW),
+  };
+  assert.equal(before.audioUptime, 100, 'the channel played throughout');
+
+  // The worst case for every total: resolved, with a real duration, and with a
+  // listener-impact verdict of 'confirmed' — because listeners on the failed
+  // mount genuinely were cut off. That is true and must still not become
+  // channel downtime.
+  const degraded = store.addEvent({
+    timestamp: new Date(now - 2 * 60 * 60 * 1000).toISOString(),
+    streamId: id,
+    streamName: 'Acct',
+    type: 'degraded',
+    severity: 'degraded',
+    confirmed: true,
+    scope: 'stream',
+    message: 'Acct is serving 1 of 2 mounts',
+    resolvedAt: new Date(now - 60 * 60 * 1000).toISOString(),
+    durationMs: 60 * 60 * 1000,
+    durationLabel: '1h',
+    detail: { present: 1, total: 2, impaired: [{ path: '/x_64', reason: 'missing' }], listenersBefore: 22, listenersKnown: true },
+    diagnosis: { causeLabel: 'Mount missing from Icecast', listenerImpact: 'confirmed' },
+    email: { attempted: false, sent: null },
+  });
+
+  const after = {
+    audioUptime: store.getAudioUptime([id], WINDOW),
+    rollup: store.getPeriodRollup([id], WINDOW),
+    audience: store.getAudienceSummary([id], WINDOW),
+  };
+
+  assert.equal(after.audioUptime, before.audioUptime, 'an hour of degradation is not an hour off air');
+  assert.equal(after.rollup.counts.failures, before.rollup.counts.failures, 'not a failure');
+  assert.equal(after.rollup.counts.listenerAffecting, before.rollup.counts.listenerAffecting);
+  assert.equal(after.rollup.downtime.wallClockMs, before.rollup.downtime.wallClockMs, 'no downtime added');
+  assert.equal(
+    after.audience.perStream[id].listenerMinutesLost,
+    before.audience.perStream[id].listenerMinutesLost,
+    'no listening counted as lost',
+  );
+
+  // And the backfill must not invent a channel-wide audience block for it. The
+  // channel's own samples say 50 listeners were connected the whole time; costed
+  // as an outage that becomes 3,000 listener-minutes of loss that never happened.
+  store.backfillAudience();
+  const stored = store.getEvents({ streamId: id }).events.find((e) => e.id === degraded.id);
+  assert.equal(stored.audience, undefined, 'no reconstructed loss figure');
+  assert.equal(stored.detail.listenersBefore, 22, 'the variant-scoped count is the one that stands');
+});

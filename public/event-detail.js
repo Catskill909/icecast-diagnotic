@@ -84,8 +84,51 @@
     // the only part a non-technical reader needs. Stated as a headcount and a
     // duration; the listener-hours figure follows with the sentence that stops
     // it being read as clock time.
+    // A degraded channel kept playing. The channel-wide block below would read
+    // its whole audience as having lost audio, when what actually happened is
+    // that the listeners of one bitrate variant did — so it gets its own,
+    // variant-scoped account instead.
+    const isDegraded = e.type === 'degraded';
+    if (isDegraded) {
+      const det = e.detail || {};
+      const impaired = det.impaired || [];
+      const missing = impaired.filter((m) => m.reason === 'missing').map((m) => m.path);
+      const stalled = impaired.filter((m) => m.reason === 'stalled').map((m) => m.path);
+      const heads = det.listenersBefore;
+
+      let headline;
+      let cls;
+      if (!det.listenersKnown) {
+        headline = 'Affected audience not measurable';
+        cls = 'warn';
+      } else if (heads > 0) {
+        headline = `${heads} listener${heads === 1 ? '' : 's'} lost audio`;
+        cls = 'bad';
+      } else {
+        headline = 'No listeners were on the affected mount';
+        cls = 'good';
+      }
+
+      const bits = [];
+      if (missing.length) bits.push(`Icecast stopped listing ${missing.join(', ')}`);
+      if (stalled.length) bits.push(`${stalled.join(', ')} stayed listed but served no audio`);
+      if (det.present != null && det.total != null) {
+        bits.push(`the channel kept playing on its other ${det.total - impaired.length} mount(s)`);
+      }
+      if (!det.listenersKnown) {
+        bits.push('the mount was already failing when monitoring began, so no audience reading for it was ever taken');
+      }
+
+      grid.push(`
+        <div class="detail-block">
+          <h5>Who lost audio</h5>
+          <p class="impact-headline ${cls}">${esc(headline)}</p>
+          <p class="impact-detail">${esc(bits.join(' — ') + '.')}</p>
+        </div>`);
+    }
+
     const aud = e.audience;
-    if (e.type !== 'up' && (aud || (d && d.listenerImpact))) {
+    if (!isDegraded && e.type !== 'up' && (aud || (d && d.listenerImpact))) {
       const verdict = (aud && aud.listenerImpact) || (d && d.listenerImpact);
       const heads = aud && aud.listenersBefore;
       let headline;
@@ -143,7 +186,14 @@
     // when the record had long since resolved them.
     const settled = (e.audience && e.audience.listenerImpact) || (d && d.listenerImpact);
     if (settled && e.type !== 'up') {
-      const IMPACT = {
+      // Degraded events need their own wording. "None — mount kept serving" is
+      // exactly backwards for a fault whose whole subject is a mount that did
+      // not keep serving.
+      const IMPACT = isDegraded ? {
+        confirmed: ['Listeners on the failed mount were cut off', 'bad'],
+        none: ['None — nobody was on the failed mount', 'good'],
+        unknown: ['Unknown — the mount was already failing when monitoring began', 'warn'],
+      } : {
         confirmed: ['Listeners were cut off', 'bad'],
         none: ['None — mount kept serving', 'good'],
         unknown: ['Unknown — Icecast unreachable', 'warn'],

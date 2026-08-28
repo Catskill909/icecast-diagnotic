@@ -436,6 +436,10 @@ SILENCE_PROBE_INTERVAL_MS=5000   # Rapid probe interval during silence evaluatio
 SILENCE_FAILURE_THRESHOLD=3      # Consecutive silent probes before confirming Dead Air (default: 3)
 REQUEST_TIMEOUT_MS=15000         # Individual stream-probe timeout
 ICECAST_STATUS_TIMEOUT_MS=10000  # Icecast inventory request timeout
+VARIANT_PROBE_EVERY=5            # Probe a channel's NON-primary mounts every Nth cycle.
+                                 # Each probe pulls 8 KB off the station's server AND
+                                 # registers as a listener on that mount, so 1 would both
+                                 # double the bandwidth and inflate small mounts' counts.
 SAVE_INTERVAL_MS=60000           # Periodic persistence flush interval
 
 # ── Alert Noise Control ──────────────────────────────

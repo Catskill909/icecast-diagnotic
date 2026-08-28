@@ -184,7 +184,13 @@ function backfillAudience() {
   let recostDelta = 0;
 
   for (const e of events) {
-    if (e.type === 'up' || !e.durationMs) continue;
+    // Failures only. A 'degraded' event is a channel that kept playing while one
+    // of its bitrate variants failed, and this reconstructs loss from the
+    // CHANNEL's sample history — which would charge every listener of a healthy
+    // channel to a fault that only touched one variant, and write the result out
+    // as a measured figure. The variant-scoped count already lives on the
+    // event's own `detail.listenersBefore`, taken while it was still knowable.
+    if (!isFailureEvent(e) || !e.durationMs) continue;
 
     const impact = deriveListenerImpact(e);
 
@@ -910,7 +916,12 @@ function getAudienceSummary(streamIds, windowMs) {
   }
 
   for (const e of events) {
-    if (e.type === 'up') continue;
+    // Failures only, and stated explicitly rather than relying on degraded
+    // events happening to carry no `audience` block. That is true today because
+    // backfillAudience() skips them, but a listener-minutes total that is
+    // correct only because of a guard in another function is one edit away from
+    // being wrong.
+    if (!isFailureEvent(e)) continue;
     const t = new Date(e.timestamp).getTime();
     if (!isFinite(t) || t <= cutoff) continue;
     if (!perStream[e.streamId]) continue;
@@ -1018,7 +1029,10 @@ function getAudioUptime(streamIds, windowMs) {
     coveredMs += covered;
 
     for (const e of events) {
-      if (e.streamId !== id || e.type === 'up' || !e.durationMs) continue;
+      // Failures only. A degraded channel was PLAYING — on fewer mounts than it
+      // publishes, but playing — so charging its duration here would report a
+      // channel that never stopped as having been off air for hours.
+      if (e.streamId !== id || !isFailureEvent(e) || !e.durationMs) continue;
       const t = new Date(e.timestamp).getTime();
       if (!isFinite(t) || t + e.durationMs <= cutoff) continue;
       if (!costListeners(e)) continue;
@@ -1893,6 +1907,7 @@ module.exports = {
   getPeriodRollup,
   getStatusCache, setStatusCache, getStorageInfo, getMeta, setMeta,
   ensureStreams, getStationConfig, setStationConfig,
+  backfillAudience,
   isUnconfirmedSeverity, settledImpact, costListeners, isFailureEvent,
   getAudienceContext, getHourOfDayProfile, buildAudienceImpact, deriveListenerImpact,
   getListenerSeries, getAudienceSummary, chooseBucketMs,

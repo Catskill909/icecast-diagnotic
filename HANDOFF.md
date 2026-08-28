@@ -82,7 +82,7 @@ regression, however green the tests are.**
   Angeles), 5 channels, 1 Icecast host, ~456 events retained since 2026-08-04.
 - **All three stations share one Icecast host**, which is the whole affiliate
   economics: one snapshot fetch per cycle serves all of them.
-- **168 tests**, `npm test`, Node's built-in runner, no test framework dependency.
+- **202 tests**, `npm test`, Node's built-in runner, no test framework dependency.
 - **Dependencies: express, nodemailer 9, dotenv.** That is the whole list, and it
   is deliberate. Crypto, testing and HTTP are all Node built-ins. Adding a
   dependency should require an argument.
@@ -123,19 +123,38 @@ silently alters what lands in someone's inbox.
 2. **A channel is not a mount.** Icecast publishes each bitrate variant as its
    own mount, so KPFT Main is `/live_128` *and* `/live_64`. Listener counts are
    summed across a channel's `mounts` list. Reading the probed mount alone
-   reported 57 of 88 listeners — a third of the audience invisible. Probing still
-   uses one mount per channel, so one problem produces one alert, not three.
+   reported 57 of 88 listeners — a third of the audience invisible.
 
-3. **Stream ids are load-bearing.** Every sample, rollup and event is keyed by
+   One mount per channel is *probed every cycle*, so one problem still produces
+   one alert, not three. The other variants are probed every `VARIANT_PROBE_EVERY`
+   cycles, which is the only way to catch a mount Icecast still lists but is not
+   serving. A variant failing alone is recorded as a `degraded` event — a real
+   fault on a channel that kept playing.
+
+3. **A degradation is not downtime.** `degraded` is the first event type that is
+   neither a recovery nor a channel failure, and every "what went wrong" total in
+   the system was written assuming those were the only two. Anything that counts
+   failures, downtime, uptime or lost listening MUST filter through
+   `store.isFailureEvent()`. Four separate call sites embedded the old assumption
+   and each one turned a healthy channel's degradation into hours of fabricated
+   off-air time.
+
+4. **Our probes are counted as listeners.** Icecast counts every connection,
+   including ours — measured: one connection took `/kpfk` from 1 listener to 2.
+   The Icecast snapshot is therefore fetched BEFORE any probe opens a connection.
+   Never restore the parallel `Promise.all`: it saves ~400 ms in a 60-second cycle
+   and puts our own probes inside the audience figures we then store forever.
+
+5. **Stream ids are load-bearing.** Every sample, rollup and event is keyed by
    them. `kpft-main`, `kpft-hd2`, `kpft-hd3` must not change or history detaches
    silently — the data does not disappear, it just stops being found.
 
-4. **Hosts are a global pool, not a property of a station.** Five Pacifica
+6. **Hosts are a global pool, not a property of a station.** Five Pacifica
    stations share one Icecast server; ~28 affiliates share another. One snapshot
    fetch per *host* serves every station on it. A host-per-station model would
    refetch the same server 33 times a minute.
 
-5. **Audience figures are frozen at recovery, not computed later.** Icecast only
+7. **Audience figures are frozen at recovery, not computed later.** Icecast only
    reports listeners while the mount exists, and raw samples compact after 7
    days. `getAudienceContext()` captures the pre-failure count at resolution time
    and writes it onto the event. Recomputing later is not possible.
@@ -146,16 +165,16 @@ silently alters what lands in someone's inbox.
 
 | File | Lines | What it owns |
 |---|---|---|
-| `store.js` | 1870 | Persistence, retention, audience model, rollups, **station config** |
-| `monitor.js` | 1827 | Check cycle, episode state, email composition, weekly roundup |
-| `diagnose.js` | 987 | Probe, Icecast snapshot, **the classifier and the alert gate** |
-| `server.js` | 326 | HTTP API |
+| `store.js` | 1916 | Persistence, retention, audience model, rollups, **station config** |
+| `monitor.js` | 2355 | Check cycle, episode state, email composition, weekly roundup |
+| `diagnose.js` | 1079 | Probe, Icecast snapshot, **the classifier and the alert gate** |
+| `server.js` | 592 | HTTP API |
 | `auth.js` | ~290 | Admin session gate: scrypt, signed cookie, rate limiting |
 | `redact.js` | ~130 | **Public projections.** What anonymous callers may see |
 | `safe-url.js` | ~150 | **SSRF guard** for fetching user-supplied URLs |
 | `discover.js` | ~240 | Station discovery: mount → channel grouping, validation |
-| `public/app.js` | 633 | Dashboard |
-| `public/history.js` | 1515 | History page, station picker, charts |
+| `public/app.js` | 694 | Dashboard |
+| `public/history.js` | 1530 | History page, station picker, charts |
 | `public/admin.js` | 363 | Admin panel: add, edit, remove stations |
 | `public/guide.js` | 230 | In-app guide (content lives here as data) |
 | `public/login.js` | ~90 | Two-step sign-in |
@@ -206,6 +225,44 @@ marked in the scope document, but to save anyone re-deriving them:
 - **The invalid-JSON bug never affected KPFT.** Zero of 443 production events.
   Real, and blocking for affiliates; not the emergency it was first called.
 - **Auto-deploy does not exist.** Deploys are manual, always.
+
+---
+
+## 5b. What changed on 2026-08-28: per-mount health
+
+The channel/mount distinction had been half-built. Listener counts were summed
+across a channel's mounts, but nothing watched the mounts themselves — so a
+single bitrate variant could stop serving and the dashboard would keep reading
+ONLINE while that variant's listeners sat in silence. On this host that is not a
+rounding error: `/live_64` regularly carries a third of KPFT Main's audience
+(measured live at 33 of 86).
+
+| Change | Why |
+|---|---|
+| `degraded` event type, one per episode | A variant failing alone is a real fault on a channel that never stopped playing. It had no way to be recorded |
+| Two failure reasons: `missing` and `stalled` | Icecast dropping a mount and Icecast listing a mount it will not serve need different evidence and different fixes |
+| Non-primary mounts probed every `VARIANT_PROBE_EVERY` cycles | The inventory can see a missing mount for free; only a probe can see a listed one that serves nothing |
+| **Snapshot fetched before probes, not alongside them** | Icecast counts our probes as listeners. Measured: one connection took `/kpfk` from 1 to 2. The old `Promise.all` put our own probes inside the audience figures we stored |
+| Samples carry `mountListeners`, `variantsPresent`, `variantsTotal` | The summed count can hold steady while one variant's audience collapses inside it. This is the only per-mount history there is, and raw samples expire |
+| `store.isFailureEvent()` | A degradation is not downtime, and every failure total had to learn the difference |
+| Mount chips on the dashboard card | The card showed one URL — the probed mount — and never said so. Now every mount is listed, with the failing one marked |
+
+### Corrections worth inheriting
+
+- **The variant counts were never in samples.** `icecast-app-future-dev.md` said
+  they were. They existed only on the live status record, so there was no
+  per-mount history at all. Now written, and the claim now true.
+- **Four accounting sites, not three.** The first pass at `isFailureEvent` fixed
+  the period rollup, the daily buckets and the downtime spread — found by
+  grepping `type !== 'up'`. It missed `getAudioUptime()`, `getAudienceSummary()`
+  and `backfillAudience()`, which express the same assumption as
+  `type === 'up'` in a `continue` guard. Left unfixed, a one-hour degradation on
+  a healthy channel would have been reported as an hour off air, and the backfill
+  would have written a fabricated channel-wide loss figure onto the event as a
+  *measured* value. **If a new event type is ever added, grep both spellings.**
+- **Single-mount channels must still show their mount row.** It was first hidden
+  as redundant ("1 of 1"), which read as missing data next to cards that showed
+  a count. Consistency beat concision.
 
 ---
 
@@ -278,6 +335,18 @@ Reviewed end to end on 2026-08-27; findings and reasoning in
 ## 8. Traps
 
 - **Deploys are manual.** Pushing is not shipping. Say so explicitly.
+- **Icecast counts our own probes as listeners.** Measured: one connection took
+  `/kpfk` from 1 listener to 2. So the Icecast snapshot is fetched BEFORE any
+  probe opens a connection, and the non-primary mounts are probed only every
+  `VARIANT_PROBE_EVERY` cycles. Making the cycle "faster" by fetching the
+  snapshot and probing in parallel again would corrupt every audience figure
+  the system stores, permanently and invisibly.
+- **A new event type must be taught to every total.** `type !== 'up'` is NOT a
+  synonym for "this was a failure" — `degraded` is neither. Anything counting
+  failures, downtime, uptime or lost listening goes through
+  `store.isFailureEvent()`, and the same assumption hides behind
+  `type === 'up'` guards in `getAudioUptime()`, `getAudienceSummary()` and
+  `backfillAudience()`. Grep both spellings.
 - **Audience analytics does NOT go in the admin panel.** Admin configures the
   system — rare, technical, restricted. Reporting is frequent and GM-facing, and
   belongs on the history page and fleet view. Collapsing them puts "delete
