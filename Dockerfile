@@ -13,7 +13,8 @@ LABEL org.opencontainers.image.description="Real-time Icecast stream uptime moni
 
 WORKDIR /app
 
-# Create non-root user and install curl for Coolify healthchecks
+# Non-root user, plus curl for the HEALTHCHECK below. Nothing here is specific
+# to any hosting platform.
 RUN addgroup -S monitor && adduser -S monitor -G monitor && \
     apk add --no-cache curl
 

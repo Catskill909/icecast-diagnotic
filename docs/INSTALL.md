@@ -240,3 +240,91 @@ If `/api/diagnostics` reports `reachable: false`, the monitor cannot read the
 Icecast status endpoint. Everything still runs, but listener counts are
 unavailable and every failure is recorded as `unknown` impact — which alerts.
 Check `ICECAST_STATUS_URL` first; not every host exposes `status-json.xsl`.
+
+---
+
+## 9. Getting off a hosting panel
+
+The application does not depend on one. The `Dockerfile` contains no
+platform-specific anything — a panel is just somewhere to type environment
+variables and click a button, and both of those have plain equivalents.
+
+### The two-minute version
+
+```bash
+git clone https://github.com/Catskill909/icecast-diagnotic.git
+cd icecast-diagnotic
+npm run setup -- --station WXYZ --url https://stream.example.org:8000/live
+docker compose up -d
+```
+
+`npm run setup` writes a working `.env`: it generates the session secret and an
+admin passphrase, hashes the passphrase, derives the Icecast status URL from the
+stream URL, and prints the credentials once. Everything it leaves blank is
+optional — the app runs without email configured.
+
+**44 settings exist; 36 have working defaults.** `.env.example` documents all of
+them and is the right thing to read second, not first.
+
+### Where a panel's two jobs actually go
+
+| A panel does this | Without one |
+|---|---|
+| Stores environment variables | A `.env` file next to `docker-compose.yml`, read by `env_file:` |
+| Mounts a persistent volume | The `monitor-data` volume in `docker-compose.yml`, or a bind mount |
+| Rebuilds on demand | `docker compose up -d --build` |
+| Shows logs | `docker compose logs -f` |
+| Restarts on failure | `restart: unless-stopped`, already set |
+
+Nothing is lost by moving. The data volume is the only thing that has to come
+with you — copy `events.json` and `samples.json` into the new volume and the
+history continues unbroken.
+
+### Running more than one instance
+
+Each instance needs its own `.env`, its own volume and its own port. Everything
+else is identical, and they can share a machine.
+
+```bash
+# One directory per instance
+docker compose -p pacifica-prod --env-file .env.prod up -d
+docker compose -p pacifica-dev  --env-file .env.dev  up -d
+```
+
+`-p` names the project, which namespaces the container **and its volumes** — so
+the two never touch each other's history. Give them different `PORT` values and
+put a reverse proxy in front if both need to be reachable.
+
+**When is more than one instance the right answer?** Rarely, and it is worth
+being clear about why:
+
+- **A staging instance** is genuinely useful — somewhere to try a configuration
+  change against real streams without touching the record anyone reads.
+- **One instance per station is usually the wrong shape.** The whole architecture
+  is built on the opposite: stations share an Icecast host, and one snapshot
+  fetch serves all of them. Splitting them multiplies the polling and throws away
+  the cross-station correlation that tells a station-wide fault from a
+  server-wide one.
+- **Separate instances for separate *organisations*** does make sense, since they
+  share no host and no operator.
+
+### Moving the live deployment
+
+The data volume is the only irreplaceable part.
+
+```bash
+# On the old host
+docker run --rm -v icecast-monitor-data:/d -v "$PWD":/out alpine \
+  tar czf /out/monitor-data.tgz -C /d .
+
+# On the new one, after `docker compose up -d` has created the volume
+docker run --rm -v icecast-monitor-data:/d -v "$PWD":/in alpine \
+  tar xzf /in/monitor-data.tgz -C /d
+docker compose restart
+```
+
+Then confirm the move worked the same way every deploy is confirmed: check that
+`oldestEvent` in `/api/stats` is the value it was before. Comparing counts proves
+nothing when the count could be zero — zero survives everything.
+
+---
