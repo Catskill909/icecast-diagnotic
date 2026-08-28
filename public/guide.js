@@ -187,7 +187,10 @@
       </div>
       <div class="guide-stepper">
         <button class="guide-step" id="guide-prev" ${index === 0 ? 'disabled' : ''}>← Previous</button>
-        <span class="guide-count">${index + 1} of ${TOPICS.length}</span>
+        <span class="guide-count">
+          ${index + 1} of ${TOPICS.length}
+          <span class="guide-keys" aria-hidden="true"><kbd>←</kbd><kbd>→</kbd></span>
+        </span>
         <button class="guide-step" id="guide-next" ${index === TOPICS.length - 1 ? 'disabled' : ''}>Next →</button>
       </div>`;
     $('guide-prev').addEventListener('click', () => go(index - 1));
@@ -222,7 +225,6 @@
     const btn = document.getElementById('help-btn');
     if (btn) btn.addEventListener('click', open);
     $('guide-close').addEventListener('click', close);
-    $('guide-done').addEventListener('click', close);
     // Clicking the backdrop closes; clicking the card must not.
     $('help-modal').addEventListener('click', (e) => { if (e.target === $('help-modal')) close(); });
     renderNav();
