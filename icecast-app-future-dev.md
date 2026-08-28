@@ -961,18 +961,18 @@ of audience data here and they carry different weight:
 |---|---|---|
 | **1. A station's own live counts** | "KPFT Main: 52 listening" | Already public on the dashboard. Leave it |
 | **2. A station's own history and trends** | Hour-of-day curve, month-over-month | Low. Should reach that station's staff, and nobody minds if it is wider |
-| **3. Cross-station comparison** | "KPFK has 3× KPFT's audience; WPFW is growing fastest" | **The loaded one — see below** |
+| **3. Cross-station comparison** | "WPFW recovers fastest; KPFT HD3 has the most dead air" | **Open — see below for what to compare** |
 | **4. Per-listener detail** | IP, geography, session length | Personal data. Most restricted, and needs a policy before collection (§3.5) |
 
-### Tier 3 is a political object, not a chart
+### Tier 3: open, and what to compare
 
-Cross-station comparison is the most useful thing this system could produce and
-the most dangerous thing to publish carelessly. "Which station is growing" and
+Cross-station comparison is the most useful thing this system could produce, and
+the one most worth getting the framing right on. "Which station is growing" and
 "which station has the smallest audience" are facts that will be used in funding
 arguments, board discussions and staff evaluations, whether or not that was the
 intent.
 
-Two failure modes worth naming before the chart exists:
+Two things to design against:
 
 - **It becomes a scorecard.** Once stations know they are ranked, the tool stops
   being a diagnostic and starts being an assessment. Peer pressure can be
@@ -984,12 +984,47 @@ Two failure modes worth naming before the chart exists:
   and schedules. A chart that lines them up implies otherwise unless it is
   framed very deliberately.
 
-**Recommendation: tier 3 is Pacifica management by default.** Not because the
-numbers are secret — a station can already count another's listeners from the
-public Icecast endpoint in ten seconds — but because a monitoring tool should not
-be the thing that turns them into a league table without anyone deciding it
-should. Make it a deliberate act to widen, rather than a default that has to be
-argued back.
+**Decided 2026-08-28: tier 3 is open.** An earlier draft of this section
+recommended restricting it. The project owner overruled that, and the reasoning
+holds: the underlying numbers are already public — anyone can count another
+station's listeners from the Icecast endpoint in ten seconds — and visible
+comparison is expected to motivate stations with weak digital reach rather than
+merely expose them.
+
+That is the upside named above, chosen deliberately. What follows is how to get
+it without the failure modes.
+
+**Compare what a station can change.** This is the whole difference between a
+useful league table and an ignored one.
+
+| Comparable and actionable | Not really either |
+|---|---|
+| **Uptime** — the same standard applies everywhere | **Absolute audience size** |
+| **Dead-air minutes** | Peak listener count |
+| **Time to recover** from an outage | Total listening hours |
+| **Growth rate** — direction, not size | |
+
+Audience size is mostly market size. KPFK has Los Angeles; KPFT has Houston; an
+affiliate has a county. Ranking those against each other produces a shrug,
+because nobody in the list can do anything about their metro population, and a
+metric nobody can move is one nobody acts on.
+
+Uptime and recovery time are the opposite: **the same standard applies to every
+station regardless of size**, and a station that is bottom of that table has
+something specific to fix. Growth rate works for the same reason — a small
+station beating a large one on trend is a genuine result, and it is the one
+comparison where being small is not a disadvantage.
+
+**So lead with uptime and trend; show absolute audience as context, not as the
+ranking.** The kick comes from a station seeing it is the only one with a
+recurring encoder fault, not from seeing it has fewer listeners than Los Angeles.
+
+**One thing to keep watching for.** Once stations know they are ranked, there is
+a quiet incentive to keep outages out of the record. This system removes most of
+that risk by design — outages are detected externally and recorded automatically,
+with no station-side control over what gets logged — which is worth stating out
+loud if anyone ever asks whether the table can be gamed. It cannot, and that is
+what makes it fair enough to publish.
 
 Tier 2 is the opposite: **a station should see its own history without asking.**
 That is the part with obvious operational value and no politics.
@@ -1088,7 +1123,7 @@ Low information density on purpose — its job is to be visible from across a ro
 | **3c — Roles & multi-user** | The role table in §5.5, built when a real GM asks for a login | Not before. A permission system without users is maintenance with no return |
 | **3d — Storage** | SQLite behind the existing `store.js` API, once mount count passes ~50 **or per-listener collection begins** (§3.3, §3.5) | Deferred deliberately; not needed before whichever of those comes first |
 | **3e — Audience, tiers 1–2** | A station's own counts, history and trends, on rollups already accumulating (§8b) | Needs nothing new. Densest value per unit of work |
-| **3f — Audience, tier 3** | Cross-station comparison — requires roles (§5.5) and a decision about who sees it | A political object, not a chart. See §8b |
+| **3f — Audience, tier 3** | Cross-station comparison, open to all — lead with uptime, recovery time and growth rate; audience size as context (§8b) | No roles needed now that it is open. Compare what a station can change |
 | **3g — Audience, tier 4** | Per-listener geography and sessions — requires Icecast admin credentials, a PII policy, and the storage move (§3.5) | Start the credentials conversation early; it is not code |
 | **4 — Intelligence** | Audience anomaly detection · encoder health scoring · multi-region probes · alert-fatigue analytics | The state-of-the-art part |
 
