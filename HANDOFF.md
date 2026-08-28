@@ -2,7 +2,7 @@
 
 > **Purpose.** Everything a new session, a new developer, or another model needs
 > to pick this up without reading the conversation it came from. Written
-> 2026-08-27, current as of commit `df11e35`.
+> 2026-08-27, current as of commit `24fd762`.
 >
 > Read this first, then [`README.md`](README.md) for behaviour,
 > [`docs/DIAGNOSTICS.md`](docs/DIAGNOSTICS.md) for the classifier, and
@@ -40,7 +40,7 @@ regression, however green the tests are.**
 
 - **Live**, healthy, ~90 listeners, 3 channels, 443 events retained since
   2026-08-04.
-- **98 tests**, `npm test`, Node's built-in runner, no test framework dependency.
+- **153 tests**, `npm test`, Node's built-in runner, no test framework dependency.
 - **Dependencies: express, nodemailer 9, dotenv.** That is the whole list, and it
   is deliberate. Crypto, testing and HTTP are all Node built-ins. Adding a
   dependency should require an argument.
@@ -111,6 +111,7 @@ silently alters what lands in someone's inbox.
 | `auth.js` | ~290 | Admin session gate: scrypt, signed cookie, rate limiting |
 | `redact.js` | ~130 | **Public projections.** What anonymous callers may see |
 | `safe-url.js` | ~150 | **SSRF guard** for fetching user-supplied URLs |
+| `discover.js` | ~240 | Station discovery: mount → channel grouping, validation |
 | `public/` | ~2900 | Vanilla JS dashboard, history page, login. No framework |
 
 Data lives in `DATA_DIR` (`/app/data` in production, **must be a persistent
@@ -163,11 +164,17 @@ Build order, with the current position marked:
 
 1. ✅ Move station config into the store
 2. ✅ Login (single admin)
-3. ⬅ **NEXT: add-station flow with Icecast discovery**
-4. Add the five sister stations *through the panel*
-5. Per-station alert recipients — the first GM-facing screen
-6. Fleet view
-7. Roles and multi-user — **only when a real GM asks for a login**
+3. ✅ Add-station flow with Icecast discovery — paste a URL, confirm, saved
+4. ✅ Live configuration reload — a station added is monitored seconds later,
+   with no redeploy
+5. ✅ Station scoping — every aggregate takes a station, and the history page has
+   a picker. Without it, adding a second station made the first one's uptime
+   silently wrong
+6. ⬅ **NEXT: per-station alert recipients.** Alert emails are still one global
+   list, so WPFW's GM would be paged about KPFT. This is the first genuinely
+   GM-facing screen
+7. Fleet view
+8. Roles and multi-user — **only when a real GM asks for a login**
 
 Two design rules already decided:
 
@@ -224,6 +231,19 @@ Reviewed end to end on 2026-08-27; findings and reasoning in
   back. Adding a field to a public response means checking `redact.js` first.
 - **Protected routes fail closed.** With no `ADMIN_PASSWORD_HASH` they return
   503, not 200. That is deliberate.
+- **Every aggregate must be scoped by station.** `streamIdsFor(stationId)` in
+  monitor.js is the seam. A new figure that hardcodes "all streams" is not
+  merely broader — it reports one station's outages as another's, and nothing
+  fails. An unknown station id returns nothing, deliberately.
+- **Channel ids key all history and must be unique across stations.** Reusing one
+  attaches a new channel to another's record; the data does not vanish, it
+  becomes wrong.
+- **Probe URLs are built from the origin the operator reached**, never from
+  Icecast's `listenurl`. On the Pacifica server those differ, and the announced
+  one is plain HTTP against an internal host.
+- **Check cycles must not overlap.** Guarded in runChecks(). Two in flight write
+  two samples for the same instant and corrupt the uptime arithmetic — invisible
+  at three channels, not at thirty-three.
 - **Escape helpers escape quotes.** They are used inside HTML attributes, and
   one renders Icecast metadata that a third party controls. Do not replace them
   with the DOM textContent trick — that is the bug that was there.
@@ -239,7 +259,7 @@ Reviewed end to end on 2026-08-27; findings and reasoning in
 ## 8. Verifying a change
 
 ```bash
-npm test                                             # 98 tests
+npm test                                             # 153 tests
 node --check server.js monitor.js store.js diagnose.js auth.js
 
 # Against production
