@@ -410,6 +410,7 @@ SMTP_FROM="KPFT Stream Monitor <monitor@example.com>"
 
 # ── Alert Recipients ─────────────────────────────────
 ALERT_EMAILS=manager@example.com,engineer@example.com
+ALERT_STATIONS=                  # Station ids that may email; empty = all
 ALERT_CC=monitor-owner@example.com
 
 # ── Dashboard Link in Emails ─────────────────────────

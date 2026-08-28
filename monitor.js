@@ -73,6 +73,20 @@ const SAVE_INTERVAL = parseInt(process.env.SAVE_INTERVAL_MS, 10) || 60 * 1000;
 // the real alerts in noise. Tolerant of case and stray whitespace, because this
 // gets typed into a hosting-panel text field where a capitalised value or a
 // pasted tab would otherwise leave alerts silently switched on.
+// Which stations may send email. Empty means all of them, which is what a
+// single-station deployment has always had.
+//
+// Recipients are still one global list, so every station's alerts reach the same
+// inbox. Until they are per-station, adding a station to the panel silently
+// signs KPFT's recipients up for its outages — a GM paged at 3am about a station
+// in another city.
+//
+// This is the stopgap and it is also a real setting: a station being trialled,
+// or one whose staff have not been onboarded yet, should be recorded in full and
+// email nobody.
+const ALERT_STATIONS = (process.env.ALERT_STATIONS || '')
+  .split(',').map((s) => s.trim().toLowerCase()).filter(Boolean);
+
 const ALERT_ON_HARMLESS_OUTAGE =
   String(process.env.ALERT_ON_HARMLESS_OUTAGE ?? '').trim().toLowerCase() === 'true';
 
@@ -101,6 +115,18 @@ function clampInt(raw, fallback, min, max) {
 // second sound alarming.
 const BRIEF_OUTAGE = 'brief_outage';  // real gap, cleared before confirmation
 const PROBE_ERROR = 'probe_error';    // our probe failed; Icecast served on
+
+/**
+ * May this stream's station send email?
+ *
+ * Recording is unaffected — every failure still enters the permanent record,
+ * because a station that does not email is not a station nobody is watching.
+ * Only the notification is withheld, and the event says so.
+ */
+function alertsEnabledFor(stream) {
+  if (!ALERT_STATIONS.length) return true;
+  return ALERT_STATIONS.includes(String(stream?.stationId || '').toLowerCase());
+}
 
 function unconfirmedSeverity(diagnosisResult) {
   return diagnosisResult?.listenerImpact === 'none' ? PROBE_ERROR : BRIEF_OUTAGE;
@@ -419,6 +445,7 @@ function init() {
 
   console.log(`[Monitor] Initialized with ${streams.length} streams`);
   console.log(`[Monitor] Check interval: ${CHECK_INTERVAL}ms, Failure threshold: ${FAILURE_THRESHOLD}`);
+  console.log(`[Monitor] Email alerts: ${ALERT_STATIONS.length ? 'only ' + ALERT_STATIONS.join(', ') : 'every station'}`);
   console.log(`[Monitor] Retention: newest ${store.MAX_EVENTS} events, raw samples ${store.SAMPLE_RETENTION_DAYS}d then hourly rollups`);
 }
 
@@ -904,6 +931,25 @@ async function runChecksInner() {
  * server-level event produces one email rather than one per mount.
  */
 async function dispatchNotifications(newlyNotable, recoveries, ctx) {
+  // Split rather than filter: the muted ones still need their event updated, or
+  // the record would not say why nothing was sent.
+  const mutedDown = newlyNotable.filter((n) => !alertsEnabledFor(n.stream));
+  const mutedUp = recoveries.filter((r) => !alertsEnabledFor(r.stream));
+  newlyNotable = newlyNotable.filter((n) => alertsEnabledFor(n.stream));
+  recoveries = recoveries.filter((r) => alertsEnabledFor(r.stream));
+
+  for (const m of [...mutedDown, ...mutedUp]) {
+    if (!m.eventId) continue;
+    store.updateEvent(m.eventId, {
+      email: {
+        attempted: false,
+        sent: false,
+        reason: `alerts not enabled for station "${m.stream?.stationId || 'unknown'}" (ALERT_STATIONS)`,
+      },
+    });
+    console.log(`[Monitor] 🔕 ${m.stream?.name}: recorded, not emailed — station not in ALERT_STATIONS`);
+  }
+
   if (newlyNotable.length > 0) {
     const serverScope =
       ctx.allDown && streams.length > 1
@@ -1612,6 +1658,7 @@ function getConfig() {
     emailConfigured: !!transporter,
     alertRecipients: (process.env.ALERT_EMAILS || '').split(',').map((e) => e.trim()).filter(Boolean).length,
     alertPolicy: ALERT_ON_HARMLESS_OUTAGE ? 'all confirmed outages' : 'confirmed outages with listener impact',
+    alertStations: ALERT_STATIONS.length ? ALERT_STATIONS : 'all',
     alertOnHarmlessOutage: ALERT_ON_HARMLESS_OUTAGE,
     weeklyRoundup: {
       enabled: WEEKLY_ROUNDUP_ENABLED,
@@ -1895,7 +1942,9 @@ function buildWeeklyRoundup(rollup) {
 
 /** The roundup as it would be sent, without sending it. */
 function previewWeeklyRoundup(windowMs = WEEKLY_ROUNDUP_WINDOW_MS) {
-  return buildWeeklyRoundup(getPeriodRollup(windowMs));
+  // Preview what would actually be sent, scope included.
+  const station = ALERT_STATIONS.length === 1 ? ALERT_STATIONS[0] : undefined;
+  return buildWeeklyRoundup(getPeriodRollup(windowMs, station));
 }
 
 /**
@@ -1914,7 +1963,13 @@ async function sendWeeklyRoundup({ to, windowMs = WEEKLY_ROUNDUP_WINDOW_MS } = {
     return { attempted: false, sent: false, reason: 'no recipients configured', attemptedAt };
   }
 
-  const rollup = getPeriodRollup(windowMs);
+  // The roundup covers exactly what alerts cover. Recipients are one global list,
+  // so a report spanning every station would tell KPFT's staff about outages at
+  // stations in other cities — and, worse, fold those figures into the uptime
+  // number they read as their own.
+  const roundupStation = ALERT_STATIONS.length === 1 ? ALERT_STATIONS[0] : undefined;
+
+  const rollup = getPeriodRollup(windowMs, roundupStation);
   const { subject, html } = buildWeeklyRoundup(rollup);
 
   try {
@@ -1970,7 +2025,10 @@ function checkWeeklyRoundup() {
   // A monitor with almost no history for the period would report a week of
   // silence it never actually watched. Claim the slot anyway so it does not
   // retry every five minutes for the rest of the day.
-  const rollup = getPeriodRollup(WEEKLY_ROUNDUP_WINDOW_MS);
+  // Coverage is measured over the same scope the roundup reports on, or a
+  // station with weeks of history would vouch for one added yesterday.
+  const rollup = getPeriodRollup(WEEKLY_ROUNDUP_WINDOW_MS,
+    ALERT_STATIONS.length === 1 ? ALERT_STATIONS[0] : undefined);
   if (rollup.coverageMs < 12 * 60 * 60 * 1000) {
     console.log('[Monitor] 📊 Weekly roundup skipped — under 12h of monitoring data for the period');
     store.setMeta('lastWeeklyRoundupDay', now.day);
@@ -2008,6 +2066,7 @@ module.exports = {
   getStationConfig: () => store.getStationConfig(),
   getStations, streamIdsFor,
   reloadConfig,
+  alertsEnabledFor,
   saveStationConfig,
   abandonEpisode,
   // Exported for tests.
