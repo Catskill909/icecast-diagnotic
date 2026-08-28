@@ -82,7 +82,7 @@ regression, however green the tests are.**
   Angeles), 5 channels, 1 Icecast host, ~456 events retained since 2026-08-04.
 - **All three stations share one Icecast host**, which is the whole affiliate
   economics: one snapshot fetch per cycle serves all of them.
-- **209 tests**, `npm test`, Node's built-in runner, no test framework dependency.
+- **211 tests**, `npm test`, Node's built-in runner, no test framework dependency.
 - **Dependencies: express, nodemailer 9, dotenv.** That is the whole list, and it
   is deliberate. Crypto, testing and HTTP are all Node built-ins. Adding a
   dependency should require an argument.
@@ -175,6 +175,7 @@ silently alters what lands in someone's inbox.
 | `discover.js` | ~240 | Station discovery: mount → channel grouping, validation |
 | `public/app.js` | 694 | Dashboard |
 | `public/history.js` | 1530 | History page, station picker, charts |
+| `public/listeners.js` | 432 | **Audience page**: per-channel, per-mount and hour-of-day, CSV export |
 | `public/admin.js` | 363 | Admin panel: add, edit, remove stations |
 | `public/guide.js` | 230 | In-app guide (content lives here as data) |
 | `public/login.js` | ~90 | Two-step sign-in |
@@ -247,6 +248,8 @@ rounding error: `/live_64` regularly carries a third of KPFT Main's audience
 | `store.isFailureEvent()` | A degradation is not downtime, and every failure total had to learn the difference |
 | Mount chips on the dashboard card | The card showed one URL — the probed mount — and never said so. Now every mount is listed, with its own listener count and the failing one marked |
 | `byMount` in the listener series | Per-mount audience history. Only reaches back `SAMPLE_RETENTION_DAYS` — hourly rollups compact the breakdown away, and the UI must say so rather than drawing a short line beside a long one |
+| **Audience page** (`listeners.html`) | Audience is a different question, for a different reader, than "what went wrong". Station-scoped like the history page, with the per-mount split that every other figure sums away, plus CSV export |
+| `getListeners()` scoped by station | It computed its series from the scoped set but returned the FULL stream list beside it. The chart filtered on which ids had a series, so nothing looked wrong — and the new page reads that list directly |
 | Degraded channels email when sustained AND costing listeners | A variant dead for half an hour with an audience on it is a real loss nobody would find out about. `DEGRADED_ALERT_AFTER_MS`, default 30 min, one message per episode plus an all-clear. The mail says DEGRADED, never DOWN |
 
 ### Corrections worth inheriting
@@ -301,10 +304,17 @@ Build order, with the current position marked:
    silently wrong
 6. ✅ Edit and remove stations — ids immutable, history retained on removal
 7. ⬅ **NEXT: per-station alert recipients.** Alert emails are still one global
-   list, so WPFW's GM would be paged about KPFT. This is the first genuinely
-   GM-facing screen
-8. Fleet view
-9. Roles and multi-user — **only when a real GM asks for a login**
+   list. Today `ALERT_STATIONS=["kpft"]` is the only thing preventing WPFW's GM
+   being paged about KPFT — which means WPFW and KPFK are monitored and nobody
+   is ever told about them. This is the first genuinely GM-facing screen
+8. ✅ Listener analytics page — audience as its own destination, station-scoped,
+   with per-channel and per-mount breakdowns and CSV export
+9. Fleet view
+10. **SMS alerting** — [`docs/SMS-ALERTING.md`](docs/SMS-ALERTING.md). ~$3–4.50/mo
+    plus a one-time ~$15–20 10DLC registration. Depends on item 7: phone numbers
+    are per-station in exactly the way addresses are, and building SMS against
+    the current global list would build that routing twice
+11. Roles and multi-user — **only when a real GM asks for a login**
 
 Two design rules already decided:
 
@@ -355,6 +365,10 @@ Reviewed end to end on 2026-08-27; findings and reasoning in
   `VARIANT_PROBE_EVERY` cycles. Making the cycle "faster" by fetching the
   snapshot and probing in parallel again would corrupt every audience figure
   the system stores, permanently and invisibly.
+- **The audience page reads `getListeners().streams` directly.** That list is
+  station-scoped; it was not, once. Anything added to that payload must be
+  scoped too, or the page will render another station's channels under this
+  station's heading.
 - **A new event type must be taught to every total.** `type !== 'up'` is NOT a
   synonym for "this was a failure" — `degraded` is neither. Anything counting
   failures, downtime, uptime or lost listening goes through

@@ -585,3 +585,49 @@ test('buckets with no per-mount data say so by absence, not by zero', () => {
   const series = store.getListenerSeries(id, 60 * 60 * 1000);
   assert.equal(series[series.length - 1].byMount, undefined);
 });
+
+// ── Station scoping ─────────────────────────────────────────────────────────
+// "Every aggregate must be scoped by station" is a standing invariant here: with
+// two stations, a figure that quietly covers both reports one station's numbers
+// as another's. getListeners() computed its series from the scoped set but
+// returned the FULL stream list beside it. The audience chart happened to filter
+// on which ids had a series, so nothing looked wrong — which is exactly why it
+// survived. The new audience page reads that list directly.
+
+test('getListeners returns only the requested station\'s channels', () => {
+  store.setStationConfig({
+    version: 1,
+    hosts: [{ id: 'h', host: 'stream.example.org:9000', statusUrl: 'https://stream.example.org:9000/status-json.xsl' }],
+    stations: [
+      {
+        id: 'alpha',
+        name: 'Alpha',
+        timezone: 'UTC',
+        channels: [{ id: 'a1', name: 'A1', url: 'https://stream.example.org:9000/a_128', mounts: ['/a_128'] }],
+      },
+      {
+        id: 'beta',
+        name: 'Beta',
+        timezone: 'UTC',
+        channels: [{ id: 'b1', name: 'B1', url: 'https://stream.example.org:9000/b_128', mounts: ['/b_128'] }],
+      },
+    ],
+  });
+  monitor.reloadConfig();
+
+  const all = monitor.getListeners(60 * 60 * 1000, undefined, null);
+  assert.deepEqual(all.streams.map((s) => s.id).sort(), ['a1', 'b1'], 'unscoped means every station');
+
+  const alpha = monitor.getListeners(60 * 60 * 1000, undefined, 'alpha');
+  assert.deepEqual(alpha.streams.map((s) => s.id), ['a1'], "Beta's channel must not appear in Alpha's payload");
+  assert.deepEqual(Object.keys(alpha.series), ['a1'], 'and the series agree with the list');
+});
+
+test('the audience payload carries what the page renders from', () => {
+  const alpha = monitor.getListeners(60 * 60 * 1000, undefined, 'alpha');
+  const s = alpha.streams[0];
+  assert.deepEqual(s.mounts, ['/a_128'], 'every mount, for the per-mount breakdown');
+  assert.equal(Array.isArray(s.hourProfile), true, 'hour-of-day profile');
+  assert.equal(s.hourProfile.length, 24);
+  assert.ok('current' in s, 'live listener count, which no windowed average shows');
+});

@@ -1,0 +1,148 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+  <meta name="robots" content="noindex, nofollow, noarchive, nosnippet">
+  <meta name="googlebot" content="noindex, nofollow">
+
+  <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+  <meta http-equiv="Pragma" content="no-cache">
+  <meta http-equiv="Expires" content="0">
+
+  <title>Audience — Pacifica Stream Monitor</title>
+  <meta name="description" content="Listener audience analytics for Pacifica Icecast streams, by channel, by mount and by hour.">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📡</text></svg>">
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20..48,100..700,0..1,-50..200&amp;display=swap">
+  <link rel="stylesheet" href="style.css?v=dev">
+  <link rel="stylesheet" href="history.css?v=dev">
+  <link rel="stylesheet" href="listeners.css?v=dev">
+</head>
+<body>
+
+<div class="app">
+  <div class="loading-screen" id="loading">
+    <div class="loading-spinner"></div>
+    <div class="loading-text">Loading audience data…</div>
+  </div>
+
+  <div id="audience-view" style="display: none;">
+
+    <header class="header fade-in">
+      <div class="header-left">
+        <a href="index.html" class="back-link" title="Back to dashboard">
+          <span class="material-symbols-outlined">arrow_back</span>
+        </a>
+        <div class="logo">📡</div>
+        <div>
+          <div class="header-title">Audience</div>
+          <div class="header-subtitle" id="audience-note">Who is listening, and to which mount</div>
+        </div>
+      </div>
+      <div class="header-right">
+        <label class="station-picker hidden" id="station-picker">
+          <span class="material-symbols-outlined">radio</span>
+          <select id="station-select" aria-label="Station"></select>
+        </label>
+        <a class="help-btn" href="history.html" title="Incident history">
+          <span class="material-symbols-outlined">history</span>
+          <span>History</span>
+        </a>
+        <button class="help-btn" id="export-btn" title="Download the audience series as CSV">
+          <span class="material-symbols-outlined">download</span>
+          <span>Export CSV</span>
+        </button>
+      </div>
+    </header>
+
+    <div class="range-bar fade-in">
+      <div class="range-pills" id="range-pills">
+        <button type="button" class="range-pill" data-days="1">24H</button>
+        <button type="button" class="range-pill active" data-days="7">7D</button>
+        <button type="button" class="range-pill" data-days="30">30D</button>
+        <button type="button" class="range-pill" data-days="90">90D</button>
+      </div>
+      <span class="range-note" id="range-note"></span>
+    </div>
+
+    <!-- Right now -->
+    <div class="aud-tiles fade-in" id="aud-tiles"></div>
+
+    <!-- Audience over time, every channel on one scale -->
+    <div class="section-title">
+      <span class="material-symbols-outlined">show_chart</span>
+      Audience Over Time
+      <details class="info-popover">
+        <summary aria-label="Explain this chart" title="Explain this chart">
+          <span class="material-symbols-outlined" aria-hidden="true">info</span>
+        </summary>
+        <div class="info-popover-card">
+          Every channel on one shared scale, so they can be compared directly. The
+          incident history page draws the same data one channel per row with outage
+          bands — that view answers "what happened to this channel", this one answers
+          "where is the audience".
+        </div>
+      </details>
+    </div>
+    <div class="panel fade-in">
+      <div id="aud-lines"></div>
+      <div class="aud-legend" id="aud-lines-legend"></div>
+    </div>
+
+    <!-- Per channel -->
+    <div class="section-title">
+      <span class="material-symbols-outlined">equalizer</span>
+      By Channel
+    </div>
+    <div class="panel fade-in">
+      <div class="table-scroll"><table class="aud-table" id="channel-table"></table></div>
+    </div>
+
+    <!-- Per mount -->
+    <div class="section-title">
+      <span class="material-symbols-outlined">alt_route</span>
+      By Mount
+      <details class="info-popover">
+        <summary aria-label="Explain the per-mount breakdown" title="Explain this breakdown">
+          <span class="material-symbols-outlined" aria-hidden="true">info</span>
+        </summary>
+        <div class="info-popover-card">
+          A channel is published at several bitrates, each its own Icecast mount, and
+          the audience splits across them. This is the only place that split is
+          visible — every other figure sums them. It reaches back as far as raw
+          samples are kept; older buckets compact the breakdown away.
+        </div>
+      </details>
+      <span class="section-hint" id="mount-hint"></span>
+    </div>
+    <div class="panel fade-in">
+      <div id="mount-breakdown"></div>
+    </div>
+
+    <!-- Hour of day -->
+    <div class="section-title">
+      <span class="material-symbols-outlined">schedule</span>
+      By Hour of Day
+      <details class="info-popover">
+        <summary aria-label="Explain the hour-of-day profile" title="Explain this profile">
+          <span class="material-symbols-outlined" aria-hidden="true">info</span>
+        </summary>
+        <div class="info-popover-card">
+          Average listeners at each hour across the whole retained record, not just the
+          selected range — the point of the shape is that it holds across many days.
+          Shown in your browser's local time.
+        </div>
+      </details>
+      <span class="section-hint" id="hour-hint"></span>
+    </div>
+    <div class="panel fade-in">
+      <div id="hour-profile"></div>
+    </div>
+
+  </div>
+</div>
+
+<script src="listeners.js?v=dev"></script>
+</body>
+</html>

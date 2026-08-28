@@ -81,6 +81,7 @@ If you are an AI assistant or developer picking up this project, here is the ess
 - **`store.js`**: Persistence. Splits the long-term event record from rolling telemetry; handles atomic writes, hourly compaction, and legacy migration.
 - **`public/index.html` / `app.js`**: Live dashboard.
 - **`public/history.html` / `history.js` / `history.css`**: Long-term incident history — heatmap, listener-audience chart, filters, per-event drill-down.
+- **`public/listeners.html` / `listeners.js` / `listeners.css`**: Audience analytics — every channel on one scale, the per-mount split that every other figure sums away, hour-of-day profile, and CSV export. Station-scoped like the history page.
 - **`scripts/backfill-audience.js`**: Reporting/repair tool for the `audience` block. **Not normally needed** — `store.load()` backfills automatically at every startup, before `prune()` runs. Use this to preview the numbers (dry-run by default) or to repair after a manual data edit. Safe to re-run; it never overwrites a measured figure.
 - **`public/style.css`**: Dark Material Design 3 theme system using CSS variables.
 - **`Dockerfile`**: Production build on `node:20-alpine` with `curl` for Coolify health probes.

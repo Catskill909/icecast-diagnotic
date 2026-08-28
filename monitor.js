@@ -1985,7 +1985,26 @@ function getListeners(windowMs, bucketMs, stationId) {
   return {
     windowMs,
     bucketMs: bucketMs || store.chooseBucketMs(windowMs),
-    streams: streams.map((s) => ({ id: s.id, name: s.name })),
+    // SCOPED. This used to return every stream the monitor watches regardless of
+    // the station asked for. The audience chart filtered them out by checking
+    // which ids had a series, so nothing looked wrong — but the payload named
+    // other stations' channels to a caller scoped to one, and any future
+    // consumer that trusted the list would have reported the wrong station's
+    // channels. Every aggregate is scoped; so is this.
+    streams: scoped.map((s) => ({
+      id: s.id,
+      name: s.name,
+      stationId: s.stationId,
+      // Every mount of the channel, so the audience page can break the series
+      // down per bitrate variant rather than only per channel.
+      mounts: diagnose.channelMountPaths(s),
+      // Where the audience is right now, which no windowed average can show.
+      current: streamStatus[s.id]?.listeners ?? null,
+      mountListeners: streamStatus[s.id]?.mountListeners || {},
+      // Whole retained history, not the selected window — the point of an
+      // hour-of-day profile is the shape across every day we have.
+      hourProfile: store.getHourOfDayProfile(s.id),
+    })),
     series,
     outages,
     summary: store.getAudienceSummary(ids, windowMs),

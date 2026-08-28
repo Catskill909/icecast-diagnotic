@@ -1,0 +1,234 @@
+/* ═══════════════════════════════════════════════════════════════════════════
+   Audience page
+
+   Layered on top of style.css and history.css, which already own the header,
+   panels, section titles, range pills, `.swatch` and the SVG axis classes. Only
+   what is specific to this page lives here — a second definition of a shared
+   component is a divergence waiting to happen.
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+.range-bar {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex-wrap: wrap;
+  margin: 18px 0 6px;
+}
+
+.range-note {
+  font-size: 12px;
+  color: var(--text-tertiary);
+}
+
+/* ── Headline tiles ─────────────────────────────────────────────────────── */
+
+.aud-tiles {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  gap: 12px;
+  margin: 14px 0 8px;
+}
+
+.aud-tile {
+  background: var(--surface-1);
+  border: 1px solid var(--surface-3);
+  border-radius: 12px;
+  padding: 16px 18px;
+}
+
+.aud-tile-v {
+  font-size: 28px;
+  font-weight: 700;
+  color: var(--primary-light);
+  line-height: 1.1;
+}
+
+.aud-tile-l {
+  margin-top: 4px;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.aud-empty {
+  padding: 28px;
+  text-align: center;
+  color: var(--text-tertiary);
+  font-size: 13px;
+}
+
+/* ── Multi-channel line chart ───────────────────────────────────────────── */
+
+.aud-svg {
+  width: 100%;
+  height: 260px;
+  display: block;
+}
+
+/* Strokes must not stretch with the viewBox — preserveAspectRatio="none"
+   scales the geometry, and without this the lines thin out on wide screens. */
+.aud-line {
+  stroke-width: 2;
+  vector-effect: non-scaling-stroke;
+  stroke-linejoin: round;
+  stroke-linecap: round;
+}
+
+.aud-xtick {
+  font-size: 11px;
+  fill: var(--text-tertiary);
+}
+
+.aud-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 14px;
+  margin-top: 12px;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.aud-legend .alg {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+/* ── Channel table ──────────────────────────────────────────────────────── */
+
+.table-scroll { overflow-x: auto; }
+
+.aud-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.aud-table th {
+  text-align: left;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-tertiary);
+  padding: 0 12px 8px;
+  border-bottom: 1px solid var(--surface-3);
+  white-space: nowrap;
+}
+
+.aud-table td {
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--surface-2);
+  color: var(--text-primary);
+  white-space: nowrap;
+}
+
+.aud-table tr:last-child td { border-bottom: none; }
+.aud-table .num { text-align: right; font-variant-numeric: tabular-nums; }
+.aud-table td .swatch { margin-right: 8px; }
+
+/* ── Per-mount breakdown ────────────────────────────────────────────────── */
+
+.mb-block { padding: 6px 0 14px; }
+.mb-block + .mb-block { border-top: 1px solid var(--surface-2); padding-top: 14px; }
+
+.mb-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+  margin-bottom: 10px;
+}
+
+/* Column captions sit with the numbers they label, right-aligned to match. */
+.mb-cols {
+  margin-left: auto;
+  display: flex;
+  gap: 12px;
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-tertiary);
+}
+
+.mb-cols span { width: 46px; text-align: right; }
+
+.mb-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 5px 0;
+}
+
+.mb-path {
+  flex: 0 0 auto;
+  min-width: 140px;
+  font-family: 'SF Mono', 'Fira Code', monospace;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+/* The probed mount, matching the dashboard card's treatment. */
+.mb-path.primary { color: var(--text-primary); }
+
+.mb-bar {
+  flex: 1 1 auto;
+  height: 8px;
+  min-width: 60px;
+  border-radius: 4px;
+  background: var(--surface-3);
+  overflow: hidden;
+}
+
+.mb-bar i {
+  display: block;
+  height: 100%;
+  border-radius: 4px;
+}
+
+.mb-now,
+.mb-avg {
+  flex: 0 0 46px;
+  text-align: right;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.mb-now { color: var(--text-primary); font-weight: 600; }
+.mb-avg { color: var(--text-tertiary); }
+
+/* ── Hour-of-day profile ────────────────────────────────────────────────── */
+
+.hp {
+  display: flex;
+  align-items: flex-end;
+  gap: 4px;
+  height: 160px;
+  padding-top: 8px;
+}
+
+.hp-col {
+  flex: 1 1 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  align-items: center;
+  height: 100%;
+  gap: 6px;
+}
+
+.hp-col i {
+  display: block;
+  width: 100%;
+  min-height: 2px;
+  border-radius: 3px 3px 0 0;
+  background: linear-gradient(180deg, var(--primary-light), var(--primary));
+}
+
+.hp-col span {
+  font-size: 10px;
+  color: var(--text-tertiary);
+  height: 12px;
+  white-space: nowrap;
+}
