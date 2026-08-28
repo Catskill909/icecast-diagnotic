@@ -933,6 +933,93 @@ data supports a lot more than alerting.
 
 ---
 
+## 8b. Audience analytics — scope, and who sees what
+
+> Added 2026-08-28. The direction stated by the project owner: listener data is
+> not only "what did we lose". It is who is listening, where, when, and how that
+> moves over time — and the cross-station view is expected to interest more
+> people than the alerting does.
+
+### It does not belong in the admin panel
+
+The admin panel configures the system: add a station, edit it, remove it. Those
+are rare, technical, restricted actions (§5.0). Audience analytics is the
+opposite — frequent, non-technical, and the thing a GM opens *because they want
+to*, not because something broke.
+
+Putting reporting inside the configuration screen would collapse the distinction
+§5.0 exists to protect, and would put "delete station" one tab away from the
+report a GM reads weekly. **Audience analytics belongs in the reporting surface —
+the history page and the fleet view — with the admin panel left alone.**
+
+### Three tiers, not one switch
+
+"Open or restricted" is the wrong shape for the question. There are three kinds
+of audience data here and they carry different weight:
+
+| Tier | Example | Sensitivity |
+|---|---|---|
+| **1. A station's own live counts** | "KPFT Main: 52 listening" | Already public on the dashboard. Leave it |
+| **2. A station's own history and trends** | Hour-of-day curve, month-over-month | Low. Should reach that station's staff, and nobody minds if it is wider |
+| **3. Cross-station comparison** | "KPFK has 3× KPFT's audience; WPFW is growing fastest" | **The loaded one — see below** |
+| **4. Per-listener detail** | IP, geography, session length | Personal data. Most restricted, and needs a policy before collection (§3.5) |
+
+### Tier 3 is a political object, not a chart
+
+Cross-station comparison is the most useful thing this system could produce and
+the most dangerous thing to publish carelessly. "Which station is growing" and
+"which station has the smallest audience" are facts that will be used in funding
+arguments, board discussions and staff evaluations, whether or not that was the
+intent.
+
+Two failure modes worth naming before the chart exists:
+
+- **It becomes a scorecard.** Once stations know they are ranked, the tool stops
+  being a diagnostic and starts being an assessment. Peer pressure can be
+  healthy — a station seeing it is the outlier on uptime may finally fix the
+  encoder — but the same mechanism produces defensiveness, and in the worst case
+  an incentive to keep outages quiet.
+- **Audience size is not performance.** WPFW's 100 listeners and KPFT HD3's 4 are
+  not a judgement about the people running them; they are markets, transmitters
+  and schedules. A chart that lines them up implies otherwise unless it is
+  framed very deliberately.
+
+**Recommendation: tier 3 is Pacifica management by default.** Not because the
+numbers are secret — a station can already count another's listeners from the
+public Icecast endpoint in ten seconds — but because a monitoring tool should not
+be the thing that turns them into a league table without anyone deciding it
+should. Make it a deliberate act to widen, rather than a default that has to be
+argued back.
+
+Tier 2 is the opposite: **a station should see its own history without asking.**
+That is the part with obvious operational value and no politics.
+
+### What this needs that does not exist yet
+
+1. **Per-station read scoping.** Today reads are public or gated wholesale
+   (`REQUIRE_LOGIN_FOR_READ`). Tiering requires knowing *who* is looking, which
+   means the roles in §5.5 — deferred until now for good reason, and this is the
+   feature that finally requires them.
+2. **Icecast admin credentials** for tier 4 (§3.5). The public endpoint gives
+   counts and nothing else.
+3. **A storage move before tier 4 collection begins** (§3.5).
+
+Tiers 1 and 2 need none of that. **They can be built now**, on hourly rollups
+that have been accumulating since day one, and they are where the value is
+densest per unit of work.
+
+### The number nobody at Pacifica currently has
+
+Worth stating plainly because it is easy to lose among the charts: this system
+already computes *listening hours lost* and can compute *listening hours
+delivered*. Nobody at Pacifica has that figure for the network, for a year, in
+one place.
+
+It is a board number and a fundraising number, and it arrives as a by-product of
+monitoring rather than as a separate project.
+
+---
+
 ## 9. Displaying traffic and incidents
 
 Current UI is dark, dense, and already has a heatmap and audience chart. Building
@@ -1000,6 +1087,9 @@ Low information density on purpose — its job is to be visible from across a ro
 | **3b — Discovery adapters** | Tier 1–5 fallbacks · per-station degraded-monitoring policy | Required before any off-network affiliate (§2.4) |
 | **3c — Roles & multi-user** | The role table in §5.5, built when a real GM asks for a login | Not before. A permission system without users is maintenance with no return |
 | **3d — Storage** | SQLite behind the existing `store.js` API, once mount count passes ~50 **or per-listener collection begins** (§3.3, §3.5) | Deferred deliberately; not needed before whichever of those comes first |
+| **3e — Audience, tiers 1–2** | A station's own counts, history and trends, on rollups already accumulating (§8b) | Needs nothing new. Densest value per unit of work |
+| **3f — Audience, tier 3** | Cross-station comparison — requires roles (§5.5) and a decision about who sees it | A political object, not a chart. See §8b |
+| **3g — Audience, tier 4** | Per-listener geography and sessions — requires Icecast admin credentials, a PII policy, and the storage move (§3.5) | Start the credentials conversation early; it is not code |
 | **4 — Intelligence** | Audience anomaly detection · encoder health scoring · multi-region probes · alert-fatigue analytics | The state-of-the-art part |
 
 **The through-line:** every phase after 1 adds stations through the same panel.

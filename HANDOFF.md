@@ -278,6 +278,10 @@ Reviewed end to end on 2026-08-27; findings and reasoning in
 ## 8. Traps
 
 - **Deploys are manual.** Pushing is not shipping. Say so explicitly.
+- **Audience analytics does NOT go in the admin panel.** Admin configures the
+  system — rare, technical, restricted. Reporting is frequent and GM-facing, and
+  belongs on the history page and fleet view. Collapsing them puts "delete
+  station" a tab away from a weekly report (§8b of the scope doc).
 - **The in-app guide's content lives in `public/guide.js`**, as data rather than
   markup. Edit the TOPICS array; do not put copy back into index.html.
 - **`STREAMS` in the hosting panel no longer does anything** after first boot.
