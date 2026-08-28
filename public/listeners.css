@@ -328,3 +328,39 @@
 }
 
 .ath-note .material-symbols-outlined { font-size: 15px; flex: 0 0 auto; }
+
+/* ── Tile sub-line, day table ───────────────────────────────────────────── */
+
+/* The comparison under a headline number. Without it "151 listening" says
+   nothing — 151 is excellent at 3am and poor at 6pm. */
+.aud-tile-sub {
+  margin-top: 6px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-tertiary);
+}
+
+.aud-tile-sub.up { color: var(--status-up); }
+.aud-tile-sub.down { color: var(--warn); }
+
+/* A peak with no "when" is trivia. */
+.peak-when {
+  display: block;
+  font-size: 10px;
+  font-weight: 500;
+  color: var(--text-tertiary);
+}
+
+.aud-table td.daybar {
+  width: 34%;
+  min-width: 90px;
+  padding-right: 0;
+}
+
+.aud-table td.daybar i {
+  display: block;
+  height: 8px;
+  border-radius: 4px;
+  background: var(--primary);
+  min-width: 2px;
+}

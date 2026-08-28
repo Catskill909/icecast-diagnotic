@@ -123,6 +123,25 @@
       <div class="table-scroll"><table class="aud-table" id="channel-table"></table></div>
     </div>
 
+    <!-- Day by day -->
+    <div class="section-title">
+      <span class="material-symbols-outlined">calendar_view_week</span>
+      Day by Day
+      <details class="info-popover">
+        <summary aria-label="Explain the daily breakdown" title="Explain this table">
+          <span class="material-symbols-outlined" aria-hidden="true">info</span>
+        </summary>
+        <div class="info-popover-card">
+          Every channel's listeners summed at each moment, then grouped by day. The
+          peak column is a real simultaneous figure, not the sum of separate
+          high-water marks. Hours is that day's contribution to the monthly ATH.
+        </div>
+      </details>
+    </div>
+    <div class="panel fade-in">
+      <div class="table-scroll"><table class="aud-table" id="daily-table"></table></div>
+    </div>
+
     <!-- Per mount -->
     <div class="section-title">
       <span class="material-symbols-outlined">alt_route</span>
@@ -167,6 +186,9 @@
   </div>
 </div>
 
+<!-- Statistics first: listeners.js reads window.AudienceStats at call time, but
+     loading it up front keeps the dependency obvious rather than incidental. -->
+<script src="audience-stats.js?v=dev"></script>
 <script src="listeners.js?v=dev"></script>
 </body>
 </html>

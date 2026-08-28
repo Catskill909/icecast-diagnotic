@@ -116,52 +116,27 @@
     return (data.streams || []).filter((s) => (data.series[s.id] || []).length);
   }
 
-  /** Average and peak for one channel over the loaded window. */
-  function statsFor(stream) {
-    const series = (data.series || {})[stream.id] || [];
-    let sum = 0;
-    let count = 0;
-    let peak = null;
-    for (const p of series) {
-      if (p.avg != null) { sum += p.avg; count++; }
-      if (p.peak != null) peak = peak == null ? p.peak : Math.max(peak, p.peak);
-    }
-    return { avg: count ? sum / count : null, peak, buckets: count };
-  }
+  /* Statistics live in audience-stats.js so they can be unit-tested in Node.
+     They were inline here once, untestable, and the page shipped reporting a
+     station peak of 212 where the true simultaneous figure was 179. */
+  const A = (typeof window !== 'undefined' && window.AudienceStats) || {};
 
-  /**
-   * Average listeners per mount over the window.
-   *
-   * Only buckets that actually carry a breakdown are counted. Treating a bucket
-   * without one as a row of zeros would drag every mount average toward zero in
-   * proportion to how long ago the feature was added, which would look like a
-   * declining audience rather than missing data.
-   */
-  function mountStatsFor(stream) {
-    const series = (data.series || {})[stream.id] || [];
-    const acc = new Map();
-    let covered = 0;
-    for (const p of series) {
-      if (!p.byMount) continue;
-      covered++;
-      for (const [path, v] of Object.entries(p.byMount)) {
-        const m = acc.get(path) || { sum: 0, count: 0 };
-        m.sum += v;
-        m.count++;
-        acc.set(path, m);
-      }
-    }
-    const out = [...acc].map(([path, m]) => ({ path, avg: m.sum / m.count }));
-    out.sort((a, b) => b.avg - a.avg);
-    return { mounts: out, covered, total: series.length };
-  }
+  const statsFor = (stream) => A.channelStats((data.series || {})[stream.id] || []);
+
+  const stationSeries = () => A.stationSeries(data.series || {}, rows().map((s) => s.id));
+
+  const stationStats = () => A.stationStats(stationSeries());
+
+  const vsTypicalNow = () => A.vsTypical(rows(), new Date().getUTCHours());
+
+  const mountStatsFor = (stream) => A.mountStats((data.series || {})[stream.id] || []);
 
   /* ── Render ──────────────────────────────────────────────────────────── */
 
   function render() {
     if (!data || !rows().length) {
       $('#aud-tiles').innerHTML = '<div class="aud-empty">No audience data in this range yet.</div>';
-      ['#aud-lines', '#channel-table', '#mount-breakdown', '#hour-profile'].forEach((s) => {
+      ['#aud-lines', '#channel-table', '#daily-table', '#mount-breakdown', '#hour-profile'].forEach((s) => {
         const el = $(s);
         if (el) el.innerHTML = '';
       });
@@ -169,6 +144,7 @@
     }
     renderTiles();
     renderAth();
+    renderDaily();
     renderLines();
     renderChannelTable();
     renderMounts();
@@ -180,22 +156,87 @@
   function renderTiles() {
     const list = rows();
     const now = list.reduce((a, s) => a + (s.current || 0), 0);
-    const avg = list.reduce((a, s) => a + (statsFor(s).avg || 0), 0);
-    // Summing per-channel peaks would claim a simultaneous maximum that may
-    // never have happened. The peak of the summed series is not recoverable from
-    // per-channel buckets either, so this is stated as what it is.
-    const peak = list.reduce((a, s) => a + (statsFor(s).peak || 0), 0);
+    const st = stationStats();
+    const vs = vsTypicalNow();
+    const athMonth = list.reduce((a, s) => a + ((s.ath && s.ath.month && s.ath.month.ath) || 0), 0);
 
     const tiles = [
-      { v: now, l: 'listening right now' },
-      { v: fmt(avg), l: `average across the last ${days === 1 ? '24 hours' : days + ' days'}` },
-      { v: Number(list.reduce((a, s) => a + ((s.ath && s.ath.month && s.ath.month.ath) || 0), 0)).toLocaleString(), l: 'listening hours this month (estimated)' },
-      { v: peak, l: 'sum of each channel’s peak — not one moment' },
-      { v: list.length, l: 'channels with audience data' },
+      {
+        v: now,
+        l: 'listening right now',
+        // The one figure that says whether right now is going well. 151 is
+        // excellent at 3am and poor at 6pm; without the baseline it says
+        // neither.
+        sub: vs
+          ? `${vs.changePct >= 0 ? '▲' : '▼'} ${Math.abs(vs.changePct)}% vs typical for this hour (${fmt(vs.typical)})`
+          : null,
+        subCls: vs ? (vs.changePct >= 0 ? 'up' : 'down') : null,
+      },
+      {
+        v: fmt(st.avg),
+        l: `average listeners, last ${days === 1 ? '24 hours' : days + ' days'}`,
+      },
+      {
+        // A TRUE simultaneous peak, from the summed series — not the sum of
+        // each channel's separate high-water mark, which is a total the station
+        // never actually reached at any one moment.
+        v: st.peak == null ? '—' : Math.round(st.peak),
+        l: 'peak at one moment',
+        sub: st.peakAt ? fmtWhen(st.peakAt) : null,
+      },
+      {
+        v: st.low == null ? '—' : Math.round(st.low),
+        l: 'quietest moment — the floor the station holds',
+      },
+      {
+        v: Number(athMonth).toLocaleString(),
+        l: 'listening hours this month (estimated)',
+      },
+      {
+        v: list.length,
+        l: `channel${list.length === 1 ? '' : 's'} with audience data`,
+      },
     ];
-    $('#aud-tiles').innerHTML = tiles
-      .map((t) => `<div class="aud-tile"><div class="aud-tile-v">${esc(t.v)}</div><div class="aud-tile-l">${esc(t.l)}</div></div>`)
-      .join('');
+
+    $('#aud-tiles').innerHTML = tiles.map((t) => `<div class="aud-tile">
+      <div class="aud-tile-v">${esc(t.v)}</div>
+      <div class="aud-tile-l">${esc(t.l)}</div>
+      ${t.sub ? `<div class="aud-tile-sub ${t.subCls || ''}">${esc(t.sub)}</div>` : ''}
+    </div>`).join('');
+  }
+
+  /**
+   * Listeners day by day: average, peak, floor and listening hours.
+   *
+   * The chart shows the shape; this answers "was Saturday better than Tuesday",
+   * which for a station whose weekend is volunteer-programmed is most of the
+   * question. Built from the station-wide concurrent series so the peak column
+   * is a real moment, consistent with the tile above it.
+   */
+  function renderDaily() {
+    const ser = stationSeries();
+    if (!ser.length) { $('#daily-table').innerHTML = ''; return; }
+
+    const days7 = A.dailyBreakdown(ser, data.bucketMs);
+    const maxAvg = Math.max(...days7.map((d) => d.avg), 1);
+
+    const body = days7.map((d) => {
+      const avg = d.avg;
+      const hours = d.hours;
+      const dt = new Date(`${d.key}T12:00:00`);
+      return `<tr>
+        <td>${esc(dt.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' }))}</td>
+        <td class="num">${esc(fmt(avg))}</td>
+        <td class="num">${esc(Math.round(d.peak))}</td>
+        <td class="num">${esc(Math.round(d.low))}</td>
+        <td class="num">${esc(hours.toLocaleString())}</td>
+        <td class="daybar"><i style="width:${((avg / maxAvg) * 100).toFixed(1)}%"></i></td>
+      </tr>`;
+    }).join('');
+
+    $('#daily-table').innerHTML =
+      `<thead><tr><th>Day</th><th class="num">Average</th><th class="num">Peak</th><th class="num">Low</th><th class="num">Hours</th><th></th></tr></thead>
+       <tbody>${body}</tbody>`;
   }
 
   /**
@@ -320,13 +361,14 @@
         <td><i class="swatch" style="background:${colorFor(i)}"></i>${esc(s.name)}</td>
         <td class="num">${s.current == null ? '—' : esc(s.current)}</td>
         <td class="num">${esc(fmt(st.avg))}</td>
-        <td class="num">${st.peak == null ? '—' : esc(st.peak)}</td>
+        <td class="num">${st.peak == null ? '—' : esc(st.peak)}${st.peakAt ? `<span class="peak-when">${esc(fmtWhen(st.peakAt))}</span>` : ''}</td>
+        <td class="num">${st.low == null ? '—' : esc(fmt(st.low))}</td>
         <td class="num">${esc(Math.round(share))}%</td>
       </tr>`;
     }).join('');
 
     $('#channel-table').innerHTML =
-      `<thead><tr><th>Channel</th><th class="num">Now</th><th class="num">Average</th><th class="num">Peak</th><th class="num">Share</th></tr></thead>
+      `<thead><tr><th>Channel</th><th class="num">Now</th><th class="num">Average</th><th class="num">Peak</th><th class="num">Low</th><th class="num">Share</th></tr></thead>
        <tbody>${body}</tbody>`;
   }
 
@@ -466,6 +508,12 @@
     if (v <= 5) return 5;
     const mag = Math.pow(10, Math.floor(Math.log10(v)));
     return Math.ceil(v / (mag / 2)) * (mag / 2);
+  }
+
+  /** A peak is only useful with a "when" attached. */
+  function fmtWhen(t) {
+    const d = new Date(t);
+    return d.toLocaleString('en-US', { weekday: 'short', hour: 'numeric', minute: '2-digit' });
   }
 
   function fmtTime(t) {

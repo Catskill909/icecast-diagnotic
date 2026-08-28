@@ -134,9 +134,10 @@ real figure."
    over the span actually watched rather than the elapsed month — a monitor that
    started mid-month would otherwise project roughly two-thirds too low, on the
    one number whose entire purpose is warning about a threshold.
-2. **Day-of-week × hour heatmap.** The hour-of-day profile flattens the
-   difference between a Tuesday and a Saturday, which for a community station
-   with volunteer-programmed weekends is most of the story.
+2. 🔶 **Day-of-week × hour heatmap.** A day-by-day table shipped 2026-08-28
+   (average / peak / low / hours per day), which already shows the effect on
+   real data — weekends average 69–78 against 43–47 on Monday and Tuesday. The
+   full hour × weekday grid is still to do.
 3. ✅ **SHIPPED 2026-08-28. Trend against the previous period.** Withheld — null,
    not zero — unless we watched for the whole of the earlier window, because a
    monitor running four days comparing week against week reports a collapse in

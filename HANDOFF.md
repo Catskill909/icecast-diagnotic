@@ -82,7 +82,7 @@ regression, however green the tests are.**
   Angeles), 5 channels, 1 Icecast host, ~456 events retained since 2026-08-04.
 - **All three stations share one Icecast host**, which is the whole affiliate
   economics: one snapshot fetch per cycle serves all of them.
-- **219 tests**, `npm test`, Node's built-in runner, no test framework dependency.
+- **233 tests**, `npm test`, Node's built-in runner, no test framework dependency.
 - **Dependencies: express, nodemailer 9, dotenv.** That is the whole list, and it
   is deliberate. Crypto, testing and HTTP are all Node built-ins. Adding a
   dependency should require an argument.
@@ -175,7 +175,8 @@ silently alters what lands in someone's inbox.
 | `discover.js` | ~240 | Station discovery: mount → channel grouping, validation |
 | `public/app.js` | 694 | Dashboard |
 | `public/history.js` | 1530 | History page, station picker, charts |
-| `public/listeners.js` | 432 | **Audience page**: per-channel, per-mount and hour-of-day, CSV export |
+| `public/listeners.js` | ~420 | **Audience page**: rendering only — ATH, charts, tables, CSV export |
+| `public/audience-stats.js` | ~190 | **Audience arithmetic**, deliberately separate so Node can test it. Loads as `window.AudienceStats` in the browser and `require()`s in tests |
 | `public/admin.js` | 363 | Admin panel: add, edit, remove stations |
 | `public/guide.js` | 230 | In-app guide (content lives here as data) |
 | `public/login.js` | ~90 | Two-step sign-in |
@@ -250,6 +251,8 @@ rounding error: `/live_64` regularly carries a third of KPFT Main's audience
 | `byMount` in the listener series | Per-mount audience history. Only reaches back `SAMPLE_RETENTION_DAYS` — hourly rollups compact the breakdown away, and the UI must say so rather than drawing a short line beside a long one |
 | **Audience page** (`listeners.html`) | Audience is a different question, for a different reader, than "what went wrong". Station-scoped like the history page, with the per-mount split that every other figure sums away, plus CSV export |
 | `getListeners()` scoped by station | It computed its series from the scoped set but returned the FULL stream list beside it. The chart filtered on which ids had a series, so nothing looked wrong — and the new page reads that list directly |
+| **True concurrent peak** | The page reported the SUM of each channel's separate high-water mark — a total the station never reached at any one moment. Measured against production: it said 212 where the real simultaneous peak was 179, an 18% overstatement. Now computed from the channels summed per bucket, and carries the timestamp, because a peak with no "when" is trivia |
+| Listener figures the page lacked | Quietest moment (the floor the station holds), "now vs typical for this hour" from the hour profile, and a day-by-day table of average / peak / low / hours |
 | **ATH against the royalty allowance** | Aggregate Tuning Hours is what a US noncommercial webcaster's SoundExchange rate is computed from — the fee covers each channel's first 159,140 per month. `getListeningDelivered()` had computed the listener-minutes since day one and surfaced them nowhere. KPFT Main runs ≈39,100/month, ≈25% of the allowance |
 | Degraded channels email when sustained AND costing listeners | A variant dead for half an hour with an audience on it is a real loss nobody would find out about. `DEGRADED_ALERT_AFTER_MS`, default 30 min, one message per episode plus an all-clear. The mail says DEGRADED, never DOWN |
 
@@ -375,6 +378,16 @@ Reviewed end to end on 2026-08-27; findings and reasoning in
   `VARIANT_PROBE_EVERY` cycles. Making the cycle "faster" by fetching the
   snapshot and probing in parallel again would corrupt every audience figure
   the system stores, permanently and invisibly.
+- **Never sum per-channel peaks.** Two channels peaking at different moments do
+  not add up to a moment. Any station-wide maximum must come from the channels
+  summed per bucket (`stationSeries()` in `public/audience-stats.js`), which is
+  summing the same instant. The page shipped with the wrong version and
+  overstated the real peak by 18% on production data — 212 against a true 179.
+- **Audience arithmetic goes in `audience-stats.js`, not in the page.** That
+  split exists because the peak bug above was untestable while the maths lived
+  inside the page's IIFE, and 212 is a perfectly plausible number to look at and
+  not question. `test/audience-stats.test.js` reproduces that exact fixture. New
+  calculations belong in the module; the page renders what it returns.
 - **ATH is an ESTIMATE and every surface must say so.** It comes from polling
   listener counts once a minute, not from a log of connections. It is shown
   against a threshold with money attached, so somebody will eventually be tempted

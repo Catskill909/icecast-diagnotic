@@ -81,6 +81,7 @@ If you are an AI assistant or developer picking up this project, here is the ess
 - **`store.js`**: Persistence. Splits the long-term event record from rolling telemetry; handles atomic writes, hourly compaction, and legacy migration.
 - **`public/index.html` / `app.js`**: Live dashboard.
 - **`public/history.html` / `history.js` / `history.css`**: Long-term incident history — heatmap, listener-audience chart, filters, per-event drill-down.
+- **`public/audience-stats.js`**: The audience arithmetic — concurrent peaks, floors, per-mount averages, daily grouping. Separate from the page so Node can test it; loads as `window.AudienceStats` in the browser and `require()`s in tests.
 - **`public/listeners.html` / `listeners.js` / `listeners.css`**: Audience analytics — listening hours (ATH) against the SoundExchange allowance, every channel on one scale, the per-mount split that every other figure sums away, hour-of-day profile, and CSV export. Station-scoped like the history page.
 
 **ATH is an estimate and is labelled as one.** It is derived from polling listener
