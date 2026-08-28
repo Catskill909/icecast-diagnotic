@@ -33,6 +33,46 @@
     return { ok: res.ok, status: res.status, body: await res.json().catch(() => ({})) };
   }
 
+  /**
+   * Asks before doing something destructive.
+   *
+   * Resolves true only on an explicit confirm; Escape, the backdrop and Cancel
+   * all resolve false, and Cancel holds focus so the dangerous option is never
+   * the one a stray Enter reaches.
+   *
+   * `keep` is the part that matters more than the warning: naming what SURVIVES
+   * is what lets somebody decide, where "Are you sure?" asks a question they
+   * have no way to answer.
+   */
+  function confirmAction({ title, body, keep, confirmLabel = 'Remove', icon = '⚠' }) {
+    return new Promise((resolve) => {
+      const overlay = $('confirm-overlay');
+      $('confirm-icon').textContent = icon;
+      $('confirm-title').textContent = title;
+      $('confirm-body').innerHTML =
+        body.map((p) => `<p>${p}</p>`).join('') +
+        (keep ? `<div class="confirm-keep">${keep}</div>` : '');
+      $('confirm-go').textContent = confirmLabel;
+      overlay.hidden = false;
+      $('confirm-cancel').focus();
+
+      const done = (answer) => {
+        overlay.hidden = true;
+        $('confirm-go').onclick = null;
+        $('confirm-cancel').onclick = null;
+        overlay.onclick = null;
+        document.removeEventListener('keydown', onKey);
+        resolve(answer);
+      };
+      const onKey = (e) => { if (e.key === 'Escape') done(false); };
+
+      $('confirm-go').onclick = () => done(true);
+      $('confirm-cancel').onclick = () => done(false);
+      overlay.onclick = (e) => { if (e.target === overlay) done(false); };
+      document.addEventListener('keydown', onKey);
+    });
+  }
+
   // ── Current stations ──────────────────────────────────────────────────────
   async function loadStations() {
     const r = await api('/api/stations');
@@ -71,7 +111,7 @@
     host.querySelectorAll('[data-edit]').forEach((b) =>
       b.addEventListener('click', () => openEditor(stations.find((s) => s.id === b.dataset.edit))));
     host.querySelectorAll('[data-remove]').forEach((b) =>
-      b.addEventListener('click', () => confirmRemove(stations.find((s) => s.id === b.dataset.remove), b)));
+      b.addEventListener('click', () => confirmRemove(stations.find((s) => s.id === b.dataset.remove))));
   }
 
   // ── Discovery ─────────────────────────────────────────────────────────────
@@ -287,12 +327,23 @@
       <div class="msg" data-msg="1"></div>`;
     box.classList.remove('hidden');
 
-    box.querySelectorAll('[data-drop]').forEach((b) => b.addEventListener('click', () => {
+    box.querySelectorAll('[data-drop]').forEach((b) => b.addEventListener('click', async () => {
       if (box.querySelectorAll('.edit-ch').length < 2) {
         show(box.querySelector('[data-msg]'), 'A station must keep at least one channel.');
         return;
       }
-      b.closest('.edit-ch').remove();
+      const row = b.closest('.edit-ch');
+      const name = row.querySelector('[data-f=cname]').value.trim() || b.dataset.drop;
+      const ok = await confirmAction({
+        title: `Drop ${name} from ${s.name}?`,
+        body: [
+          `This channel stops being checked once you save. Nothing changes until then —
+           Cancel still puts it back.`,
+        ],
+        keep: `Its recorded history is kept under <strong>${esc(b.dataset.drop)}</strong>.`,
+        confirmLabel: 'Drop channel',
+      });
+      if (ok) row.remove();
     }));
     box.querySelector('[data-cancel]').addEventListener('click', () => box.classList.add('hidden'));
     box.querySelector('[data-save]').addEventListener('click', () => saveEdit(s.id, box));
@@ -337,22 +388,21 @@
   }
 
   // ── Removing ──────────────────────────────────────────────────────────────
-  function confirmRemove(s, btn) {
+  async function confirmRemove(s) {
     if (!s) return;
-    // Two clicks rather than a modal. Removing is reversible in the sense that
-    // matters — the history survives — so the bar is "not by accident", not
-    // "type the name to continue".
-    if (btn.dataset.armed !== '1') {
-      btn.dataset.armed = '1';
-      btn.textContent = 'Confirm remove';
-      btn.title = 'Stops monitoring. Recorded history is kept.';
-      setTimeout(() => {
-        if (!btn.isConnected) return;
-        btn.dataset.armed = '0'; btn.textContent = 'Remove'; btn.title = '';
-      }, 5000);
-      return;
-    }
-    removeStation(s);
+    const channels = (s.channels || []).length;
+    const ok = await confirmAction({
+      title: `Stop monitoring ${s.name}?`,
+      body: [
+        `Its <strong>${channels}</strong> channel${channels === 1 ? '' : 's'} will no longer be
+         checked, and it will disappear from the dashboard and the station picker.`,
+        `Any alerts currently configured for it stop.`,
+      ],
+      keep: `Its recorded history is kept. Re-adding ${esc(s.name)} later with the same
+             channel identifiers reconnects to it.`,
+      confirmLabel: 'Stop monitoring',
+    });
+    if (ok) removeStation(s);
   }
 
   async function removeStation(s) {

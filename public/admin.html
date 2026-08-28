@@ -71,4 +71,18 @@
   </section>
 
 </div>
+
+<!-- Confirmation. Destructive actions state what stops, what is kept, and how
+     to undo them — "Are you sure?" asks a question the person cannot answer. -->
+<div class="confirm-overlay" id="confirm-overlay" hidden>
+  <div class="confirm-card" role="alertdialog" aria-modal="true" aria-labelledby="confirm-title">
+    <div class="confirm-icon" id="confirm-icon">⚠</div>
+    <h3 class="confirm-title" id="confirm-title"></h3>
+    <div class="confirm-body" id="confirm-body"></div>
+    <div class="confirm-actions">
+      <button class="ghost" id="confirm-cancel">Cancel</button>
+      <button class="confirm-go" id="confirm-go"></button>
+    </div>
+  </div>
+</div>
 <script src="admin.js"></script>

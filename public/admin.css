@@ -56,7 +56,6 @@ button:disabled { opacity: .5; cursor: not-allowed; }
 .mini:hover:not(:disabled) { background: var(--surface-3); color: var(--text-primary); }
 .mini.danger { color: #fca5a5; }
 .mini.danger:hover:not(:disabled) { background: rgba(239,68,68,.16); color: #fecaca; }
-.mini[data-armed="1"] { background: rgba(239,68,68,.2); color: #fecaca; }
 
 .station-editor { margin-top: 15px; padding-top: 15px; border-top: 1px solid var(--surface-3); }
 .station-editor.hidden { display: none; }
@@ -123,3 +122,39 @@ label input { margin-top: 6px; }
 .msg ul { margin: 6px 0 0 18px; }
 .hidden { display: none; }
 @media (max-width: 560px) { .row { flex-direction: column; } }
+
+/* ── Confirmation dialog ─────────────────────────────────────────────────────
+   Destructive actions get a considered pause rather than a second click on the
+   same button. The text says what stops, what is kept, and how to undo it —
+   "Are you sure?" asks a question the person has no way to answer. */
+.confirm-overlay {
+  position: fixed; inset: 0; z-index: 300;
+  background: rgba(6, 6, 12, .74); backdrop-filter: blur(8px);
+  display: flex; align-items: center; justify-content: center; padding: 24px;
+}
+.confirm-overlay[hidden] { display: none; }
+.confirm-card {
+  width: 100%; max-width: 440px; padding: 28px;
+  background: var(--surface-1); border: 1px solid var(--surface-3);
+  border-radius: 16px; box-shadow: 0 26px 70px rgba(0, 0, 0, .6);
+  animation: confirmIn .16s ease-out;
+}
+@keyframes confirmIn { from { opacity: 0; transform: translateY(8px) scale(.985); } }
+.confirm-icon {
+  width: 42px; height: 42px; border-radius: 11px; margin-bottom: 16px;
+  display: grid; place-items: center; font-size: 20px;
+  background: rgba(239, 68, 68, .13); color: #fca5a5;
+}
+.confirm-title { font-size: 17px; font-weight: 650; letter-spacing: -0.01em; margin-bottom: 10px; }
+.confirm-body { font-size: 13.5px; color: var(--text-secondary); line-height: 1.65; }
+.confirm-body p { margin-bottom: 9px; }
+.confirm-body p:last-child { margin-bottom: 0; }
+.confirm-body strong { color: var(--text-primary); font-weight: 600; }
+.confirm-keep {
+  margin-top: 14px; padding: 11px 13px; border-radius: 9px; font-size: 12.5px;
+  background: rgba(34, 197, 94, .09); border: 1px solid rgba(34, 197, 94, .22);
+  color: #86efac;
+}
+.confirm-actions { display: flex; gap: 9px; justify-content: flex-end; margin-top: 22px; }
+.confirm-go { background: #dc2626; color: #fff; }
+.confirm-go:hover:not(:disabled) { background: #ef4444; }
