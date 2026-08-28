@@ -309,17 +309,27 @@ Build order, with the current position marked:
    is ever told about them. This is the first genuinely GM-facing screen
 8. ✅ Listener analytics page — audience as its own destination, station-scoped,
    with per-channel and per-mount breakdowns and CSV export
-9. Fleet view
-10. **SMS alerting** — [`docs/SMS-ALERTING.md`](docs/SMS-ALERTING.md). ~$3–4.50/mo
+9. **Audience page phase 1** — [`docs/AUDIENCE-ROADMAP.md`](docs/AUDIENCE-ROADMAP.md)
+   §4. All from data already collected: ATH tracked against the SoundExchange
+   159,140/month threshold (labelled an estimate — it is derived from 60s
+   polling, not a connection census), day-of-week × hour heatmap, trend vs
+   previous period, audience retained through an outage
+10. Fleet view
+11. **SMS alerting** — [`docs/SMS-ALERTING.md`](docs/SMS-ALERTING.md). ~$3–4.50/mo
     plus a one-time ~$15–20 10DLC registration. Depends on item 7: phone numbers
     are per-station in exactly the way addresses are, and building SMS against
     the current global list would build that routing twice
-11. Roles and multi-user — **only when a real GM asks for a login**
+12. Roles and multi-user — **only when a real GM asks for a login**
 
 Two design rules already decided:
 
 - **Two panels, not one.** "Add a station" (rare, technical, restricted) and "my
   station" (weekly, must be simple) are different jobs for different people.
+- **Optional capabilities are shown as unavailable, never hidden.** Icecast admin
+  credentials are optional and most servers will not have them. A panel that
+  disappears teaches nobody anything and makes the page change shape depending on
+  which station is picked; a panel reading *"unavailable for this server, needs
+  Icecast admin access"* states both the capability and the missing piece.
 - **One station screen, not one per station.** A dropdown selects the data. The
   screen must render 1..N channels — KPFT has 3, most affiliates have 1 — and
   every station needs its own URL so alert emails can deep-link to it.
@@ -365,6 +375,12 @@ Reviewed end to end on 2026-08-27; findings and reasoning in
   `VARIANT_PROBE_EVERY` cycles. Making the cycle "faster" by fetching the
   snapshot and probing in parallel again would corrupt every audience figure
   the system stores, permanently and invisibly.
+- **Listener IPs are personal data.** `/admin/listclients` returns an IP and a
+  user agent per listener, and reading in this app is public. The natural
+  implementation of any geography or device chart — send the rows to the browser
+  and group them there — publishes every listener's IP address to anyone who
+  loads the page. Aggregate before it leaves the server, or put the panel behind
+  the session gate. Decide before Phase 2 ships, not after.
 - **The audience page reads `getListeners().streams` directly.** That list is
   station-scoped; it was not, once. Anything added to that payload must be
   scoped too, or the page will render another station's channels under this
@@ -454,8 +470,16 @@ count could be zero — zero survives everything.
    host, or must each affiliate opt in? Gates the affiliate wave entirely.
 3. Is the mount→channel mapping right? Inferred from `server_name` strings,
    though the app's own `SIBLING_MOUNTS` corroborates it.
-4. Do we have Icecast *admin* credentials for the Pacifica host? Unlocks
-   per-listener geography and session data.
+4. ~~Do we have Icecast admin credentials?~~ **Settled 2026-08-28: they are an
+   optional per-host setting, added when a station is set up, and the tool is
+   complete without them.** `/status-json.xsl` returns listener COUNTS, and
+   counts can never yield unique listeners, session length, TSL, geography or
+   device breakdowns at any polling rate — `/admin/listclients` is the only way
+   to get those. Rather than block the audience page on Pacifica answering, those
+   metrics are shown and marked *unavailable for this server*. Build the feature
+   when a real credential exists to build against. Full reasoning and the two
+   constraints it creates (allowlist redaction; listener IPs are personal data)
+   in [`docs/AUDIENCE-ROADMAP.md`](docs/AUDIENCE-ROADMAP.md) §4.1–4.2.
 5. **Did the retry actually reduce alert noise?** 32% of events were `unknown`
    before it. Re-measure after a week of production data — around 2026-09-03 —
    rather than assuming.
