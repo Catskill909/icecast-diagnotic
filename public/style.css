@@ -317,6 +317,222 @@ body::before {
   color: var(--primary);
 }
 
+/* ── Stream list tools: search + sort ────────────────────────────────────────
+   Material filled text fields, built from the palette already in :root rather
+   than a second one. Two rules earn the look: the label RESTS in the field and
+   rises on focus or content — so the field is self-describing at rest and stays
+   labelled once filled — and the focus state is an accent underline that grows
+   from the centre, which is the affordance Material uses to say "this one".
+
+   Deliberately not a pill/outline search box: the cards below are flat surfaces
+   with hairline borders, and an outlined control at this size reads as a second
+   card sitting in the heading.
+   ──────────────────────────────────────────────────────────────────────────── */
+
+.section-title--bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.list-tools {
+  margin-left: auto;
+  display: flex;
+  align-items: flex-end;
+  gap: 12px;
+  /* The heading is 16px; the fields carry their own type scale. */
+  font-size: 14px;
+}
+
+.field {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 44px;
+  padding: 0 12px;
+  background: var(--surface-2);
+  /* Filled fields are square-shouldered at the bottom: the underline is the
+     focus affordance, and a fully rounded box hides it at the corners. */
+  border-radius: var(--radius-md) var(--radius-md) 0 0;
+  border-bottom: 1px solid var(--border-hover);
+  transition: background 200ms cubic-bezier(0.4, 0, 0.2, 1),
+              border-color 200ms cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.field:hover { background: var(--surface-3); }
+
+.field--search { width: 260px; }
+.field--select { width: 190px; }
+
+/* The accent underline, drawn over the resting border and grown from the
+   centre on focus. A transform animates on the compositor; a width does not. */
+.field::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: -1px;
+  height: 2px;
+  background: var(--primary);
+  transform: scaleX(0);
+  transition: transform 200ms cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.field:focus-within::after { transform: scaleX(1); }
+.field:focus-within { background: var(--surface-3); }
+
+.field-icon {
+  font-size: 20px;
+  color: var(--text-tertiary);
+  flex-shrink: 0;
+  transition: color 200ms ease;
+}
+
+.field:focus-within .field-icon { color: var(--primary-light); }
+
+.field-input {
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+  /* Room for the label to rest inside the field and rise clear of the text. */
+  padding: 16px 0 4px;
+  background: none;
+  border: 0;
+  outline: none;
+  color: var(--text-primary);
+  font-family: inherit;
+  font-size: 14px;
+  font-weight: 500;
+}
+
+/* Safari paints its own clear button and cancel affordance on search inputs,
+   which would sit beside ours. */
+.field-input::-webkit-search-decoration,
+.field-input::-webkit-search-cancel-button { -webkit-appearance: none; appearance: none; }
+
+.field-label {
+  position: absolute;
+  left: 40px;
+  top: 50%;
+  transform: translateY(-50%);
+  transform-origin: left center;
+  color: var(--text-tertiary);
+  font-size: 14px;
+  font-weight: 500;
+  pointer-events: none;
+  white-space: nowrap;
+  transition: transform 200ms cubic-bezier(0.4, 0, 0.2, 1),
+              color 200ms ease;
+}
+
+/* Risen: focused, or holding a value. :placeholder-shown is why the input
+   carries a single-space placeholder — it is the only way to ask CSS whether a
+   text field is empty. */
+.field:focus-within .field-label,
+.field-input:not(:placeholder-shown) ~ .field-label,
+.field--select .field-label {
+  transform: translateY(-160%) scale(0.75);
+}
+
+.field:focus-within .field-label { color: var(--primary-light); }
+
+.field-clear {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  flex-shrink: 0;
+  padding: 0;
+  background: none;
+  border: 0;
+  border-radius: 50%;
+  color: var(--text-tertiary);
+  cursor: pointer;
+  transition: background 150ms ease, color 150ms ease;
+}
+
+/* Same trap as .streams-empty below: a display rule here outranks the
+   browser's [hidden] { display: none }, so an empty field kept showing a clear
+   button with nothing to clear. */
+.field-clear[hidden] { display: none; }
+
+.field-clear:hover { background: var(--surface-4); color: var(--text-primary); }
+.field-clear .material-symbols-outlined { font-size: 17px; }
+
+/* The select keeps its own arrow off and borrows the shared caret, so both
+   fields present one visual language. */
+.field--select .field-input {
+  -webkit-appearance: none;
+  appearance: none;
+  cursor: pointer;
+  padding-right: 20px;
+}
+
+.field--select .field-input option {
+  background: var(--surface-2);
+  color: var(--text-primary);
+}
+
+.field-caret {
+  position: absolute;
+  right: 10px;
+  font-size: 20px;
+  color: var(--text-tertiary);
+  pointer-events: none;
+  transition: color 200ms ease;
+}
+
+.field--select:focus-within .field-caret { color: var(--primary-light); }
+
+/* Sorting reorders with the `order` property rather than by moving nodes: the
+   cards are reused across polls and re-appending them would replay the
+   slide-in animation on every refresh. */
+.stream-card[hidden] { display: none; }
+
+.streams-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  padding: 48px 20px;
+  margin-bottom: 40px;
+  color: var(--text-secondary);
+  background: var(--surface-1);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xl);
+}
+
+/* A display rule on the element itself outranks the browser's own
+   [hidden] { display: none }, so hiding it needs saying explicitly — otherwise
+   the empty state sits above a grid full of cards, which is how it first
+   shipped. Same reason .stream-card[hidden] is spelled out above. */
+.streams-empty[hidden] { display: none; }
+
+.streams-empty .material-symbols-outlined { font-size: 34px; color: var(--text-tertiary); }
+.streams-empty p { margin: 0; font-size: 14px; }
+.streams-empty strong { color: var(--text-primary); }
+
+@media (max-width: 720px) {
+  .list-tools {
+    margin-left: 0;
+    width: 100%;
+    /* Both fields share the row rather than one shrinking to nothing. */
+    flex-wrap: wrap;
+  }
+  .field--search, .field--select { flex: 1 1 160px; width: auto; }
+}
+
+/* Honour a reduced-motion preference: the label still moves (it has to, or it
+   would sit on top of the text) but nothing animates on its way. */
+@media (prefers-reduced-motion: reduce) {
+  .field, .field::after, .field-icon, .field-label, .field-caret, .field-clear {
+    transition: none;
+  }
+}
+
 .streams-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(min(340px, 100%), 1fr));

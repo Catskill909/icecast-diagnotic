@@ -18,6 +18,18 @@
 
 const test = require('node:test');
 const assert = require('node:assert');
+const os = require('os');
+const path = require('path');
+const fs = require('fs');
+
+// MUST be set before ../store is required for the first time, anywhere in this
+// file. store.js resolves DATA_DIR once at module load, so a require that runs
+// earlier binds the developer's real data/ directory — and this suite then
+// writes its fixture station and samples straight into it. That is exactly what
+// used to happen: the require below sat above this line, and running the suite
+// replaced a local configuration with the test's own.
+process.env.DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'degraded-test-'));
+
 const { channelDegradation } = require('../diagnose');
 const { isFailureEvent } = require('../store');
 
@@ -131,11 +143,6 @@ test('recoveries are still not failures', () => {
 // at a sixty-second interval turns a variant that is down for a day into 1,440
 // events and buries the rest of the history under them.
 
-const os = require('os');
-const path = require('path');
-const fs = require('fs');
-
-process.env.DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'degraded-test-'));
 process.env.SEED_FILE = '/nonexistent';
 
 const store = require('../store');

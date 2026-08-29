@@ -42,6 +42,7 @@
       // Setup Help Modal
 
       setupUptimeRangePills();
+      initListTools();
 
       // Start polling
       pollTimer = setInterval(poll, POLL_INTERVAL);
@@ -227,6 +228,145 @@
   const activePlayers = {};
 
   // ── Stream Cards ────────────────────────────────────────────────────────
+  // ── Filter and sort ───────────────────────────────────────────────────────
+  // Applied over the already-loaded status payload. The list is small and the
+  // data is in hand, so a round trip would be latency bought for nothing.
+
+  let filterQuery = '';
+  let sortMode = 'default';
+
+  /**
+   * Problems first.
+   *
+   * Sorting by "status" alphabetically would put Dead Air after Online, which
+   * inverts the only reason someone reaches for this sort in the first place.
+   */
+  function statusRank(stream) {
+    if (stream.silenceState === 'dead_air') return 0;
+    if (stream.status === 'down') return 1;
+    if (stream.silenceState === 'evaluating') return 2;
+    if (stream.isSilent) return 3;
+    if (stream.status !== 'up') return 4;
+    return 5;
+  }
+
+  /**
+   * Everything on the card that a person might type: its name, the host it
+   * lives on, its mount paths and the current programme title.
+   *
+   * Mounts are in there because "which station is on /wbai_verizon" is a real
+   * question, and the mount is the part an operator has in front of them when
+   * they are looking at an encoder.
+   */
+  function streamHaystack(stream) {
+    return [
+      stream.name,
+      hostOf(stream.url),
+      stream.title,
+      ...channelMounts(stream),
+    ].filter(Boolean).join(' ').toLowerCase();
+  }
+
+  function sortStreams(list) {
+    const out = [...list];
+    switch (sortMode) {
+      case 'name':
+        return out.sort((a, b) => String(a.name || '').localeCompare(String(b.name || ''), undefined, { sensitivity: 'base' }));
+      case 'listeners':
+        // Null is "not measured", which is not the same as zero and must not
+        // outrank a real count of none.
+        return out.sort((a, b) => (b.listeners ?? -1) - (a.listeners ?? -1));
+      case 'response':
+        return out.sort((a, b) => (a.responseTime ?? Infinity) - (b.responseTime ?? Infinity));
+      case 'status':
+        return out.sort((a, b) => statusRank(a) - statusRank(b) || String(a.name || '').localeCompare(String(b.name || '')));
+      default:
+        // Configuration order: the arrangement the operator chose.
+        return out;
+    }
+  }
+
+  /**
+   * Hides what does not match and reorders what remains.
+   *
+   * Order is set through the CSS `order` property rather than by moving nodes.
+   * Cards are reused across a poll every ten seconds, and re-appending them
+   * would replay the slide-in animation on each refresh — the list would twitch
+   * continuously while nothing about it had changed.
+   */
+  function applyFilterSort() {
+    if (!lastStatus) return;
+    const q = filterQuery.trim().toLowerCase();
+    const ordered = sortStreams(lastStatus);
+    let visible = 0;
+
+    ordered.forEach((stream, i) => {
+      const card = $(`#card-${stream.id}`);
+      if (!card) return;
+      const show = !q || streamHaystack(stream).includes(q);
+      card.hidden = !show;
+      card.style.order = String(i);
+      if (show) visible += 1;
+    });
+
+    const empty = $('#streams-empty');
+    if (empty) {
+      empty.hidden = visible > 0;
+      const text = $('#streams-empty-text');
+      // Name the search when there is one. With no query an empty grid means
+      // nothing is configured, which is a different message and a different
+      // thing for the reader to do about it.
+      if (text) {
+        text.textContent = q
+          ? `No streams match "${filterQuery.trim()}".`
+          : 'No streams are configured yet.';
+      }
+    }
+
+    const clear = $('#stream-search-clear');
+    if (clear) clear.hidden = !filterQuery;
+  }
+
+  function initListTools() {
+    const search = $('#stream-search');
+    const sort = $('#stream-sort');
+    const clear = $('#stream-search-clear');
+
+    if (search) {
+      search.addEventListener('input', () => {
+        filterQuery = search.value;
+        applyFilterSort();
+      });
+      // Escape clears, which is what a search field is expected to do and
+      // saves reaching for the button.
+      search.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape' && search.value) {
+          e.preventDefault();
+          search.value = '';
+          filterQuery = '';
+          applyFilterSort();
+        }
+      });
+    }
+
+    if (clear) {
+      clear.addEventListener('click', () => {
+        if (!search) return;
+        search.value = '';
+        filterQuery = '';
+        search.focus();
+        applyFilterSort();
+      });
+    }
+
+    if (sort) {
+      sort.addEventListener('change', () => {
+        sortMode = sort.value;
+        applyFilterSort();
+      });
+    }
+  }
+
   function renderStreamCards(streams) {
     const grid = $('#streams-grid');
 
@@ -405,6 +545,10 @@
     $$('.play-btn').forEach((btn) => {
       btn.onclick = () => toggleAudioPlayer(btn.dataset.streamId, btn.dataset.streamUrl);
     });
+
+    // A card added by this render has to be filtered and ordered like the rest,
+    // so this runs on every pass rather than only on user input.
+    applyFilterSort();
   }
 
   function toggleAudioPlayer(streamId, streamUrl) {

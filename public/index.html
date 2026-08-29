@@ -99,9 +99,46 @@
     </div>
 
     <!-- Stream Cards -->
-    <div class="section-title">
+    <div class="section-title section-title--bar">
       <span class="material-symbols-outlined">cell_tower</span>
       Stream Status
+
+      <!-- Filter and sort. Client-side over the already-loaded status payload:
+           there is no second request to make, and the list is small enough that
+           anything else would be latency for its own sake. -->
+      <div class="list-tools">
+        <div class="field field--search">
+          <span class="material-symbols-outlined field-icon">search</span>
+          <input id="stream-search" type="search" class="field-input"
+                 placeholder=" " autocomplete="off" spellcheck="false"
+                 aria-label="Filter streams by name, host or mount">
+          <label class="field-label" for="stream-search">Search streams</label>
+          <button type="button" class="field-clear" id="stream-search-clear"
+                  hidden aria-label="Clear search">
+            <span class="material-symbols-outlined">close</span>
+          </button>
+        </div>
+
+        <div class="field field--select">
+          <span class="material-symbols-outlined field-icon">sort</span>
+          <select id="stream-sort" class="field-input" aria-label="Sort streams">
+            <option value="default">Default order</option>
+            <option value="name">Name (A–Z)</option>
+            <option value="listeners">Listeners (high–low)</option>
+            <option value="response">Response (fast–slow)</option>
+            <option value="status">Status (problems first)</option>
+          </select>
+          <label class="field-label" for="stream-sort">Sort by</label>
+          <span class="material-symbols-outlined field-caret">expand_more</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Shown only when a search excludes every card, so an empty grid is never
+         mistaken for "no streams are configured". -->
+    <div class="streams-empty" id="streams-empty" hidden>
+      <span class="material-symbols-outlined">search_off</span>
+      <p id="streams-empty-text">No streams match.</p>
     </div>
     <div class="streams-grid" id="streams-grid">
       <!-- Populated by JS -->
