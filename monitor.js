@@ -517,6 +517,44 @@ function init() {
   console.log(`[Monitor] Retention: newest ${store.MAX_EVENTS} events, raw samples ${store.SAMPLE_RETENTION_DAYS}d then hourly rollups`);
 }
 
+// ── May this process send email? ────────────────────────────────────────────
+/**
+ * Whether this is the DEPLOYED monitor, and may therefore mail the station's
+ * real recipient list.
+ *
+ * WHY THIS EXISTS. Configuration lives in one .env, and a developer's copy of it
+ * carries the production SMTP credentials and the real ALERT_EMAILS. So running
+ * `node server.js` on a laptop mailed the station's General Manager — three
+ * times, about a test fixture named "Seq" pointing at stream.example.org. The
+ * recipients cannot tell a development alert from a real outage, and an alert
+ * channel that cries wolf is worth less than no alert channel.
+ *
+ * THE ORDER OF THESE CHECKS IS THE WHOLE DESIGN. The guard must never silence a
+ * real deployment, so it recognises production by several independent signals
+ * and errs toward sending:
+ *
+ *   ALERTS_FORCE       explicit opt-in, for testing the mail path deliberately.
+ *   MONITOR_CONTAINER  set by the Dockerfile — true for any build of this image.
+ *   NODE_ENV           the conventional signal, when a platform sets it.
+ *   /.dockerenv        present inside any Docker container. This one matters
+ *                      most: it is true for the ALREADY-RUNNING production
+ *                      container, so deploying this change cannot make a live
+ *                      monitor go quiet while waiting for a rebuild.
+ *
+ * A laptop matches none of them. A deployment matches at least one.
+ */
+function isDeployedInstance() {
+  if (String(process.env.ALERTS_FORCE || '').trim().toLowerCase() === 'true') return true;
+  if (String(process.env.MONITOR_CONTAINER || '').trim()) return true;
+  if (String(process.env.NODE_ENV || '').trim().toLowerCase() === 'production') return true;
+  // Cheap and synchronous, and only read at startup.
+  try { return require('fs').existsSync('/.dockerenv'); } catch { return false; }
+}
+
+// Set when the guard withholds the mailer, so sendAlert() can report the real
+// reason rather than the misleading "SMTP not configured".
+let alertsSuppressedReason = null;
+
 // ── SMTP Setup ──────────────────────────────────────────────────────────────
 function setupMailer() {
   const host = process.env.SMTP_HOST;
@@ -526,6 +564,25 @@ function setupMailer() {
 
   if (!host || !user || !pass) {
     console.warn('[Monitor] SMTP not configured — email alerts disabled');
+    return;
+  }
+
+  // Checked BEFORE the transporter is built, so a development machine never
+  // even authenticates against the station's SMTP account.
+  if (!isDeployedInstance()) {
+    alertsSuppressedReason =
+      'not a deployed instance — alerts suppressed to protect the real recipient list';
+    console.warn(
+      '\n' +
+      '  ┌──────────────────────────────────────────────────────────────┐\n' +
+      '  │  EMAIL ALERTS ARE SUPPRESSED                                 │\n' +
+      '  │                                                              │\n' +
+      '  │  This process is not a deployed instance, and SMTP here is   │\n' +
+      '  │  the station\'s real account. Alerts would reach real people. │\n' +
+      '  │                                                              │\n' +
+      '  │  To send anyway (it WILL email them): ALERTS_FORCE=true      │\n' +
+      '  └──────────────────────────────────────────────────────────────┘\n',
+    );
     return;
   }
 
@@ -1748,7 +1805,12 @@ async function sendAlert(opts) {
   const attemptedAt = new Date().toISOString();
 
   if (!transporter) {
-    return { attempted: false, sent: false, reason: 'SMTP not configured', attemptedAt };
+    return {
+      attempted: false,
+      sent: false,
+      reason: alertsSuppressedReason || 'SMTP not configured',
+      attemptedAt,
+    };
   }
 
   const recipients = (process.env.ALERT_EMAILS || '').split(',').map((e) => e.trim()).filter(Boolean);
@@ -2572,6 +2634,7 @@ function checkWeeklyRoundup() {
 }
 
 module.exports = {
+  isDeployedInstance,
   start, stop, getStreams, getStatus, getHistory, getIncidents, getConfig, sendTestAlert,
   getPeriodRollup, sendWeeklyRoundup, previewWeeklyRoundup, previewAlertForEvent,
   getEvents, getSamples, getRollups, getListeners, getSummary, getOverallUptime, getAudioUptime, getCoverageStart,
