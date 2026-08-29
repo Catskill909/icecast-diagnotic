@@ -26,6 +26,11 @@ const STATUS_TIMEOUT = parseInt(process.env.ICECAST_STATUS_TIMEOUT_MS, 10) || 10
 const STATUS_ATTEMPTS = Math.max(1, parseInt(process.env.ICECAST_STATUS_ATTEMPTS, 10) || 3);
 const STATUS_RETRY_DELAY_MS = Math.max(0, parseInt(process.env.ICECAST_STATUS_RETRY_MS, 10) || 2000);
 const REQUEST_TIMEOUT = parseInt(process.env.REQUEST_TIMEOUT_MS, 10) || 15000;
+// Outer bounds. A socket-inactivity timeout does not bound a stalled TLS
+// handshake, so each request also carries a hard deadline — see armDeadline().
+// Sized above the inactivity timeout: this is the backstop, not the usual path.
+const STATUS_DEADLINE = parseInt(process.env.ICECAST_STATUS_DEADLINE_MS, 10) || 12000;
+const REQUEST_DEADLINE = parseInt(process.env.REQUEST_DEADLINE_MS, 10) || 18000;
 
 // Mount pathnames belonging to the station we monitor. Used to tell a
 // station-wide source failure apart from a whole-server failure: if OUR mounts
@@ -73,6 +78,11 @@ const ERROR_CATALOG = {
     cause: 'timeout',
     label: 'Connection timed out',
     detail: 'No response within the timeout window. Network path problem or a severely overloaded server.',
+  },
+  EDEADLINE: {
+    cause: 'timeout',
+    label: 'Request deadline exceeded',
+    detail: 'The request was cut off at its hard deadline. The socket was not idle — it was stalled, which is what a TLS handshake against a plaintext port looks like. Check whether that port really speaks HTTPS.',
   },
   EHOSTUNREACH: {
     cause: 'network',
@@ -226,9 +236,11 @@ function probeStream(stream, sampleBytes = 8192) {
     let receivedBytes = 0;
     let settled = false;
 
+    let cancelDeadline = () => {};
     const done = (payload) => {
       if (settled) return;
       settled = true;
+      cancelDeadline();
       timings.total = Date.now() - start;
       resolve({ ...payload, timings });
     };
@@ -368,6 +380,16 @@ function probeStream(stream, sampleBytes = 8192) {
       });
     });
 
+    // The outer bound. REQUEST_TIMEOUT is socket inactivity and does not cover a
+    // stalled TLS handshake — see armDeadline().
+    cancelDeadline = armDeadline(req, REQUEST_DEADLINE, () => done({
+      status: 'down',
+      responseTime: Date.now() - start,
+      error: `No response within ${REQUEST_DEADLINE}ms`,
+      errorCode: 'EDEADLINE',
+      isSilent: false,
+    }));
+
     req.on('timeout', () => {
       req.destroy();
       done({
@@ -499,16 +521,48 @@ function parseIcecastStatus(body) {
  * keeps the complete mount list — including other Pacifica stations — so we can
  * answer "is it just us, or is it the whole server?"
  */
+/**
+ * A hard ceiling on one request, independent of the socket timeout.
+ *
+ * WHY BOTH EXIST. The `timeout:` option on an http(s) request is a SOCKET
+ * INACTIVITY timer. It does not bound a stalled TLS handshake — and that is not
+ * a hypothetical: pointing https at a plaintext Icecast port
+ * (https://stream.example.org:8000, the shape operators paste routinely, since
+ * the browser bar is https and the stream port is not) took ~15s to fail
+ * against a 10s timeout. Three retries turned one pasted URL into a 48-second
+ * wait behind a spinner that said only "Looking…".
+ *
+ * The inactivity timer still earns its keep: it catches a server that accepts a
+ * connection and then goes quiet mid-body, which a deadline sized for the whole
+ * request would let run long. This is the outer bound that catches the rest.
+ *
+ * Returns a cancel function; the caller MUST call it on every settle path, or a
+ * pending timer fires against a finished request.
+ */
+function armDeadline(req, ms, onExpire) {
+  const timer = setTimeout(() => {
+    req.destroy();
+    onExpire();
+  }, ms);
+  // A pending deadline must never be the reason the process stays alive.
+  if (typeof timer.unref === 'function') timer.unref();
+  return () => clearTimeout(timer);
+}
+
 function fetchIcecastSnapshotOnce(statusUrl = ICECAST_STATUS_URL) {
   return new Promise((resolve) => {
     const start = Date.now();
     const statusClient = statusUrl.startsWith('http:') ? http : https;
+    // Cleared on every settle path below, so a deadline never fires against a
+    // request that already answered.
+    let cancelDeadline = () => {};
+    const settle = (payload) => { cancelDeadline(); resolve(payload); };
     const req = statusClient.get(statusUrl, { timeout: STATUS_TIMEOUT }, (res) => {
       let body = '';
       res.on('data', (c) => { body += c; });
       res.on('end', () => {
         if (res.statusCode !== 200) {
-          return resolve({
+          return settle({
             reachable: false,
             fetchError: `Status endpoint returned HTTP ${res.statusCode}`,
             fetchErrorCode: `HTTP_${res.statusCode}`,
@@ -520,7 +574,7 @@ function fetchIcecastSnapshotOnce(statusUrl = ICECAST_STATUS_URL) {
         }
         const doc = parseIcecastStatus(body);
         if (!doc) {
-          return resolve({
+          return settle({
             reachable: false,
             fetchError: 'Malformed status JSON could not be parsed or repaired',
             fetchErrorCode: 'EPARSE',
@@ -532,7 +586,7 @@ function fetchIcecastSnapshotOnce(statusUrl = ICECAST_STATUS_URL) {
         }
 
         const { stats, mounts, mountCount, repaired } = doc;
-        resolve({
+        settle({
           reachable: true,
           fetchError: null,
           fetchErrorCode: null,
@@ -552,7 +606,7 @@ function fetchIcecastSnapshotOnce(statusUrl = ICECAST_STATUS_URL) {
       });
     });
 
-    req.on('error', (err) => resolve({
+    req.on('error', (err) => settle({
       reachable: false,
       fetchError: err.message,
       fetchErrorCode: err.code || 'UNKNOWN',
@@ -562,9 +616,19 @@ function fetchIcecastSnapshotOnce(statusUrl = ICECAST_STATUS_URL) {
       mountCount: 0,
     }));
 
+    cancelDeadline = armDeadline(req, STATUS_DEADLINE, () => settle({
+      reachable: false,
+      fetchError: `Status endpoint did not answer within ${STATUS_DEADLINE}ms`,
+      fetchErrorCode: 'EDEADLINE',
+      fetchedAt: new Date().toISOString(),
+      responseTime: Date.now() - start,
+      mounts: {},
+      mountCount: 0,
+    }));
+
     req.on('timeout', () => {
       req.destroy();
-      resolve({
+      settle({
         reachable: false,
         fetchError: 'Status endpoint timed out',
         fetchErrorCode: 'ETIMEDOUT',
@@ -598,11 +662,17 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
  * A truly unreachable server still costs only STATUS_ATTEMPTS x timeout, well
  * inside one check cycle, and still ends in 'unknown' — so a real server outage
  * alerts exactly as it always did.
+ *
+ * `attempts` exists for the opposite caller. This budget is sized for an
+ * unattended cycle where a wasted 30s costs nothing and a false alert costs a
+ * phone call. Discovery is a person watching a button, where the trade runs the
+ * other way — it passes attempts: 1 and reports the failure instead.
  */
-async function fetchIcecastSnapshot(statusUrl = ICECAST_STATUS_URL) {
+async function fetchIcecastSnapshot(statusUrl = ICECAST_STATUS_URL, { attempts = STATUS_ATTEMPTS } = {}) {
   let last = null;
   let made = 0;
-  for (let attempt = 1; attempt <= STATUS_ATTEMPTS; attempt++) {
+  const budget = Math.max(1, attempts);
+  for (let attempt = 1; attempt <= budget; attempt++) {
     last = await fetchIcecastSnapshotOnce(statusUrl);
     made = attempt;
     // A reachable server is the answer, however many tries it took.
@@ -610,7 +680,7 @@ async function fetchIcecastSnapshot(statusUrl = ICECAST_STATUS_URL) {
     // A parseable-but-broken document is not a transport failure; retrying it
     // would return the identical bytes. Fail fast rather than burn the cycle.
     if (last.fetchErrorCode === 'EPARSE') break;
-    if (attempt < STATUS_ATTEMPTS) await sleep(STATUS_RETRY_DELAY_MS);
+    if (attempt < budget) await sleep(STATUS_RETRY_DELAY_MS);
   }
   // `attempts` is what was actually spent, so a retry that rescued the cycle is
   // visible rather than inferred.
@@ -618,6 +688,96 @@ async function fetchIcecastSnapshot(statusUrl = ICECAST_STATUS_URL) {
 }
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
+// ── Which Server a Stream Lives On ──────────────────────────────────────────
+/**
+ * The Icecast host a stream lives on.
+ *
+ * A mount path is only meaningful RELATIVE TO ITS OWN SERVER. /wpfw_128 exists
+ * on both streams.pacifica.org:9000 and streaming.wbai.org, carrying different
+ * audiences; /wbai_verizon exists on one of them and not the other.
+ */
+function hostOf(stream) {
+  try { return new URL(stream.url).host; } catch { return null; }
+}
+
+/**
+ * The snapshot of the server THIS stream lives on.
+ *
+ * Every (snapshot, stream) function below resolves through here rather than
+ * indexing snapshot.mounts directly, so no call site can read a mount path out
+ * of the wrong server's inventory — which is the bug this exists to close: one
+ * global snapshot was fetched from a single status URL and every station's
+ * mounts were looked up in it by bare path, so WBAI's mounts read as missing
+ * (0 listeners) while a same-named /wpfw_128 inherited Pacifica's audience.
+ *
+ * Returns null rather than falling back to another host. A wrong number that
+ * looks plausible is worse than a visibly absent one.
+ */
+function snapshotForStream(snapshot, stream) {
+  if (!snapshot) return null;
+  // A single-host snapshot is its own answer — this is the shape stored by
+  // older builds and by fetchIcecastSnapshot() called directly.
+  if (!snapshot.byHost) return snapshot;
+  const h = hostOf(stream);
+  return h ? (snapshot.byHost[h] || null) : null;
+}
+
+/**
+ * Fetches one inventory per distinct host and returns them keyed by host.
+ *
+ * `hosts` is [{ host, statusUrl }]. The hosts are read concurrently: they are
+ * different servers, so a slow one must not delay the rest of the cycle.
+ *
+ * The merged top-level fields exist for reporting only. `mounts` is keyed by
+ * host+path rather than path so that a stray bare-path lookup misses instead of
+ * silently returning another server's mount.
+ */
+async function fetchHostSnapshots(hosts) {
+  const list = (hosts || []).filter((h) => h && h.host && h.statusUrl);
+  const pairs = await Promise.all(
+    list.map(async (h) => [h.host, await fetchIcecastSnapshot(h.statusUrl)]),
+  );
+
+  const byHost = {};
+  const mounts = {};
+  let mountCount = 0;
+  const unreachable = [];
+  for (const [host, snap] of pairs) {
+    byHost[host] = snap;
+    if (snap.reachable) {
+      mountCount += snap.mountCount || 0;
+      for (const [path, m] of Object.entries(snap.mounts || {})) {
+        mounts[host + path] = { ...m, host, path };
+      }
+    } else {
+      unreachable.push(`${host}: ${snap.fetchError}`);
+    }
+  }
+
+  return {
+    byHost,
+    hosts: list.map((h) => h.host),
+    // Per-server detail, because serverId/serverStart/responseTime describe one
+    // Icecast process and have no meaning merged across several.
+    servers: pairs.map(([host, snap]) => ({
+      host,
+      reachable: snap.reachable,
+      fetchError: snap.fetchError,
+      serverId: snap.serverId || '',
+      serverStart: snap.serverStart || '',
+      mountCount: snap.mountCount || 0,
+      responseTime: snap.responseTime,
+    })),
+    // Every host had to answer for the inventory to be complete. Per-stream
+    // verdicts use that stream's own host, not this.
+    reachable: pairs.length > 0 && pairs.every(([, s]) => s.reachable),
+    fetchError: unreachable.length ? unreachable.join('; ') : null,
+    fetchedAt: new Date().toISOString(),
+    mounts,
+    mountCount,
+  };
+}
+
 function mountPathFor(stream) {
   try {
     return new URL(stream.url).pathname;
@@ -650,6 +810,8 @@ function channelMountPaths(stream) {
  * which are the same event today and should not be.
  */
 function channelAudience(snapshot, stream) {
+  // This stream's own server, never the merged inventory.
+  const snap = snapshotForStream(snapshot, stream);
   const paths = channelMountPaths(stream);
   let listeners = 0;
   let peak = 0;
@@ -660,7 +822,7 @@ function channelAudience(snapshot, stream) {
   // a summed figure can hold steady while one variant collapses inside it.
   const perMount = {};
   for (const p of paths) {
-    const m = snapshot?.mounts?.[p];
+    const m = snap?.mounts?.[p];
     if (!m) { missing.push(p); continue; }
     present += 1;
     listeners += m.listeners || 0;
@@ -707,23 +869,27 @@ function mountUrl(stream, pathname) {
  * live for as long as the fault lasts.
  */
 function channelDegradation(snapshot, prevSnapshot, stream, variantHealth = {}) {
+  // Both snapshots resolve to the server this stream lives on, so "was it there
+  // last cycle" compares like with like.
+  const snap = snapshotForStream(snapshot, stream);
+  const prevSnap = snapshotForStream(prevSnapshot, stream);
   const audience = channelAudience(snapshot, stream);
 
   const missing = audience.missing.map((path) => ({
     path,
     reason: 'missing',
-    listenersBefore: prevSnapshot?.mounts?.[path]?.listeners ?? null,
+    listenersBefore: prevSnap?.mounts?.[path]?.listeners ?? null,
   }));
 
   // Only mounts Icecast still lists can be stalled. A mount that has since
   // vanished is MISSING, and reporting it as both would double-count one fault.
   const stalled = Object.entries(variantHealth)
-    .filter(([path, h]) => h && h.ok === false && snapshot?.mounts?.[path])
+    .filter(([path, h]) => h && h.ok === false && snap?.mounts?.[path])
     .map(([path, h]) => ({
       path,
       reason: 'stalled',
       detail: h.reason || null,
-      listenersBefore: snapshot.mounts[path].listeners ?? null,
+      listenersBefore: snap.mounts[path].listeners ?? null,
     }));
 
   const impaired = [...missing, ...stalled];
@@ -732,7 +898,7 @@ function channelDegradation(snapshot, prevSnapshot, stream, variantHealth = {}) 
   // rather than an outage. If every mount is gone or stalled the channel is off
   // air, and the outage path is the truthful record of that.
   const working = audience.present - stalled.length;
-  const degraded = !!snapshot?.reachable && working > 0 && impaired.length > 0;
+  const degraded = !!snap?.reachable && working > 0 && impaired.length > 0;
 
   return {
     degraded,
@@ -752,9 +918,10 @@ function channelDegradation(snapshot, prevSnapshot, stream, variantHealth = {}) 
 
 /** Exact-pathname mount lookup. Substring matching would confuse /HD3 with /HD3_128. */
 function findMount(snapshot, stream) {
+  const snap = snapshotForStream(snapshot, stream);
   const p = mountPathFor(stream);
-  if (!p || !snapshot?.mounts) return null;
-  return snapshot.mounts[p] || null;
+  if (!p || !snap?.mounts) return null;
+  return snap.mounts[p] || null;
 }
 
 function fmtDuration(ms) {
@@ -790,7 +957,13 @@ function classify({ stream, result, snapshot, prevSnapshot, cycle = [], deadAir 
 
   const mount = findMount(snapshot, stream);
   const mountPath = mountPathFor(stream);
-  const serverReachable = !!snapshot?.reachable;
+  // The server THIS stream lives on. "Is Icecast up", "did it restart" and "are
+  // other stations on the same box fine" are all questions about one specific
+  // host, and answering them from a merged inventory attributes another
+  // server's health to this stream.
+  const snap = snapshotForStream(snapshot, stream);
+  const prevSnap = snapshotForStream(prevSnapshot, stream);
+  const serverReachable = !!snap?.reachable;
 
   // ── Cross-stream correlation ──────────────────────────────────────────────
   const monitored = cycle.filter((c) => c && c.result);
@@ -798,17 +971,17 @@ function classify({ stream, result, snapshot, prevSnapshot, cycle = [], deadAir 
   const allDown = monitored.length > 0 && downStreams.length === monitored.length;
 
   // Are OTHER stations on the same box still streaming?
-  const foreignMounts = Object.values(snapshot?.mounts || {}).filter((m) => !m.isSibling);
-  const siblingMounts = Object.values(snapshot?.mounts || {}).filter((m) => m.isSibling);
+  const foreignMounts = Object.values(snap?.mounts || {}).filter((m) => !m.isSibling);
+  const siblingMounts = Object.values(snap?.mounts || {}).filter((m) => m.isSibling);
   const foreignHealthy = foreignMounts.length > 0;
 
   // Did Icecast restart since the previous cycle?
   const serverRestarted =
     serverReachable &&
-    prevSnapshot?.reachable &&
-    prevSnapshot.serverStart &&
-    snapshot.serverStart &&
-    prevSnapshot.serverStart !== snapshot.serverStart;
+    prevSnap?.reachable &&
+    prevSnap.serverStart &&
+    snap.serverStart &&
+    prevSnap.serverStart !== snap.serverStart;
 
   // ── Dead air is a content failure, not a transport failure ────────────────
   if (deadAir) {
@@ -827,7 +1000,7 @@ function classify({ stream, result, snapshot, prevSnapshot, cycle = [], deadAir 
       evidence,
       mount,
       mountPath,
-      snapshot,
+      snapshot: snap,
       timings,
       errorCode,
       httpStatus,
@@ -845,7 +1018,7 @@ function classify({ stream, result, snapshot, prevSnapshot, cycle = [], deadAir 
       evidence: ['Stream responded normally with audio content.'],
       mount,
       mountPath,
-      snapshot,
+      snapshot: snap,
       timings,
       errorCode,
       httpStatus,
@@ -882,7 +1055,7 @@ function classify({ stream, result, snapshot, prevSnapshot, cycle = [], deadAir 
       cause = 'source_disconnected';
       confidence = 'high';
       evidence.push(`Mount ${mountPath} is ABSENT from the Icecast mount inventory — no source client is connected to it.`);
-      evidence.push(`Icecast is currently serving ${snapshot.mountCount} other mount(s), so the server itself is healthy.`);
+      evidence.push(`Icecast is currently serving ${snap.mountCount} other mount(s), so the server itself is healthy.`);
 
       const siblingsPresent = siblingMounts.length;
       if (siblingsPresent === 0 && SIBLING_MOUNT_PATTERNS.length > 0) {
@@ -928,7 +1101,7 @@ function classify({ stream, result, snapshot, prevSnapshot, cycle = [], deadAir 
       if (serverRestarted) {
         cause = 'server_restart';
         confidence = 'high';
-        evidence.push(`Icecast start time changed (${prevSnapshot.serverStart} → ${snapshot.serverStart}) — the server was restarted.`);
+        evidence.push(`Icecast start time changed (${prevSnap.serverStart} → ${snap.serverStart}) — the server was restarted.`);
       } else if (allDown && monitored.length > 1) {
         confidence = 'high';
         evidence.push(`ALL ${monitored.length} monitored streams failed in the same check cycle — this is a server-level or network-level event, not a per-stream fault.`);
@@ -971,7 +1144,7 @@ function classify({ stream, result, snapshot, prevSnapshot, cycle = [], deadAir 
     evidence,
     mount,
     mountPath,
-    snapshot,
+    snapshot: snap,
     timings,
     errorCode,
     httpStatus,
@@ -1063,6 +1236,9 @@ module.exports = {
   probeStream,
   analyzeAudioChunk,
   fetchIcecastSnapshot,
+  fetchHostSnapshots,
+  snapshotForStream,
+  hostOf,
   channelMountPaths,
   channelAudience,
   channelDegradation,

@@ -8,6 +8,10 @@
   const $ = (id) => document.getElementById(id);
   let discovered = null;
 
+  // Comfortably above the server's own budget for the same request, so a server
+  // that IS answering is never cut off by the client sitting in front of it.
+  const DISCOVER_TIMEOUT_MS = 45000;
+
   /** Escapes for text AND attribute contexts — quotes included. */
   function esc(s) {
     if (s == null) return '';
@@ -27,8 +31,27 @@
   }
   const clear = (el) => { el.className = 'msg'; el.textContent = ''; };
 
-  async function api(path, options) {
-    const res = await fetch(path, options);
+  /**
+   * Fetch with a ceiling.
+   *
+   * A request with no client-side limit is indistinguishable from a frozen page:
+   * discovery reaches a server the operator chose, and an unreachable one used
+   * to leave "Looking…" on screen with nothing behind it. The server now bounds
+   * its own work, so this is the backstop for the network in between.
+   */
+  async function api(path, options, timeoutMs) {
+    const ctl = typeof AbortController === 'function' ? new AbortController() : null;
+    const timer = ctl && timeoutMs ? setTimeout(() => ctl.abort(), timeoutMs) : null;
+    let res;
+    try {
+      res = await fetch(path, ctl ? { ...options, signal: ctl.signal } : options);
+    } catch (err) {
+      // An abort is the timeout above; anything else is the network itself.
+      if (err && err.name === 'AbortError') return { ok: false, status: 0, timedOut: true, body: {} };
+      return { ok: false, status: 0, body: {} };
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
     if (res.status === 401) { location.href = '/login.html?next=' + encodeURIComponent(location.pathname); return null; }
     return { ok: res.ok, status: res.status, body: await res.json().catch(() => ({})) };
   }
@@ -124,20 +147,57 @@
     clear($('list-msg'));
     $('results').classList.add('hidden');
     const btn = $('discover-btn');
-    btn.disabled = true; btn.textContent = 'Looking…';
+    btn.disabled = true;
 
-    const r = await api('/api/stations/discover', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ url: $('url').value.trim() }),
-    });
+    // A counting label, not a static one. "Looking…" that never changes is how a
+    // slow-but-working request and a dead one look identical, and the only
+    // difference that matters to the person waiting is whether to keep waiting.
+    const startedAt = Date.now();
+    btn.textContent = 'Looking…';
+    const tick = setInterval(() => {
+      const secs = Math.round((Date.now() - startedAt) / 1000);
+      btn.textContent = `Looking… ${secs}s`;
+      if (secs === 5) {
+        show($('discover-msg'), 'Still waiting on that server — it has not answered yet.', 'warn');
+      }
+    }, 1000);
 
-    btn.disabled = false; btn.textContent = 'Discover';
+    let r;
+    try {
+      r = await api('/api/stations/discover', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url: $('url').value.trim() }),
+      }, DISCOVER_TIMEOUT_MS);
+    } finally {
+      clearInterval(tick);
+      btn.disabled = false; btn.textContent = 'Discover';
+    }
+
     if (!r) return;
+    if (r.timedOut) {
+      show($('discover-msg'),
+           `That address did not answer within ${Math.round(DISCOVER_TIMEOUT_MS / 1000)} seconds. ` +
+           'Check the host and port, and whether that port really speaks HTTPS.', 'err');
+      return;
+    }
     if (!r.ok) {
-      show($('discover-msg'), r.body.error || 'Could not read that address.',
+      const detail = r.body.triedBothSchemes
+        ? ' Both http and https were tried on that port.'
+        : '';
+      show($('discover-msg'), (r.body.error || 'Could not read that address.') + detail,
            r.status === 502 ? 'warn' : 'err');
       return;
+    }
+
+    // A corrected scheme is reported, never applied quietly: https -> http is a
+    // real downgrade, and it is the scheme every future probe of this station
+    // will use.
+    if (r.body.schemeCorrected) {
+      const { from, to } = r.body.schemeCorrected;
+      show($('discover-msg'),
+           `That server does not answer over ${from} on this port — ${to} worked, ` +
+           `so this station will be monitored over ${to}.`, 'warn');
     }
 
     discovered = r.body;

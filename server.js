@@ -235,7 +235,34 @@ app.post('/api/stations/discover', auth.requireAuth, async (req, res) => {
     return res.status(400).json({ error: err.message });
   }
 
-  const snapshot = await diagnose.fetchIcecastSnapshot(derived.url.href);
+  // attempts: 1 — a person is watching a button. The 3x retry budget in
+  // fetchIcecastSnapshot is sized for an unattended cycle where a wasted 30s
+  // costs nothing; here it is the whole complaint.
+  let statusUrl = derived.url;
+  let snapshot = await diagnose.fetchIcecastSnapshot(statusUrl.href, { attempts: 1 });
+
+  // The pasted scheme is a guess. An Icecast on :8000 is very often plaintext
+  // even though the operator copied https from their browser bar, and an https
+  // request to a plaintext port stalls in the TLS handshake rather than failing
+  // fast — which is what turned one pasted URL into a 48-second spinner.
+  //
+  // Only transport failures are retried: an HTTP status or an unparseable body
+  // mean the scheme was right and something else is wrong.
+  let schemeCorrected = null;
+  if (!snapshot.reachable && discover.isTransportFailure(snapshot.fetchErrorCode)) {
+    const alt = discover.altSchemeUrl(statusUrl);
+    if (alt) {
+      // Same hostname, so the resolution check above still covers it; the port
+      // may differ, which the host-based guard does not care about.
+      const retry = await diagnose.fetchIcecastSnapshot(alt.href, { attempts: 1 });
+      if (retry.reachable) {
+        schemeCorrected = { from: statusUrl.protocol.replace(':', ''), to: alt.protocol.replace(':', '') };
+        statusUrl = alt;
+        snapshot = retry;
+      }
+    }
+  }
+
   if (!snapshot.reachable) {
     // The upstream body is never echoed back — it is a response from a server
     // the caller chose, and returning it verbatim is half of what makes SSRF
@@ -243,7 +270,10 @@ app.post('/api/stations/discover', auth.requireAuth, async (req, res) => {
     return res.status(502).json({
       error: 'Could not read an Icecast status document from that address',
       detail: snapshot.fetchError,
-      statusUrl: derived.url.href,
+      statusUrl: statusUrl.href,
+      // Both schemes were tried when the failure was a transport one, so the
+      // operator is not left guessing that http might have worked.
+      triedBothSchemes: discover.isTransportFailure(snapshot.fetchErrorCode),
     });
   }
 
@@ -254,12 +284,16 @@ app.post('/api/stations/discover', auth.requireAuth, async (req, res) => {
   }
 
   const body = {
-    statusUrl: derived.url.href,
+    statusUrl: statusUrl.href,
     derivedFrom: derived.derivedFrom || null,
     repairedJson: !!snapshot.repairedJson,
+    // Surfaced, never silent. Channel URLs below are built from the scheme that
+    // actually worked, and https -> http is a real downgrade for every future
+    // probe — the operator confirms it rather than discovering it later.
+    schemeCorrected,
     // The origin the operator reached — the addresses to probe are built from
     // it rather than from what Icecast says about itself.
-    ...discover.summarise(snapshot, pastedPath, derived.url.origin),
+    ...discover.summarise(snapshot, pastedPath, statusUrl.origin),
   };
   // A suggested name and identifier, so the operator confirms rather than types.
   // Placeholder text that merely LOOKS filled in is worse than an empty field:
@@ -512,6 +546,10 @@ app.get('/api/diagnostics', (req, res) => {
       mountCount: snapshot.mountCount,
       responseTime: snapshot.responseTime,
       fetchedAt: snapshot.fetchedAt,
+      // One Icecast process per monitored host. serverId and serverStart
+      // describe a single process, so they have no merged meaning once more
+      // than one host is monitored — `servers` is the truthful shape there.
+      servers: snapshot.servers || null,
   };
   res.json({
     icecast: auth.currentSession(req) ? icecast : redact.publicIcecast(icecast),

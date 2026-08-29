@@ -33,6 +33,43 @@ function toStatusUrl(raw) {
   return { ok: true, url: derived, derivedFrom: url.href };
 }
 
+/**
+ * The same status URL over the other scheme, or null if it cannot be formed.
+ *
+ * A scheme is the one part of a pasted URL that is a GUESS rather than a fact.
+ * People copy https from the browser bar and append the stream port, but an
+ * Icecast on :8000 is very often plaintext — https://stream.wbai.org:8000 is
+ * exactly that, while the same server answers instantly over http.
+ *
+ * The port is deliberately carried across unchanged when it was explicit: the
+ * operator told us which port Icecast is on, and only the scheme is in doubt.
+ */
+function altSchemeUrl(url) {
+  try {
+    const alt = new URL(url.href);
+    alt.protocol = url.protocol === 'https:' ? 'http:' : 'https:';
+    // Setting protocol does not move an implicit default port, so a URL with no
+    // explicit port correctly picks up the new scheme's default.
+    return alt.href === url.href ? null : alt;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Whether a failed fetch is worth retrying on the other scheme.
+ *
+ * Only TRANSPORT failures qualify. An HTTP status or an unparseable body both
+ * mean we reached a server and it answered — the scheme was right and something
+ * else is wrong, so retrying the other one would only add delay and then report
+ * a more confusing error than the true one.
+ */
+function isTransportFailure(code) {
+  if (!code) return false;
+  if (String(code).startsWith('HTTP_')) return false;
+  return code !== 'EPARSE';
+}
+
 // Bitrate suffixes Icecast operators conventionally append to a mount name.
 const BITRATE_SUFFIX = /_(?:16|24|32|48|64|96|128|160|192|256|320)$/i;
 
@@ -183,7 +220,9 @@ function suggestStationIdentity(channel) {
   return { name: callSign || raw || id.toUpperCase(), id };
 }
 
-module.exports = { toStatusUrl, channelKeyFor, suggestChannels, summarise, suggestStationIdentity };
+module.exports = {
+  altSchemeUrl,
+  isTransportFailure, toStatusUrl, channelKeyFor, suggestChannels, summarise, suggestStationIdentity };
 
 /* ═══════════════════════════════════════════════════════════════════════════
    Validating a station before it is written

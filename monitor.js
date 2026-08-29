@@ -701,9 +701,12 @@ async function probeVariants(snap) {
   const jobs = [];
   for (const stream of streams) {
     const paths = diagnose.channelMountPaths(stream);
+    // This stream's own server: a variant is only "listed" if the host it lives
+    // on lists it.
+    const hostSnap = diagnose.snapshotForStream(snap, stream);
     // Skip paths[0]: that is the primary, probed every cycle by the main loop.
     for (const path of paths.slice(1)) {
-      if (!snap?.mounts?.[path]) continue;
+      if (!hostSnap?.mounts?.[path]) continue;
       jobs.push({ stream, path });
     }
   }
@@ -980,6 +983,36 @@ async function runChecks() {
   }
 }
 
+/**
+ * The distinct Icecast servers currently being monitored, as
+ * [{ host, statusUrl }].
+ *
+ * Derived from the live stream list rather than read from config.hosts, so a
+ * station added while hosts[] was not rewritten still gets its own inventory
+ * fetched instead of being looked up in some other server's. A configured
+ * statusUrl for a host still wins — that is the only way to point at a status
+ * document that is not at the conventional path.
+ */
+function currentHosts() {
+  const configured = new Map();
+  const cfg = store.getStationConfig();
+  for (const h of cfg?.hosts || []) {
+    if (h && h.host && h.statusUrl) configured.set(h.host, h.statusUrl);
+  }
+
+  const out = new Map();
+  for (const s of streams) {
+    let u;
+    try { u = new URL(s.url); } catch { continue; }
+    if (out.has(u.host)) continue;
+    out.set(u.host, {
+      host: u.host,
+      statusUrl: configured.get(u.host) || `${u.protocol}//${u.host}/status-json.xsl`,
+    });
+  }
+  return [...out.values()];
+}
+
 async function runChecksInner() {
   const timestamp = new Date().toISOString();
 
@@ -995,7 +1028,7 @@ async function runChecksInner() {
   // listener counts we then recorded and stored, on every probed mount. Reading
   // the inventory first means the only connections in it are real ones; ours
   // open afterwards and are gone long before the next cycle reads it again.
-  const snap = await diagnose.fetchIcecastSnapshot();
+  const snap = await diagnose.fetchHostSnapshots(currentHosts());
   snapshot = snap;
 
   const results = await Promise.all(streams.map((s) => diagnose.probeStream(s)));
@@ -1013,7 +1046,9 @@ async function runChecksInner() {
 
   console.log(
     `[Monitor] Cycle ${timestamp} — ${streams.length - downCount}/${streams.length} up` +
-    (snap.reachable ? ` · Icecast OK (${snap.mountCount} mounts)` : ` · Icecast UNREACHABLE (${snap.fetchError})`),
+    (snap.reachable
+      ? ` · Icecast OK (${snap.mountCount} mounts across ${snap.hosts.length} host(s))`
+      : ` · Icecast PARTIAL/UNREACHABLE (${snap.fetchError})`),
   );
 
   const newlyNotable = [];   // episodes that just became worth emailing
@@ -1028,6 +1063,12 @@ async function runChecksInner() {
     const prev = streamStatus[stream.id] || {};
     const wasDown = prev.status === 'down';
     const isDown = result.status === 'down';
+    // The inventory of the server THIS stream lives on. "Icecast reachable" is
+    // a per-host fact: one station's server being down says nothing about
+    // another's, and reading it from the merged snapshot marked every station
+    // unknown whenever any single host failed.
+    const hostSnap = diagnose.snapshotForStream(snap, stream);
+    const hostReachable = !!hostSnap?.reachable;
     const mount = diagnose.findMount(snap, stream);
     // The channel as a whole: every bitrate variant, summed.
     const audience = diagnose.channelAudience(snap, stream);
@@ -1084,7 +1125,7 @@ async function runChecksInner() {
       // listener-loss figure derived from it.
       listeners: audience.present > 0
         ? audience.listeners
-        : snap.reachable
+        : hostReachable
         ? 0
         : prev.listeners ?? 0,
       listenerPeak: audience.present > 0 ? audience.peak : prev.listenerPeak ?? 0,
@@ -1096,12 +1137,12 @@ async function runChecksInner() {
       // Live per-mount counts, so the card can show which variant actually
       // carries the audience. Carried forward when Icecast is unreachable for
       // the same reason the summed count is: no reading is not a reading of nil.
-      mountListeners: snap.reachable ? audience.perMount : prev.mountListeners || {},
+      mountListeners: hostReachable ? audience.perMount : prev.mountListeners || {},
       // The failing paths themselves, each with WHY, so the dashboard can name
       // them rather than leaving an operator to work out which of three mounts
       // "2 of 3" refers to. Only meaningful while Icecast is reachable — see
       // channelDegradation().
-      impairedMounts: snap.reachable
+      impairedMounts: hostReachable
         ? degradation.impaired.map((m) => ({ path: m.path, reason: m.reason }))
         : prev.impairedMounts || [],
       degraded: degradation.degraded,
@@ -1109,7 +1150,7 @@ async function runChecksInner() {
       bitrate: mount?.bitrate || prev.bitrate || 128,
       streamStart: mount?.streamStart || prev.streamStart || '',
       mountPresent: !!mount,
-      icecastReachable: !!snap.reachable,
+      icecastReachable: hostReachable,
     };
 
     store.addSample(stream.id, {

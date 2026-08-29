@@ -291,15 +291,26 @@ test('the Icecast snapshot is read before any probe opens a connection', async (
   monitor.reloadConfig();
 
   const order = [];
-  const realSnapshot = diagnose.fetchIcecastSnapshot;
+  const realSnapshot = diagnose.fetchHostSnapshots;
   const realProbe = diagnose.probeStream;
 
-  diagnose.fetchIcecastSnapshot = async () => {
+  // Stubbed at fetchHostSnapshots, which is what a cycle calls: inventories are
+  // fetched per host, since a mount path only means anything on its own server.
+  const HOST = 'stream.example.org:9000';
+  diagnose.fetchHostSnapshots = async () => {
     order.push('snapshot');
-    return {
+    const perHost = {
       reachable: true,
       mountCount: 2,
       mounts: { '/a_128': mount(10), '/a_64': mount(5) },
+    };
+    return {
+      byHost: { [HOST]: perHost },
+      hosts: [HOST],
+      servers: [],
+      reachable: true,
+      mounts: {},
+      mountCount: 2,
     };
   };
   diagnose.probeStream = async () => {
@@ -310,7 +321,7 @@ test('the Icecast snapshot is read before any probe opens a connection', async (
   try {
     await monitor.runChecks();
   } finally {
-    diagnose.fetchIcecastSnapshot = realSnapshot;
+    diagnose.fetchHostSnapshots = realSnapshot;
     diagnose.probeStream = realProbe;
   }
 
