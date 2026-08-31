@@ -196,7 +196,18 @@ app.get('/api/status', (req, res) => {
 app.get('/api/history', (req, res) => {
   res.json({
     history: monitor.getHistory(),
-    incidents: monitor.getIncidents(),
+    // Redacted for anonymous callers exactly as /api/events is. This route
+    // returned STORED events verbatim — the older, back-compatible sibling of
+    // /api/events, which was given redaction when the leak there was found and
+    // this one was not. It was publishing the Icecast servers' own contact
+    // addresses, and would have published real alert recipients the moment a
+    // station with recipients had an outage inside the 24-hour window.
+    //
+    // The same lesson twice in one day: a projection protects the routes that
+    // were routed through it, and nothing makes a second route comply.
+    incidents: auth.currentSession(req)
+      ? monitor.getIncidents()
+      : redact.publicEvents(monitor.getIncidents()),
   });
 });
 

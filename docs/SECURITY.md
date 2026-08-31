@@ -16,6 +16,7 @@ Every finding below was fixed the same day unless marked otherwise.
 | 1 | Staff email addresses served on a public endpoint | **High** | ✅ Fixed |
 | 2 | Unauthenticated endpoint that sends mail | **High** | ✅ Fixed |
 | 2b | Alert recipients published on `/api/status` | **High** | ✅ Fixed 2026-08-31 |
+| 2c | `/api/history` returned stored events unredacted | **High** | ✅ Fixed 2026-08-31 |
 | 3 | XSS via Icecast metadata in HTML attributes | **Medium** | ✅ Fixed |
 | 4 | No Content-Security-Policy or hardening headers | Medium | ✅ Fixed |
 | 5 | Upstream administrator address in stored advice text | Low | ✅ Fixed |
@@ -104,6 +105,26 @@ for ep in /api/status /api/diagnostics /api/events /api/stations /api/config; do
   curl -s "https://<host>$ep" | grep -oE '[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}'
 done
 ```
+
+## 2c. /api/history returned stored events unredacted — High (2026-08-31)
+
+`/api/history` is the older, back-compatible sibling of `/api/events`. When
+finding 1 was fixed, `/api/events` was given redaction and this route was not —
+it kept returning `monitor.getIncidents()` verbatim.
+
+Found on the live site: it was publishing the Icecast servers' own contact
+addresses (`streams@stations1.pacifica.org`, `chris@wbai.org`) on every incident
+in its 24-hour window. More seriously, it would have published **real alert
+recipients** the moment a station with recipients had an outage inside that
+window — and KPFT now has three.
+
+**Fixed.** Redacted for anonymous callers exactly as `/api/events` is.
+
+**This is the third instance of one pattern**, which is the point worth keeping:
+a projection protects the routes that were routed through it, and nothing makes
+a new — or older — route comply. `test/route-redaction.test.js` now checks the
+ROUTES rather than the projection: any handler reaching for stored events must
+either redact them or require a session.
 
 ## 3. XSS via Icecast metadata — Medium
 

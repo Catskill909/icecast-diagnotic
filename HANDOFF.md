@@ -18,7 +18,7 @@ shortest path to being useful.
 **Orient yourself (2 minutes).**
 
 ```bash
-npm test                                   # 323 tests, all should pass
+npm test                                   # 327 tests, all should pass
 curl -s https://kpft-icecast.supersoul.top/api/stations | jq   # what it monitors
 curl -s https://kpft-icecast.supersoul.top/api/status   | jq   # how it is doing
 ```
@@ -87,7 +87,7 @@ regression, however green the tests are.**
   so the host-as-shared-pool design (§3.6) is now carrying real traffic rather
   than being argued for. One snapshot fetch per host per cycle serves every
   station on it.
-- **323 tests**, `npm test`, Node's built-in runner, no test framework dependency.
+- **327 tests**, `npm test`, Node's built-in runner, no test framework dependency.
 - **Dependencies: express, nodemailer 9, dotenv.** That is the whole list, and it
   is deliberate. Crypto, testing and HTTP are all Node built-ins. Adding a
   dependency should require an argument.
@@ -652,6 +652,13 @@ Reviewed end to end on 2026-08-27; findings and reasoning in
   `test/public-status-redaction.test.js` scans every public accessor, and its
   first case asserts the alert path can STILL see the recipients — so the guard
   cannot be satisfied by breaking alerting.
+- **EVERY route returning stored events must redact or require a session.**
+  `/api/history` is the older sibling of `/api/events` and was missed when
+  redaction was added to that one, so it went on returning `getIncidents()`
+  verbatim — publishing the Icecast servers' contact addresses, and ready to
+  publish real alert recipients the moment a station with recipients had an
+  outage inside its 24-hour window. `test/route-redaction.test.js` checks the
+  ROUTES, not the projection, because redact.js was never the thing that failed.
 - **Grep public responses for address-shaped strings after adding any field.**
   This is now the second time a field added to a stored object walked into a
   public response — `/api/events` did it with delivery records on 2026-08-27,
@@ -749,7 +756,7 @@ Reviewed end to end on 2026-08-27; findings and reasoning in
 ## 9. Verifying a change
 
 ```bash
-npm test                                             # 323 tests
+npm test                                             # 327 tests
 node --check server.js monitor.js store.js diagnose.js auth.js
 
 # Against production
