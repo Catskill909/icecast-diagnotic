@@ -1908,8 +1908,19 @@ function renderStreamBlock(entry, index, total) {
     ${renderDiagnosis(diagnosis)}`;
 }
 
-function renderAllStreamsTable() {
-  const rows = streams.map((s) => {
+/**
+ * The stream table in an email, scoped to one station.
+ *
+ * It listed EVERY stream the monitor watches, regardless of who the message was
+ * for. Testing an address just added to WPFW therefore sent that person the
+ * listener counts for KPFT, KPFK and WBAI as well — four stations in four cities
+ * whose figures are not theirs to receive. Absent a station it still renders
+ * everything, which is correct for a single-station install and for a message
+ * that genuinely covers the whole monitor.
+ */
+function renderAllStreamsTable(stationId) {
+  const scoped = stationId ? streams.filter((s) => s.stationId === stationId) : streams;
+  const rows = scoped.map((s) => {
     const st = streamStatus[s.id] || {};
     const isDeadAir = st.silenceState === 'dead_air';
     const dot = isDeadAir ? '🔇' : st.status === 'up' ? '🟢' : st.status === 'down' ? '🔴' : '⚪';
@@ -2503,14 +2514,20 @@ function getConfig() {
   };
 }
 
-async function sendTestAlert(toEmail) {
+async function sendTestAlert(toEmail, stationId) {
   if (!transporter) throw new Error('SMTP not configured');
+
+  // A test is always ABOUT a station — it is sent from that station's recipient
+  // list to check one address on it. Defaults to the only station when there is
+  // one, so a single-station install needs to say nothing.
+  const station = stationId || (getStations().length === 1 ? getStations()[0].id : undefined);
+  const stationName = getStations().find((st) => st.id === station)?.name;
 
   const fromAddr = process.env.SMTP_FROM || process.env.SMTP_USER;
   const storage = store.getStorageInfo();
 
   const contentHtml = `
-    ${renderAllStreamsTable()}
+    ${renderAllStreamsTable(station)}
 
     <div class="callout-box" style="background-color: #1e1b38; border: 1px solid #3d3575; border-radius: 8px; padding: 16px; margin-top: 20px;">
       <p class="callout-title" style="font-weight: 600; color: #c4b5fd !important; margin: 0 0 8px 0; font-size: 14px;"><span class="callout-title" style="color: #c4b5fd !important;">ℹ️ What to expect</span></p>
@@ -2532,9 +2549,14 @@ async function sendTestAlert(toEmail) {
       </ul>
     </div>`;
 
+  // The station is named in the subject and the body. A recipient who is on one
+  // station's list should be able to tell, from the message alone, which station
+  // just added them — not read a generic test and guess.
   const html = buildEmailHtml({
     title: '🧪 Test Alert — Email Working!',
-    subtitle: 'This is a test alert from the Pacifica Stream Monitor. Email alerts are configured correctly.',
+    subtitle: stationName
+      ? `This is a test from the ${stationName} stream monitor. Alerts for ${stationName} will reach this address.`
+      : 'This is a test alert from the Pacifica Stream Monitor. Email alerts are configured correctly.',
     headerBg: 'linear-gradient(135deg, #6c5ce7, #5a49c9)',
     contentHtml,
   });
@@ -2542,7 +2564,9 @@ async function sendTestAlert(toEmail) {
   await transporter.sendMail({
     from: fromAddr,
     to: toEmail,
-    subject: '🧪 Pacifica Stream Monitor — Test Alert',
+    subject: stationName
+      ? `🧪 ${stationName} Stream Monitor — Test Alert`
+      : '🧪 Pacifica Stream Monitor — Test Alert',
     html,
   });
   console.log(`[Monitor] Test alert sent to ${toEmail}`);

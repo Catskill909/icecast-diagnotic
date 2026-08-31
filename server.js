@@ -428,22 +428,34 @@ app.put('/api/stations/:id/alerts', auth.requireAuth, (req, res) => {
   const v = discover.validateAlertsPayload(req.body, station.alerts);
   if (!v.ok) return res.status(400).json({ errors: v.errors });
 
-  const next = discover.setStationAlerts(config, station.id, v.alerts);
-  monitor.saveStationConfig(next);
+  // Wrapped so that an unexpected throw returns JSON.
+  //
+  // Without this, express's default handler returns an HTML error page. The
+  // panel parses the body as JSON, gets nothing, and renders its generic
+  // fallback — "Could not save." — which names no cause, points at no line, and
+  // is indistinguishable from a dropped connection. An operator reported exactly
+  // that and it could not be diagnosed from either end.
+  try {
+    const next = discover.setStationAlerts(config, station.id, v.alerts);
+    monitor.saveStationConfig(next);
 
-  // The saved station is re-read rather than echoing the payload back: a field
-  // that was dropped in normalisation must be visibly absent to the panel, not
-  // reflected back as though it had been stored.
-  const saved = (monitor.getStationConfig().stations || []).find((s) => s.id === station.id);
+    // The saved station is re-read rather than echoing the payload back: a field
+    // that was dropped in normalisation must be visibly absent to the panel, not
+    // reflected back as though it had been stored.
+    const saved = (monitor.getStationConfig().stations || []).find((s) => s.id === station.id);
 
-  res.json({
-    station: { id: saved.id, name: saved.name },
-    alerts: saved.alerts || null,
-    // Stated because it is the question the operator is actually asking, and the
-    // answer depends on rules — the station block, the env fallback, whether any
-    // recipients exist at all — that no single stored field expresses.
-    effective: monitor.describeAlertRouting(station.id),
-  });
+    res.json({
+      station: { id: saved.id, name: saved.name },
+      alerts: saved.alerts || null,
+      // Stated because it is the question the operator is actually asking, and
+      // the answer depends on rules — the switch, whether any recipients exist,
+      // whether mail is configured — that no single stored field expresses.
+      effective: monitor.describeAlertRouting(station.id),
+    });
+  } catch (err) {
+    console.error(`[Server] Saving alerts for "${station.id}" failed:`, err);
+    res.status(500).json({ error: `Saving failed: ${err.message}` });
+  }
 });
 
 // Applies stored configuration to the running monitor without a redeploy.
@@ -626,7 +638,9 @@ app.get('/api/test-alert', auth.requireAuth, async (req, res) => {
     return res.status(400).json({ error: 'Provide a valid email address via ?to=user@example.com' });
   }
   try {
-    await monitor.sendTestAlert(to);
+    // Scoped, so a test for one station's recipient does not send them every
+    // other station's listener figures.
+    await monitor.sendTestAlert(to, stationOf(req));
     res.json({ success: true, message: `Test alert sent to ${to}` });
   } catch (err) {
     res.status(500).json({ error: err.message });

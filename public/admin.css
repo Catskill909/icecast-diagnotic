@@ -102,7 +102,7 @@ button:disabled { opacity: .5; cursor: not-allowed; }
 .station-editor { margin-top: 15px; padding-top: 15px; border-top: 1px solid var(--surface-3); }
 .station-editor.hidden { display: none; }
 .edit-channels { display: grid; gap: 8px; }
-.edit-ch { display: grid; gap: 7px; align-items: center;
+.edit-ch-old { display: grid; gap: 7px; align-items: center;
            grid-template-columns: 118px 1fr 1.4fr 1fr auto;
            background: var(--surface-2); border: 1px solid var(--surface-3);
            border-radius: 9px; padding: 9px 11px; }
@@ -265,3 +265,42 @@ label input { margin-top: 6px; }
   font-size: 13px; font-weight: 500; padding: 9px 8px;
 }
 .linkbtn:hover:not(:disabled) { background: none; color: var(--text-primary); }
+
+/* ── Channel editing ─────────────────────────────────────────────────────── */
+
+/* A channel is a small card, not a row of four inline inputs. The inline
+   version could not fit a mount LIST — mounts were squeezed into one
+   space-separated text box, which offered no way to see it was a list and no
+   way to remove one without editing text. */
+.edit-ch {
+  background: var(--surface-1); border: 1px solid var(--surface-3);
+  border-radius: 10px; padding: 13px 14px; display: grid; gap: 12px;
+}
+.edit-ch-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.edit-ch-id {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px; color: var(--text-muted);
+}
+.edit-ch-fields { display: grid; gap: 11px; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); }
+.field-label.sm { font-size: 12px; font-weight: 600; color: var(--text-secondary); }
+.field-label.sm input { margin-top: 5px; font-size: 13px; padding: 8px 10px; }
+
+.mounts-block { display: grid; gap: 7px; }
+.chips { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; min-height: 26px; }
+
+/* A mount is a thing you can take off, so it carries the control that does it.
+   Removing one used to mean editing a space-separated string by hand. */
+.chip.removable {
+  display: inline-flex; align-items: center; gap: 5px;
+  padding: 3px 4px 3px 9px; font-size: 12px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+.chip-x {
+  background: none; border: none; padding: 0 4px; line-height: 1;
+  font-size: 15px; color: var(--text-muted); cursor: pointer; border-radius: 4px;
+}
+.chip-x:hover { background: rgba(239,68,68,.2); color: #fecaca; }
+.chip-x:focus-visible { outline: 2px solid var(--primary); outline-offset: 1px; }
+
+.actions-inline { margin-top: 11px; }
+.edit-ch[data-new] { border-color: var(--primary); background: rgba(124,106,239,.06); }

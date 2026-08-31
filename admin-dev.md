@@ -246,9 +246,9 @@ Smallest first, and each step is independently shippable.
 | 2 | Edit and Test on each recipient row | ✅ 2026-08-31 — inline edit, Enter saves, Escape abandons; Test sends to that one address and nobody else |
 | 3 | **Seed `ALERT_EMAILS` into the store, retire the send-time fallback** | ✅ 2026-08-31 — `seedAlertsFromEnv()`, marker-guarded. `test/alert-migration.test.js` asserts the before/after recipient set is identical per station |
 | 4 | **One weekly roundup per station** (§6.2) | ✅ 2026-08-31 — own list, own scope, own timezone, own weekly marker and retry counter |
-| 5 | Mounts as chips with add/remove | ⬅ **NEXT** |
-| 6 | Mount picker from live inventory + Test | Needs 5 |
-| 7 | Add a channel | Needs 6 |
+| 5 | Mounts as chips with add/remove | ✅ 2026-08-31 — each mount is a chip with an ×, plus its own add field. A pasted full URL is reduced to its path |
+| 6 | Add a channel | ✅ 2026-08-31 — **+ Add a channel** in the editor; the id is generated from the name and shown before saving, never typed |
+| 7 | Mount picker from the live inventory + probe Test | ⬅ **NEXT.** §4.2–4.3 |
 
 Steps 1–4 shipped 2026-08-31. Steps 3 and 4 changed who receives email, so both
 had their tests written before the code; step 3 was additionally verified against
@@ -256,7 +256,10 @@ a running instance — seeded, cleared by hand, restarted, and confirmed still
 cleared, because the migration re-running over an operator's edit is the one
 failure the unit tests could not have caught on their own.
 
-Steps 5–7 touch no email at all and can be done in any gap.
+Steps 5–6 touch no email at all. Step 7 is what removes the typo class outright
+rather than validating after the fact, and it is the one with the listener-count
+cost attached (§4.3) — a probe opens a connection Icecast counts as a listener,
+so it must be a button someone presses, never a keystroke or a save.
 
 ---
 
@@ -343,3 +346,27 @@ read again.
 
 That is the version worth building. Each thing removed here was a concept
 somebody had to hold in their head to answer "who gets told when this breaks".
+
+---
+
+## 8. What "Could not save." taught us
+
+An operator hit a save failure on the alert panel and reported the entire
+message: **"Could not save."** That was the whole diagnostic surface for four
+different failure modes — a rejected address, an exception in the route, a
+dropped connection, a proxy error — and it was not reproducible from either end.
+
+Three things were wrong, and all three are now fixed:
+
+| | |
+|---|---|
+| The route could throw and return express's **HTML** error page | The panel parsed it as JSON, got nothing, and fell through to its generic message. The route now returns JSON on every path and logs the exception server-side |
+| `api()` discarded a non-JSON body | `res.json().catch(() => ({}))` threw the evidence away. It now keeps the raw text |
+| Every failure rendered the same six words | `failureText()` distinguishes a validation error, a server error with its message, an unreachable server, and a bare status code |
+
+**It was not reproduced.** Tried against a copy of the production configuration,
+as a deployed instance with SMTP configured, and with a production-sized store
+(a 3.7 MB samples file, on the theory that a forced write behind a proxy was
+timing out — it took 14 ms). Every attempt returned HTTP 200. Recorded here as
+unexplained rather than quietly assumed fixed: the change guarantees the *next*
+occurrence names itself, which is not the same as knowing what happened.

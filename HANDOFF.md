@@ -348,6 +348,24 @@ implementation — copy `ALERT_EMAILS` onto every station — would have signed
 KPFT's general manager up for outages in Washington, Los Angeles and New York,
 and would have looked correct in review.
 
+### Also 2026-08-31: the channel editor, and a message that said nothing
+
+| Change | Why |
+|---|---|
+| **Mounts are chips with an ×**, plus an add field | They were one space-separated text box. Nothing showed it was a list, nothing removed a single mount without editing text, and the only check was "starts with /". A pasted full URL is now reduced to its path, because pasting the stream URL is what an operator actually does |
+| **+ Add a channel** | The editor could drop channels and never add one. The id is generated from the name and shown before saving — the editor still offers no way to TYPE an id, because reusing one attaches a new channel to another's recorded history and renaming one orphans it |
+| A new channel's id is generated at **save**, not when the row appears | So the id matches the name the operator settled on rather than the placeholder the row started with |
+| The alerts route returns JSON on every path | It could throw and return express's HTML error page; the panel parsed that as JSON, got nothing, and showed its generic fallback |
+| `api()` keeps a non-JSON body; `failureText()` names the failure | `res.json().catch(() => ({}))` threw away the evidence, and every failure rendered the same six words |
+
+**"Could not save." was reported and could not be reproduced.** Tried against a
+copy of the production configuration, as a deployed instance with SMTP
+configured, and with a production-sized store — a 3.7 MB samples file, on the
+theory that the forced write was timing out behind the proxy; it took 14 ms.
+Every attempt returned HTTP 200. **Recorded as unexplained rather than assumed
+fixed.** The diagnostics change guarantees the next occurrence names itself,
+which is not the same as knowing what happened.
+
 ### Corrections worth inheriting
 
 - **The handoff's own figures were stale and were corrected**, not merely
@@ -616,6 +634,15 @@ Reviewed end to end on 2026-08-27; findings and reasoning in
   system — rare, technical, restricted. Reporting is frequent and GM-facing, and
   belongs on the history page and fleet view. Collapsing them puts "delete
   station" a tab away from a weekly report (§8b of the scope doc).
+- **The channel editor must never offer a field for a channel id.** Ids key every
+  sample, rollup and event. A new channel's id is GENERATED from its name and
+  shown before saving; an existing one is read from the row and is not editable.
+  Reusing an id attaches a channel to another's history; renaming one orphans it.
+- **A failed request must say what failed.** `api()` keeps a non-JSON body and
+  `failureText()` turns it into something an operator can read down a phone.
+  `res.json().catch(() => ({}))` discards exactly the evidence needed, and every
+  route that can throw must return JSON — express's default HTML error page
+  reaches the panel as an empty object and renders as a generic message.
 - **The in-app guide's content lives in `public/guide.js`**, as data rather than
   markup. Edit the TOPICS array; do not put copy back into index.html.
 - **`STREAMS` in the hosting panel no longer does anything** after first boot.

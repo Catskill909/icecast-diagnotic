@@ -20,6 +20,27 @@
       .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
   }
 
+  /**
+   * What actually went wrong, in words an operator can report.
+   *
+   * "Could not save." was the whole message for every failure mode — a rejected
+   * address, a server exception, a dropped connection, a proxy timeout. It named
+   * no cause and could not be diagnosed from either end. Anything a person might
+   * have to relay down a phone line has to say more than that.
+   */
+  function failureText(res, verb = 'save') {
+    if (!res) return `Could not ${verb} — the session ended. Sign in and try again.`;
+    if (res.status === 0) {
+      return `Could not ${verb} — the server could not be reached. Check the connection and try again.`;
+    }
+    if (res.body && res.body.error) return res.body.error;
+    if (res.body && res.body._text) {
+      const text = String(res.body._text).replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim();
+      return `Could not ${verb} (HTTP ${res.status}): ${text.slice(0, 200) || 'the server returned no explanation'}`;
+    }
+    return `Could not ${verb} — the server replied HTTP ${res.status}.`;
+  }
+
   function show(el, text, kind) {
     el.className = 'msg ' + (kind || 'err');
     el.textContent = text;
@@ -56,7 +77,13 @@
       if (timer) clearTimeout(timer);
     }
     if (res.status === 401) { location.href = '/login.html?next=' + encodeURIComponent(location.pathname); return null; }
-    return { ok: res.ok, status: res.status, body: await res.json().catch(() => ({})) };
+    // A non-JSON response is kept as text rather than discarded. Swallowing it
+    // is what turned a real server error into the word "Could not save.", which
+    // names no cause and cannot be diagnosed from either end.
+    const raw = await res.text();
+    let body = {};
+    try { body = raw ? JSON.parse(raw) : {}; } catch { body = { _text: raw }; }
+    return { ok: res.ok, status: res.status, body };
   }
 
   /**
@@ -640,7 +667,7 @@
       const errors = res.body.errors;
       return Array.isArray(errors) && errors.length
         ? showList(msg, errors, 'That could not be saved:')
-        : show(msg, res.body.error || 'Could not save.');
+        : show(msg, failureText(res));
     }
 
     // Re-read rather than trusting the draft: normalisation may have deduped or
@@ -673,11 +700,80 @@
     show(msg, `Sending a test message to ${to}…`, 'warn');
     const res = await api(`/api/test-alert?to=${encodeURIComponent(to)}`);
     if (!res) return;
-    if (!res.ok) return show(msg, res.body.error || 'The test message could not be sent.');
+    if (!res.ok) return show(msg, failureText(res, 'send the test message'));
     show(msg, `Test message sent to ${to} and nobody else. If it does not arrive, check the spam folder first.`, 'ok');
   }
 
   // ── Editing ───────────────────────────────────────────────────────────────
+  /* A channel row.
+   *
+   * MOUNTS ARE A LIST, not a space-separated string in a text box. They were the
+   * latter, which offered no way to see that it was a list, no way to remove one
+   * without editing text, and no check beyond "starts with a slash". Each mount
+   * is now a chip you can remove, with its own add field.
+   *
+   * The ID is rendered as text and never as an input. It keys every sample,
+   * rollup and event for this channel: renaming it does not move that history,
+   * it orphans it, and the channel silently restarts from zero while uptime is
+   * computed from the empty one. A NEW channel gets an id generated from its
+   * name, shown before saving so it is never a surprise. */
+  function channelRowHtml(c, isNew) {
+    return `
+      <div class="edit-ch" data-cid="${esc(c.id)}"${isNew ? ' data-new="1"' : ''}>
+        <div class="edit-ch-head">
+          <div class="edit-ch-id" title="Permanent — it keys this channel's recorded history">
+            ${esc(c.id)}${isNew ? ' <span class="tag alt">new</span>' : ''}
+          </div>
+          <button class="mini danger" data-drop="${esc(c.id)}" type="button">
+            ${isNew ? 'Discard' : 'Drop channel'}
+          </button>
+        </div>
+        <div class="edit-ch-fields">
+          <label class="field-label sm">Name
+            <input data-f="cname" value="${esc(c.name || '')}" placeholder="KPFT Main">
+          </label>
+          <label class="field-label sm">Stream URL
+            <input data-f="curl" value="${esc(c.url || '')}" placeholder="https://streams.example.org:9000/live_128">
+          </label>
+        </div>
+        <div class="mounts-block">
+          <span class="field-label sm">Mounts</span>
+          <p class="note">Every bitrate variant of this channel. Listener counts are summed across all of them.</p>
+          <div class="chips" data-mounts>${mountChipsHtml(c.mounts || [])}</div>
+          <div class="add-row">
+            <input data-add-mount placeholder="/live_64" autocapitalize="off" autocorrect="off" spellcheck="false">
+            <button class="ghost" data-add-mount-btn type="button">Add mount</button>
+          </div>
+        </div>
+      </div>`;
+  }
+
+  function mountChipsHtml(mounts) {
+    if (!mounts.length) {
+      return '<span class="note">No mounts listed — only the stream URL above is counted.</span>';
+    }
+    return mounts.map((m) => `
+      <span class="chip removable">${esc(m)}<button class="chip-x" data-drop-mount="${esc(m)}"
+        type="button" aria-label="Remove ${esc(m)}">×</button></span>`).join('');
+  }
+
+  /** Reads the mounts currently shown on a row. The DOM is the draft here. */
+  function rowMounts(row) {
+    return [...row.querySelectorAll('[data-drop-mount]')].map((b) => b.dataset.dropMount);
+  }
+
+  /* Generated from the name, never typed. An operator given a free text field
+   * for an id will eventually reuse one, which attaches a new channel to another
+   * channel's recorded history. */
+  function channelIdFrom(stationId, name, taken) {
+    const base = `${stationId}-${name}`.toLowerCase()
+      .replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || `${stationId}-channel`;
+    let id = base;
+    let n = 2;
+    while (taken.has(id)) id = `${base}-${n++}`;
+    return id;
+  }
+
   function openEditor(s) {
     if (!s) return;
     const box = document.querySelector(`[data-editor="${CSS.escape(s.id)}"]`);
@@ -692,14 +788,10 @@
       <h3>Channels</h3>
       <p class="hint">A channel's identifier is fixed — it keys this channel's recorded history. Everything else can change.</p>
       <div class="edit-channels">
-        ${(s.channels || []).map((c) => `
-          <div class="edit-ch" data-cid="${esc(c.id)}">
-            <div class="edit-ch-id">${esc(c.id)}</div>
-            <input data-f="cname" value="${esc(c.name)}" placeholder="Display name">
-            <input data-f="curl" value="${esc(c.url)}" placeholder="Stream URL">
-            <input data-f="cmounts" value="${esc((c.mounts || []).join(' '))}" placeholder="/mount /mount_64">
-            <button class="mini danger" data-drop="${esc(c.id)}">Drop</button>
-          </div>`).join('')}
+        ${(s.channels || []).map((c) => channelRowHtml(c)).join('')}
+      </div>
+      <div class="actions-inline">
+        <button class="ghost" data-add-channel type="button">+ Add a channel</button>
       </div>
       <div class="actions">
         <button class="primary" data-save="${esc(s.id)}">Save changes</button>
@@ -708,12 +800,67 @@
       <div class="msg" data-msg="1"></div>`;
     box.classList.remove('hidden');
 
-    box.querySelectorAll('[data-drop]').forEach((b) => b.addEventListener('click', async () => {
-      if (box.querySelectorAll('.edit-ch').length < 2) {
-        show(box.querySelector('[data-msg]'), 'A station must keep at least one channel.');
+    const msgEl = box.querySelector('[data-msg]');
+
+    box.addEventListener('click', async (e) => {
+      // ── Remove one mount ──────────────────────────────────────────────────
+      const dropMount = e.target.closest('[data-drop-mount]');
+      if (dropMount) {
+        const row = dropMount.closest('.edit-ch');
+        const left = rowMounts(row).filter((m) => m !== dropMount.dataset.dropMount);
+        row.querySelector('[data-mounts]').innerHTML = mountChipsHtml(left);
+        clear(msgEl);
         return;
       }
+
+      // ── Add one mount ─────────────────────────────────────────────────────
+      const addMount = e.target.closest('[data-add-mount-btn]');
+      if (addMount) {
+        const row = addMount.closest('.edit-ch');
+        const input = row.querySelector('[data-add-mount]');
+        let value = input.value.trim();
+        if (!value) return;
+        // Accept a full URL and reduce it, because pasting the stream URL is
+        // what an operator will actually do.
+        try { if (/^https?:\/\//i.test(value)) value = new URL(value).pathname; } catch { /* keep as typed */ }
+        if (!value.startsWith('/')) {
+          return show(msgEl, `A mount is an Icecast path beginning with "/" — "${value}" is not.`);
+        }
+        const current = rowMounts(row);
+        if (current.includes(value)) return show(msgEl, `${value} is already on this channel.`);
+        row.querySelector('[data-mounts]').innerHTML = mountChipsHtml([...current, value]);
+        input.value = '';
+        clear(msgEl);
+        return;
+      }
+
+      // ── Add a channel ─────────────────────────────────────────────────────
+      const addChannel = e.target.closest('[data-add-channel]');
+      if (addChannel) {
+        const taken = new Set([...box.querySelectorAll('.edit-ch')].map((r) => r.dataset.cid));
+        // Named provisionally; the id follows the name the operator types, and
+        // is regenerated on save while it is still new.
+        const id = channelIdFrom(s.id, 'channel', taken);
+        box.querySelector('.edit-channels').insertAdjacentHTML('beforeend',
+          channelRowHtml({ id, name: '', url: '', mounts: [] }, true));
+        box.querySelector('.edit-ch[data-new] [data-f=cname]')?.focus();
+        clear(msgEl);
+        return;
+      }
+
+      // ── Drop a channel ────────────────────────────────────────────────────
+      const b = e.target.closest('[data-drop]');
+      if (!b) return;
       const row = b.closest('.edit-ch');
+
+      // A channel added in this session has no history to warn about, so
+      // discarding one is not a decision worth a dialog.
+      if (row.dataset.new) { row.remove(); clear(msgEl); return; }
+
+      if (box.querySelectorAll('.edit-ch').length < 2) {
+        show(msgEl, 'A station must keep at least one channel.');
+        return;
+      }
       const name = row.querySelector('[data-f=cname]').value.trim() || b.dataset.drop;
       const ok = await confirmAction({
         title: `Drop ${name} from ${s.name}?`,
@@ -725,7 +872,15 @@
         confirmLabel: 'Drop channel',
       });
       if (ok) row.remove();
-    }));
+    });
+
+    // Enter in a mount field adds it rather than submitting nothing.
+    box.addEventListener('keydown', (e) => {
+      if (!e.target.matches('[data-add-mount]')) return;
+      if (e.key !== 'Enter') return;
+      e.preventDefault();
+      e.target.closest('.edit-ch').querySelector('[data-add-mount-btn]').click();
+    });
     box.querySelector('[data-cancel]').addEventListener('click', () => box.classList.add('hidden'));
     box.querySelector('[data-save]').addEventListener('click', () => saveEdit(s.id, box));
   }
@@ -733,13 +888,24 @@
   async function saveEdit(id, box) {
     const msg = box.querySelector('[data-msg]');
     clear(msg);
-    const channels = [...box.querySelectorAll('.edit-ch')].map((row) => ({
-      // The id is read from the row, never from an input: it is not editable.
-      id: row.dataset.cid,
-      name: row.querySelector('[data-f=cname]').value.trim(),
-      url: row.querySelector('[data-f=curl]').value.trim(),
-      mounts: row.querySelector('[data-f=cmounts]').value.trim().split(/\s+/).filter(Boolean),
-    }));
+    const taken = new Set([...box.querySelectorAll('.edit-ch')]
+      .filter((r) => !r.dataset.new).map((r) => r.dataset.cid));
+
+    const channels = [...box.querySelectorAll('.edit-ch')].map((row) => {
+      const name = row.querySelector('[data-f=cname]').value.trim();
+      // An EXISTING channel's id is read from the row and never from an input —
+      // it keys this channel's whole recorded history. A NEW one gets its id
+      // from the name at the moment of saving, so the id matches the name the
+      // operator finally settled on rather than the placeholder it started with.
+      const cid = row.dataset.new ? channelIdFrom(id, name || 'channel', taken) : row.dataset.cid;
+      if (row.dataset.new) taken.add(cid);
+      return {
+        id: cid,
+        name,
+        url: row.querySelector('[data-f=curl]').value.trim(),
+        mounts: rowMounts(row),
+      };
+    });
     const body = {
       name: box.querySelector('[data-f=name]').value.trim(),
       timezone: box.querySelector('[data-f=tz]').value.trim(),
