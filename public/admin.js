@@ -308,9 +308,18 @@
     const s = d.suggestedStation || {};
     $('st-name').value = s.name || '';
     $('st-id').value = s.id || '';
-    // Say WHY the identifier is not the obvious one, rather than letting it look
-    // like a typo. The station name is untouched; only the internal id moved.
-    if (discovered.identityNote) show($('discover-msg'), discovered.identityNote, 'warn');
+    // `discovered.identityNote` is deliberately NOT rendered.
+    //
+    // When a station is already monitored on another server the identifier is
+    // de-conflicted automatically — that is the feature working, not a problem
+    // to report. Announcing it in a warning-coloured box said "something went
+    // wrong" about a success, and the note itself admitted the detail does not
+    // matter ("the identifier is only used internally"). If it does not matter,
+    // do not put it on screen. The value is visible in the Identifier field for
+    // anyone who cares, and editable.
+    //
+    // The server still returns the note: it is honest metadata for an API
+    // consumer, and it explains the value in a log or a support conversation.
     // A suggested id is a decision, not a placeholder. Only fall back to
     // slugging the name when discovery could not work one out.
     idFixed = !!s.id;
@@ -414,6 +423,9 @@
       `${r.body.monitoring.added.length} channel(s), no restart needed.`, 'ok');
     $('results').classList.add('hidden');
     $('url').value = ''; discovered = null; idFixed = false;
+    // Nothing from the attempt survives the success. A note left over from
+    // discovery reads as a warning about the station that was just added.
+    clear($('discover-msg'));
     loadStations();
   });
 
