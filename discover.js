@@ -468,3 +468,140 @@ function removeStationFromConfig(config, stationId) {
 module.exports.validateStationEdit = validateStationEdit;
 module.exports.replaceStationInConfig = replaceStationInConfig;
 module.exports.removeStationFromConfig = removeStationFromConfig;
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   Who a station's alerts go to
+
+   Until this existed, recipients were one global ALERT_EMAILS list and the only
+   thing keeping one station's 3am outage out of another station's GM's inbox was
+   ALERT_STATIONS — a mute. That mute is why WPFW, KPFK and WBAI were monitored
+   for weeks, diagnosed correctly, recorded in full, and could reach nobody at
+   all. A per-station list is what lets a station be watched AND told.
+
+   THE FIELD IS SEPARATE FROM THE REST OF THE STATION EDIT, deliberately. Editing
+   channels is a technical, occasional act; editing who gets paged is a routine
+   one a station manager does themselves, and the two must not share a Save
+   button with "remove station" sitting beside it.
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+/* Deliberately permissive, and the asymmetry is the reason. A pattern strict
+   enough to reject every malformed address also rejects real ones — plus
+   addressing, long TLDs, hyphenated subdomains — and the two errors do not cost
+   the same. A wrongly REJECTED address is a support call from someone whose
+   address is fine. A wrongly ACCEPTED one bounces at the first send, visibly,
+   against a delivery record built to show exactly that. What this must catch is
+   input that is not an address at all: a bare name, a phone number, a sentence. */
+const ADDRESS_RE = /^[^\s@,;<>]+@[^\s@,;<>]+\.[A-Za-z]{2,}$/;
+
+/* A ceiling, not a policy. Nothing about the system breaks at 21 addresses; an
+   unbounded list arriving from a form is simply not something to write to disk
+   and then hand to an SMTP server on every outage. */
+const MAX_ADDRESSES = 25;
+
+/**
+ * Accepts an array of addresses, or one string holding several.
+ *
+ * Both because both will arrive: the panel sends an array, and a person pasting
+ * from a mail client sends "a@x.org, b@y.org" — which, silently treated as one
+ * address, would be one invalid recipient rather than two valid ones.
+ */
+function parseAddressList(raw) {
+  const parts = Array.isArray(raw) ? raw : [raw];
+  return parts
+    .flatMap((p) => String(p ?? '').split(/[,;\n]/))
+    .map((p) => p.trim())
+    .filter(Boolean);
+}
+
+/**
+ * Validates and normalises a station's alert block.
+ *
+ * `enabled` is kept SEPARATE from "has recipients", though an empty list also
+ * sends nothing. They mean different things and are read by different people: an
+ * empty list is an unfinished setup, while `enabled: false` is a decision — a
+ * station being trialled, or one whose staff have not been onboarded. Collapsing
+ * them would make "we turned alerts off deliberately" indistinguishable from
+ * "somebody deleted the last address by accident".
+ */
+function validateAlertsPayload(payload, existing) {
+  const errors = [];
+  const p = payload && typeof payload === 'object' ? payload : {};
+  const prev = existing && typeof existing === 'object' ? existing : {};
+
+  const out = {};
+
+  for (const field of ['recipients', 'cc']) {
+    // Absent means unchanged, NOT cleared. A panel that saves only the field it
+    // edited must not silently empty the one it did not send.
+    if (p[field] === undefined) {
+      const kept = Array.isArray(prev[field]) ? prev[field] : [];
+      if (kept.length) out[field] = [...kept];
+      continue;
+    }
+
+    const list = parseAddressList(p[field]);
+    const seen = new Set();
+    const clean = [];
+
+    for (const addr of list) {
+      if (!ADDRESS_RE.test(addr)) {
+        errors.push(`"${addr}" is not an email address`);
+        continue;
+      }
+      // Deduped case-insensitively because mail domains are, but the address is
+      // stored as typed — an operator who wrote it in mixed case should see it
+      // back that way rather than being silently corrected.
+      const key = addr.toLowerCase();
+      if (seen.has(key)) continue;
+      seen.add(key);
+      clean.push(addr);
+    }
+
+    if (clean.length > MAX_ADDRESSES) {
+      errors.push(`No more than ${MAX_ADDRESSES} ${field === 'cc' ? 'CC ' : ''}addresses`);
+      continue;
+    }
+    if (clean.length) out[field] = clean;
+  }
+
+  // An address in both lists would be mailed twice by every alert. The To list
+  // wins: it is the one whose recipients the delivery record counts as told.
+  if (out.recipients && out.cc) {
+    const to = new Set(out.recipients.map((a) => a.toLowerCase()));
+    out.cc = out.cc.filter((a) => !to.has(a.toLowerCase()));
+    if (!out.cc.length) delete out.cc;
+  }
+
+  if (p.enabled === undefined) {
+    if (prev.enabled !== undefined) out.enabled = !!prev.enabled;
+  } else {
+    out.enabled = !!p.enabled;
+  }
+
+  if (errors.length) return { ok: false, errors };
+  return { ok: true, alerts: out };
+}
+
+/**
+ * Writes an alert block onto one station, without mutating the original.
+ *
+ * An empty block is REMOVED rather than stored as `{}`, so a station that has
+ * never been configured and one whose settings were cleared read identically —
+ * which is what `alertsEnabledFor()` needs to fall back to the env-var behaviour
+ * every existing deployment still runs on.
+ */
+function setStationAlerts(config, stationId, alerts) {
+  const next = JSON.parse(JSON.stringify(config));
+  next.stations = (next.stations || []).map((s) => {
+    if (s.id !== stationId) return s;
+    const updated = { ...s };
+    if (alerts && Object.keys(alerts).length) updated.alerts = alerts;
+    else delete updated.alerts;
+    return updated;
+  });
+  return next;
+}
+
+module.exports.validateAlertsPayload = validateAlertsPayload;
+module.exports.setStationAlerts = setStationAlerts;
+module.exports.parseAddressList = parseAddressList;

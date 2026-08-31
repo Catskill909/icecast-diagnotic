@@ -151,8 +151,57 @@ const PROBE_ERROR = 'probe_error';    // our probe failed; Icecast served on
  * Only the notification is withheld, and the event says so.
  */
 function alertsEnabledFor(stream) {
+  const own = stream?.stationAlerts;
+
+  // A station configured in the panel answers for itself, and OVERRIDES the
+  // ALERT_STATIONS env var rather than being ANDed with it.
+  //
+  // This follows the rule the rest of the configuration already runs on: the
+  // store is authoritative, env only seeds it. The alternative was worse in the
+  // specific way that matters — an operator adds recipients for WPFW, saves,
+  // sees the addresses stored, and still nothing sends, because of a variable
+  // typed into a hosting panel weeks earlier and visible from nowhere in the UI.
+  // A silent no-op is the one failure a screen like this must not have.
+  if (own && Object.keys(own).length) return own.enabled !== false;
+
   if (!ALERT_STATIONS.length) return true;
   return ALERT_STATIONS.includes(String(stream?.stationId || '').toLowerCase());
+}
+
+/** Why nothing was sent, in the words of whichever rule actually withheld it. */
+function mutedReasonFor(stream) {
+  const own = stream?.stationAlerts;
+  if (own && Object.keys(own).length && own.enabled === false) {
+    return `alerts are switched off for station "${stream?.stationId || 'unknown'}"`;
+  }
+  return `alerts not enabled for station "${stream?.stationId || 'unknown'}" (ALERT_STATIONS)`;
+}
+
+/**
+ * Who this stream's alerts go to.
+ *
+ * Falls back to the global list when a station has none of its own, so every
+ * deployment that predates per-station recipients keeps behaving exactly as it
+ * did. `source` is returned because it belongs in the delivery record: "sent to
+ * 2 people" is not a useful audit line if nobody can tell whether those two were
+ * the station's own contacts or the catch-all everything falls back to.
+ */
+function recipientsFor(stream) {
+  const own = stream?.stationAlerts;
+
+  if (own && Array.isArray(own.recipients) && own.recipients.length) {
+    return {
+      recipients: [...own.recipients],
+      cc: Array.isArray(own.cc) ? [...own.cc] : [],
+      source: 'station',
+    };
+  }
+
+  return {
+    recipients: (process.env.ALERT_EMAILS || '').split(',').map((e) => e.trim()).filter(Boolean),
+    cc: (process.env.ALERT_CC || '').split(',').map((e) => e.trim()).filter(Boolean),
+    source: 'global',
+  };
 }
 
 function unconfirmedSeverity(diagnosisResult) {
@@ -313,6 +362,12 @@ function flattenChannels(cfg) {
         stationId: station.id,
         stationName: station.name,
         stationTimezone: station.timezone || 'UTC',
+        // Who to tell when this channel breaks, carried on the channel for the
+        // same reason the timezone is: reading it back off the config at the
+        // moment of sending is how an alert ends up addressed from a different
+        // configuration than the one that raised it. undefined when the station
+        // has no block of its own, which is what selects the env-var fallback.
+        stationAlerts: station.alerts,
       });
     }
   }
@@ -968,13 +1023,16 @@ async function dispatchDegradedNotices({ alerts, recoveries }) {
       audience: { listenersBefore: episode.listenersBefore },
     }));
 
-    const emailResult = await sendAlert({
+    const byStream = await sendGroupedAlert({
       kind: 'degraded',
       entries,
       scope: 'stream',
-      consolidated: entries.length > 1,
     });
-    for (const { episode } of alerts) store.updateEvent(episode.eventId, { email: emailResult });
+    for (const { stream, episode } of alerts) {
+      store.updateEvent(episode.eventId, {
+        email: byStream.get(stream.id) || { attempted: false, sent: false, reason: 'no message covered this stream' },
+      });
+    }
   }
 
   if (recoveries.length) {
@@ -985,11 +1043,10 @@ async function dispatchDegradedNotices({ alerts, recoveries }) {
       audience: { listenersBefore: episode.listenersBefore },
       durationMs,
     }));
-    await sendAlert({
+    await sendGroupedAlert({
       kind: 'recovery',
       entries,
       scope: 'stream',
-      consolidated: entries.length > 1,
       recoveredFrom: 'a degraded channel',
     });
   }
@@ -1434,10 +1491,10 @@ async function dispatchNotifications(newlyNotable, recoveries, ctx) {
       email: {
         attempted: false,
         sent: false,
-        reason: `alerts not enabled for station "${m.stream?.stationId || 'unknown'}" (ALERT_STATIONS)`,
+        reason: mutedReasonFor(m.stream),
       },
     });
-    console.log(`[Monitor] 🔕 ${m.stream?.name}: recorded, not emailed — station not in ALERT_STATIONS`);
+    console.log(`[Monitor] 🔕 ${m.stream?.name}: recorded, not emailed — ${mutedReasonFor(m.stream)}`);
   }
 
   if (newlyNotable.length > 0) {
@@ -1446,21 +1503,19 @@ async function dispatchNotifications(newlyNotable, recoveries, ctx) {
         ? 'server'
         : newlyNotable[0].diagnosis.scope;
 
-    const consolidated = newlyNotable.length > 1;
     const entries = newlyNotable.map((n) => ({
       stream: n.stream, result: n.result, diagnosis: n.diagnosis, audience: n.audience,
     }));
 
-    const emailResult = await sendAlert({
+    const byStream = await sendGroupedAlert({
       kind: 'down',
       entries,
       scope: serverScope,
-      consolidated,
     });
 
     for (const n of newlyNotable) {
       store.updateEvent(n.eventId, {
-        email: { ...emailResult, consolidated },
+        email: byStream.get(n.stream.id) || { attempted: false, sent: false, reason: 'no message covered this stream' },
         alertedAt: ctx.timestamp,
       });
       const ep = episodes[n.stream.id];
@@ -1474,11 +1529,10 @@ async function dispatchNotifications(newlyNotable, recoveries, ctx) {
       audience: r.audience, durationMs: r.durationMs,
     }));
 
-    const emailResult = await sendAlert({
+    const byStream = await sendGroupedAlert({
       kind: 'recovery',
       entries,
       scope: recoveries.length > 1 ? 'server' : recoveries[0].diagnosis.scope,
-      consolidated: recoveries.length > 1,
     });
 
     for (const r of recoveries) {
@@ -1496,7 +1550,7 @@ async function dispatchNotifications(newlyNotable, recoveries, ctx) {
         durationLabel: diagnose.fmtDuration(r.durationMs),
         sourceOutage: r.sourceOutage,
         diagnosis: r.diagnosis,
-        email: emailResult,
+        email: byStream.get(r.stream.id) || { attempted: false, sent: false, reason: 'no message covered this stream' },
       });
       console.log(`[RECOVERY] ${event.message}`);
     }
@@ -1801,6 +1855,94 @@ function renderAllStreamsTable() {
  * failure was logged and forgotten, leaving no way to tell a delivered alert
  * from a silently dropped one.
  */
+/**
+ * Will this station's outages actually reach anyone, and if not, why not.
+ *
+ * Four independent things have to be true before an alert lands, and each of
+ * them fails silently on its own: SMTP configured, the instance deployed, the
+ * station not muted, and a recipient list that is not empty. An operator who has
+ * just typed two addresses into a form and saved them is asking one question —
+ * "will I be told?" — and no stored field answers it. Answering it from the
+ * server means the panel cannot drift from what the sender actually does.
+ */
+function describeAlertRouting(stationId) {
+  const stream = streams.find((s) => s.stationId === stationId);
+  if (!stream) return { willSend: false, reason: 'no channels are configured for this station' };
+
+  const resolved = recipientsFor(stream);
+  const enabled = alertsEnabledFor(stream);
+
+  const out = {
+    recipientCount: resolved.recipients.length,
+    ccCount: resolved.cc.length,
+    // Named so the panel can distinguish "your own list" from "the fallback
+    // everyone shares" — which look identical from a count alone, and mean very
+    // different things to a station manager reading the screen.
+    recipientSource: resolved.source,
+    enabled,
+  };
+
+  if (!transporter) {
+    return { ...out, willSend: false, reason: alertsSuppressedReason || 'SMTP is not configured on this server' };
+  }
+  if (!enabled) return { ...out, willSend: false, reason: mutedReasonFor(stream) };
+  if (!resolved.recipients.length) {
+    return { ...out, willSend: false, reason: 'no recipients have been added yet' };
+  }
+
+  return { ...out, willSend: true, reason: null };
+}
+
+/**
+ * Sends one message per STATION, never one message across two.
+ *
+ * Alerts are consolidated so that an Icecast host taking five mounts down
+ * produces one email rather than five. That consolidation was written when the
+ * monitor watched one station, and it grouped by NOTHING — every stream failing
+ * in the same cycle went into a single message addressed to a single global
+ * list. The moment recipients became per-station that became a leak: the host
+ * these stations share means a server-side fault fails KPFT, WPFW, KPFK and WBAI
+ * in the same second, so the one message would have gone to whichever station
+ * happened to sort first, telling them about three stations in other cities and
+ * telling the other three nobody.
+ *
+ * Grouping lives HERE, at the single point every alert passes through, rather
+ * than at the four call sites that consolidate — two of which are the degraded
+ * paths, where it would have been just as wrong and much less likely to be
+ * noticed.
+ *
+ * Returns the delivery record per stream id, because each stream's event stores
+ * its own: two stations now means two different outcomes for one cycle, and one
+ * of them can fail while the other succeeds.
+ */
+function groupEntriesByStation(entries) {
+  const groups = new Map();
+  for (const entry of entries || []) {
+    // A stream with no station groups under '' — alone, and never folded in
+    // with a real station's message. An unattributed failure is exactly the
+    // case where guessing an owner sends it to the wrong people.
+    const key = String(entry.stream?.stationId || '');
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(entry);
+  }
+  return [...groups.values()];
+}
+
+async function sendGroupedAlert(opts) {
+  const byStream = new Map();
+
+  for (const entries of groupEntriesByStation(opts.entries)) {
+    const consolidated = entries.length > 1;
+    const result = await sendAlert({ ...opts, entries, consolidated });
+    // Stored on the event so the history page can still say a message covered
+    // several streams — now meaning several streams OF THIS STATION.
+    const record = { ...result, consolidated };
+    for (const entry of entries) byStream.set(entry.stream.id, record);
+  }
+
+  return byStream;
+}
+
 async function sendAlert(opts) {
   const attemptedAt = new Date().toISOString();
 
@@ -1813,13 +1955,33 @@ async function sendAlert(opts) {
     };
   }
 
-  const recipients = (process.env.ALERT_EMAILS || '').split(',').map((e) => e.trim()).filter(Boolean);
+  // Addressed from the station the entries belong to. Every caller already
+  // passes the streams involved, so resolving it HERE rather than asking each
+  // one to pass a recipient list means a new alert type cannot be added that
+  // silently mails the global fallback — it gets the right list by default.
+  //
+  // sendGroupedAlert() guarantees the entries share a station; a message that
+  // spanned two would be addressed to the first one's staff.
+  const audienceFor = opts.entries?.[0]?.stream;
+  const resolved = opts.recipients
+    ? { recipients: opts.recipients, cc: opts.cc || [], source: 'explicit' }
+    : recipientsFor(audienceFor);
+
+  const recipients = resolved.recipients;
   if (recipients.length === 0) {
-    console.warn('[Monitor] No ALERT_EMAILS configured');
-    return { attempted: false, sent: false, reason: 'no recipients configured', attemptedAt };
+    console.warn(`[Monitor] No alert recipients configured for station "${audienceFor?.stationId || 'unknown'}"`);
+    return {
+      attempted: false,
+      sent: false,
+      reason: resolved.source === 'station'
+        ? 'no recipients configured for this station'
+        : 'no recipients configured',
+      recipientSource: resolved.source,
+      attemptedAt,
+    };
   }
 
-  const ccRecipients = (process.env.ALERT_CC || '').split(',').map((e) => e.trim()).filter(Boolean);
+  const ccRecipients = resolved.cc;
   const fromAddr = process.env.SMTP_FROM || process.env.SMTP_USER;
 
   const { subject, html } = composeAlert(opts);
@@ -1838,6 +2000,10 @@ async function sendAlert(opts) {
       sentAt: new Date().toISOString(),
       recipients,
       cc: ccRecipients,
+      // "Sent to 2 people" is not an audit line if nobody can tell whether those
+      // two were this station's own contacts or the catch-all list everything
+      // falls back to. Redaction keeps this — it names no one.
+      recipientSource: resolved.source,
       subject,
       messageId: info?.messageId || null,
       accepted: info?.accepted?.length ?? recipients.length,
@@ -1852,6 +2018,7 @@ async function sendAlert(opts) {
       attemptedAt,
       recipients,
       cc: ccRecipients,
+      recipientSource: resolved.source,
       subject,
       error: err.message,
       errorCode: err.code || null,
@@ -2523,6 +2690,34 @@ function previewWeeklyRoundup(windowMs = WEEKLY_ROUNDUP_WINDOW_MS) {
 }
 
 /**
+ * Who the weekly roundup goes to.
+ *
+ * ALERT_CC is copied for the same reason it is on every alert: it is the monitor
+ * owner's address, and the roundup is the ONE message that arrives in a week when
+ * nothing went wrong — which is the only thing that distinguishes a quiet week
+ * from a monitor that has silently stopped running. Omitting it meant whoever
+ * runs the monitor received every 3am outage alert and never the report saying
+ * the system was still alive. Reported by the operator on 2026-08-31, who had
+ * had no roundup at all while alerts arrived normally.
+ *
+ * An explicit `to` sends to that one address and copies NOBODY. That parameter
+ * exists so a person can check the message, and quietly mailing the whole
+ * station every time somebody previews it is the opposite of what it is for.
+ */
+function roundupRecipients(to) {
+  if (to) return { recipients: [to], cc: [] };
+
+  const recipients = (process.env.WEEKLY_ROUNDUP_EMAILS || process.env.ALERT_EMAILS || '')
+    .split(',').map((e) => e.trim()).filter(Boolean);
+
+  const cc = (process.env.ALERT_CC || '').split(',').map((e) => e.trim()).filter(Boolean)
+    // An address on both lists would receive the roundup twice.
+    .filter((a) => !recipients.some((r) => r.toLowerCase() === a.toLowerCase()));
+
+  return { recipients, cc };
+}
+
+/**
  * Builds and sends the roundup. Returns the same delivery-outcome shape as
  * sendAlert, so a failure is reported rather than logged and forgotten.
  */
@@ -2530,10 +2725,7 @@ async function sendWeeklyRoundup({ to, windowMs = WEEKLY_ROUNDUP_WINDOW_MS } = {
   const attemptedAt = new Date().toISOString();
   if (!transporter) return { attempted: false, sent: false, reason: 'SMTP not configured', attemptedAt };
 
-  const recipients = to
-    ? [to]
-    : (process.env.WEEKLY_ROUNDUP_EMAILS || process.env.ALERT_EMAILS || '')
-      .split(',').map((e) => e.trim()).filter(Boolean);
+  const { recipients, cc: ccRecipients } = roundupRecipients(to);
   if (!recipients.length) {
     return { attempted: false, sent: false, reason: 'no recipients configured', attemptedAt };
   }
@@ -2548,20 +2740,23 @@ async function sendWeeklyRoundup({ to, windowMs = WEEKLY_ROUNDUP_WINDOW_MS } = {
   const { subject, html } = buildWeeklyRoundup(rollup);
 
   try {
-    const info = await transporter.sendMail({
+    const mailOptions = {
       from: process.env.SMTP_FROM || process.env.SMTP_USER,
       to: recipients.join(', '),
       subject,
       html,
-    });
-    console.log(`[Monitor] 📊 Weekly roundup sent to ${recipients.length} recipient(s) — ${subject}`);
+    };
+    if (ccRecipients.length) mailOptions.cc = ccRecipients.join(', ');
+
+    const info = await transporter.sendMail(mailOptions);
+    console.log(`[Monitor] 📊 Weekly roundup sent to ${recipients.length} recipient(s)${ccRecipients.length ? ` + ${ccRecipients.length} CC` : ''} — ${subject}`);
     return {
       attempted: true, sent: true, attemptedAt, sentAt: new Date().toISOString(),
-      recipients, subject, messageId: info?.messageId || null,
+      recipients, cc: ccRecipients, subject, messageId: info?.messageId || null,
     };
   } catch (err) {
     console.error('[Monitor] 📊 FAILED to send weekly roundup:', err.message);
-    return { attempted: true, sent: false, attemptedAt, recipients, subject, error: err.message };
+    return { attempted: true, sent: false, attemptedAt, recipients, cc: ccRecipients, subject, error: err.message };
   }
 }
 
@@ -2636,13 +2831,13 @@ function checkWeeklyRoundup() {
 module.exports = {
   isDeployedInstance,
   start, stop, getStreams, getStatus, getHistory, getIncidents, getConfig, sendTestAlert,
-  getPeriodRollup, sendWeeklyRoundup, previewWeeklyRoundup, previewAlertForEvent,
+  getPeriodRollup, sendWeeklyRoundup, previewWeeklyRoundup, previewAlertForEvent, roundupRecipients,
   getEvents, getSamples, getRollups, getListeners, getSummary, getOverallUptime, getAudioUptime, getCoverageStart,
   getDailyBuckets, getCauseBreakdown, getStorageInfo, getSnapshot,
   getStationConfig: () => store.getStationConfig(),
   getStations, streamIdsFor,
   reloadConfig,
-  alertsEnabledFor,
+  alertsEnabledFor, recipientsFor, mutedReasonFor, describeAlertRouting, groupEntriesByStation,
   saveStationConfig,
   abandonEpisode,
   // Exported for tests.

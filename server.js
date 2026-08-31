@@ -91,11 +91,20 @@ app.use((req, res, next) => {
   return res.status(401).json({ error: 'Authentication required' });
 });
 
-// The admin page always requires a session, even when reads are otherwise
-// public. Its API calls are protected either way, so an anonymous visitor could
-// only ever have seen an empty form — but a browsable administration screen
-// invites people to try, and there is no reason to serve one.
-const ADMIN_PAGES = new Set(['/admin.html', '/admin.js', '/admin.css']);
+// The admin pages always require a session, even when reads are otherwise
+// public. Their API calls are protected either way, so an anonymous visitor
+// could only ever have seen an empty form — but a browsable administration
+// screen invites people to try, and there is no reason to serve one.
+//
+// The alerts screen is in here for a stronger reason than the station editor:
+// what it puts on screen is a list of named people's email addresses. Its own
+// stylesheet must be listed too — admin.css is already gated, and a page that
+// borrows it while not being gated itself renders unstyled for exactly the
+// visitor who should not have reached it.
+const ADMIN_PAGES = new Set([
+  '/admin.html', '/admin.js', '/admin.css',
+  '/station.html', '/station.js', '/station.css',
+]);
 app.use((req, res, next) => {
   if (!ADMIN_PAGES.has(req.path)) return next();
   if (auth.currentSession(req)) return next();
@@ -386,6 +395,57 @@ app.delete('/api/stations/:id', auth.requireAuth, (req, res) => {
     removed: { id: station.id, name: station.name, channels: (station.channels || []).map((c) => c.id) },
     historyRetained: true,
     monitoring: { removed: reload.removed, total: reload.total },
+  });
+});
+
+// ── Alert recipients ────────────────────────────────────────────────────────
+// Who a station's alerts go to. A route of its own rather than a field on the
+// station edit, because the two are different jobs for different people: editing
+// channels is technical and occasional, editing who gets paged is routine and
+// belongs to the station. Sharing a Save button would also put this one click
+// away from "remove station".
+//
+// Authenticated to WRITE because these are people's addresses. Reading them is
+// covered by GET /api/stations, which returns the full configuration to a
+// session and an allowlisted projection to everyone else — so the addresses are
+// never in an anonymous response.
+// Would this station's next outage actually reach anyone? Authenticated
+// because the answer names counts and the rule that withheld delivery, which
+// together describe a station's notification setup.
+app.get('/api/stations/:id/alerts/preview', auth.requireAuth, (req, res) => {
+  const config = monitor.getStationConfig();
+  if (!config) return res.status(503).json({ error: 'Configuration not initialised yet' });
+  if (!(config.stations || []).some((s) => s.id === req.params.id)) {
+    return res.status(404).json({ error: `No station with id "${req.params.id}"` });
+  }
+  res.json({ effective: monitor.describeAlertRouting(req.params.id) });
+});
+
+app.put('/api/stations/:id/alerts', auth.requireAuth, (req, res) => {
+  const config = monitor.getStationConfig();
+  if (!config) return res.status(503).json({ error: 'Configuration not initialised yet' });
+
+  const station = (config.stations || []).find((s) => s.id === req.params.id);
+  if (!station) return res.status(404).json({ error: `No station with id "${req.params.id}"` });
+
+  const v = discover.validateAlertsPayload(req.body, station.alerts);
+  if (!v.ok) return res.status(400).json({ errors: v.errors });
+
+  const next = discover.setStationAlerts(config, station.id, v.alerts);
+  monitor.saveStationConfig(next);
+
+  // The saved station is re-read rather than echoing the payload back: a field
+  // that was dropped in normalisation must be visibly absent to the panel, not
+  // reflected back as though it had been stored.
+  const saved = (monitor.getStationConfig().stations || []).find((s) => s.id === station.id);
+
+  res.json({
+    station: { id: saved.id, name: saved.name },
+    alerts: saved.alerts || null,
+    // Stated because it is the question the operator is actually asking, and the
+    // answer depends on rules — the station block, the env fallback, whether any
+    // recipients exist at all — that no single stored field expresses.
+    effective: monitor.describeAlertRouting(station.id),
   });
 });
 

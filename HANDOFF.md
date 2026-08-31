@@ -18,7 +18,7 @@ shortest path to being useful.
 **Orient yourself (2 minutes).**
 
 ```bash
-npm test                                   # 246 tests, all should pass
+npm test                                   # 295 tests, all should pass
 curl -s https://kpft-icecast.supersoul.top/api/stations | jq   # what it monitors
 curl -s https://kpft-icecast.supersoul.top/api/status   | jq   # how it is doing
 ```
@@ -78,11 +78,16 @@ regression, however green the tests are.**
 
 ## 2. Current state
 
-- **Live and healthy.** 3 stations (KPFT Houston, WPFW Washington DC, KPFK Los
-  Angeles), 5 channels, 1 Icecast host, ~456 events retained since 2026-08-04.
-- **All three stations share one Icecast host**, which is the whole affiliate
-  economics: one snapshot fetch per cycle serves all of them.
-- **246 tests**, `npm test`, Node's built-in runner, no test framework dependency.
+- **Live and healthy.** 4 stations (KPFT Houston, WPFW Washington DC, KPFK Los
+  Angeles, WBAI New York), 8 channels, **2 Icecast hosts**, 476 events retained
+  since 2026-08-04. Verified against production 2026-08-31: 99.55% audio uptime
+  over 7 days, every channel up.
+- **The second host is no longer hypothetical.** WBAI runs on
+  `streaming.wbai.org` while the other three share `streams.pacifica.org:9000`,
+  so the host-as-shared-pool design (§3.6) is now carrying real traffic rather
+  than being argued for. One snapshot fetch per host per cycle serves every
+  station on it.
+- **295 tests**, `npm test`, Node's built-in runner, no test framework dependency.
 - **Dependencies: express, nodemailer 9, dotenv.** That is the whole list, and it
   is deliberate. Crypto, testing and HTTP are all Node built-ins. Adding a
   dependency should require an argument.
@@ -292,6 +297,46 @@ rounding error: `/live_64` regularly carries a third of KPFT Main's audience
 
 ---
 
+## 5c. What changed on 2026-08-31: per-station alert recipients
+
+Recipients were one global `ALERT_EMAILS` list, and `ALERT_STATIONS` — a mute —
+was the only thing keeping one station's outage out of another station's inbox.
+The cost was visible in production on the morning this was built: three confirmed
+WPFW source-encoder dropouts in 27 hours, correctly diagnosed, fully recorded,
+**and emailed to nobody at all**, because WPFW was not on the list. The station
+was being watched and could not be told.
+
+| Change | Why |
+|---|---|
+| `alerts: { enabled, recipients, cc }` per station, in the config store | Configuration the operator edits must live where the store is authoritative, or a redeploy reverts it |
+| `/station.html` — a separate GM-facing screen | §6's "two panels, not one" decision. Editing channels is technical and occasional; editing who gets paged is routine and belongs to the station, and must not share a Save button with "remove station" |
+| **`sendGroupedAlert()` — one message per station** | The consolidation was written for a single station and grouped by nothing. Four stations on shared hosts fail in the same cycle, so one message would have reached one station's staff and named three others' outages |
+| Recipients resolved inside `sendAlert()` from the entries' own station | So a new alert type gets the right list by default rather than by remembering to pass one |
+| `describeAlertRouting()` and the routing banner | Four independent conditions must hold before mail goes out and each fails silently. The screen states the verdict and names the blocker, computed server-side from the same rules the sender uses |
+| The station block overrides `ALERT_STATIONS` | The alternative is a screen that saves addresses and sends nothing, blocked by a hosting-panel variable no page displays |
+| `/station.*` added to `ADMIN_PAGES` | It displays named people's email addresses. Found because its stylesheet returned 302 while the page returned 200 |
+| `recipientSource` on the delivery record | "Sent to 2 people" is not an audit line if nobody can tell whether those two were the station's own contacts or the global fallback |
+
+### Corrections worth inheriting
+
+- **The handoff's own figures were stale and were corrected**, not merely
+  updated: it said 3 stations / 5 channels / 1 host / 246 tests. Production on
+  2026-08-31 is 4 stations, 8 channels, **2 hosts** — WBAI on
+  `streaming.wbai.org`. The second host makes §3.6's shared-pool design load-
+  bearing rather than anticipatory.
+- **`redact.js` needed no change**, which was the point of writing it as an
+  allowlist: per-station recipients were withheld from anonymous callers the
+  moment they existed. Verified against a running instance — zero occurrences of
+  a saved address in the anonymous `/api/stations` response — and now asserted in
+  `test/redact.test.js` rather than left as a claim.
+- **Two of the four consolidating call sites were the `degraded` paths**, which
+  the first pass would have missed. They consolidate exactly like the outage
+  paths and would have leaked the same way, less visibly. Fixing this at
+  `sendGroupedAlert()` rather than at the call sites is what makes that
+  irrelevant.
+
+---
+
 ## 6. Where it is going
 
 Full reasoning in [`icecast-app-future-dev.md`](icecast-app-future-dev.md) §5 and §10.
@@ -312,10 +357,12 @@ Build order, with the current position marked:
    a picker. Without it, adding a second station made the first one's uptime
    silently wrong
 6. ✅ Edit and remove stations — ids immutable, history retained on removal
-7. ⬅ **NEXT: per-station alert recipients.** Alert emails are still one global
-   list. Today `ALERT_STATIONS=["kpft"]` is the only thing preventing WPFW's GM
-   being paged about KPFT — which means WPFW and KPFK are monitored and nobody
-   is ever told about them. This is the first genuinely GM-facing screen
+7. ✅ **Per-station alert recipients** (2026-08-31). Each station has its own
+   `alerts: { enabled, recipients, cc }` block in the config store, edited at
+   `/station.html` — the first genuinely GM-facing screen. A station with none
+   falls back to `ALERT_EMAILS`, so existing deployments are unchanged; a station
+   configured in the app overrides the `ALERT_STATIONS` env mute. **The load-
+   bearing part is that one message never spans two stations** — see §8
 8. ✅ Listener analytics page — audience as its own destination, station-scoped,
    with per-channel and per-mount breakdowns and CSV export
 9. 🔶 **Audience page phase 1** — [`docs/AUDIENCE-ROADMAP.md`](docs/AUDIENCE-ROADMAP.md)
@@ -324,9 +371,10 @@ Build order, with the current position marked:
    through an outage, per-mount trend over time
 10. Fleet view
 11. **SMS alerting** — [`docs/SMS-ALERTING.md`](docs/SMS-ALERTING.md). ~$3–4.50/mo
-    plus a one-time ~$15–20 10DLC registration. Depends on item 7: phone numbers
-    are per-station in exactly the way addresses are, and building SMS against
-    the current global list would build that routing twice
+    plus a one-time ~$15–20 10DLC registration. **Unblocked** — item 7 shipped
+    the per-station routing it was waiting for. Phone numbers go in the same
+    `alerts` block, and `sendGroupedAlert()` is the seam that already guarantees
+    one station's incident reaches only that station's people
 12. Roles and multi-user — **only when a real GM asks for a login**
 
 Two design rules already decided:
@@ -377,6 +425,38 @@ Reviewed end to end on 2026-08-27; findings and reasoning in
 ## 8. Traps
 
 - **Deploys are manual.** Pushing is not shipping. Say so explicitly.
+- **ONE ALERT MESSAGE MUST NEVER SPAN TWO STATIONS.** Alerts are consolidated so
+  an incident produces one email rather than five. That consolidation predates
+  multi-station support and grouped by NOTHING. Now that recipients are
+  per-station, and because these stations share Icecast hosts — so a server-side
+  fault fails all of them in the same second — an ungrouped consolidated message
+  goes to whichever station sorts first, tells them about stations in other
+  cities, and tells everyone else nothing. Grouping lives in
+  `sendGroupedAlert()`, the single point every alert passes through, and
+  `sendAlert()` resolves recipients from the entries' own station rather than
+  from a list a caller passes in. **A new alert type must call
+  `sendGroupedAlert()`, not `sendAlert()` directly** — the two dead-air paths
+  call `sendAlert()` and are safe only because they are single-stream by
+  construction. `test/alert-recipients.test.js` reproduces the four-station
+  shared-host cycle.
+- **A station configured in the app overrides `ALERT_STATIONS`.** Deliberate, and
+  it will look wrong to anyone who reads the env var as a hard kill-switch. The
+  store is authoritative over env everywhere else in this system, and the
+  alternative fails silently in the way that matters most: an operator adds
+  recipients, saves, sees them stored, and nothing sends — because of a variable
+  typed into a hosting panel weeks earlier that no screen displays. To mute a
+  station now, switch it off on its own alerts screen.
+- **An empty `alerts` block is not a decision.** `{}` must read as "never
+  configured" so the env fallback still applies; `enabled: false` is the
+  decision. `setStationAlerts()` deletes an empty block rather than storing one.
+  Collapsing the two makes "we turned this off deliberately" and "somebody
+  deleted the last address" indistinguishable.
+- **A gated page and its assets must be gated together.** `ADMIN_PAGES` in
+  server.js lists individual paths, so both directions break quietly: an
+  un-gated page borrowing a gated stylesheet renders unstyled for exactly the
+  visitor being turned away, and a gated stylesheet whose page is not gated
+  protects nothing. `/station.html` shipped with this bug and it was caught by a
+  302 on a stylesheet. `test/admin-pages-gate.test.js` walks the set.
 - **Icecast counts our own probes as listeners.** Measured: one connection took
   `/kpfk` from 1 listener to 2. So the Icecast snapshot is fetched BEFORE any
   probe opens a connection, and the non-primary mounts are probed only every
@@ -508,7 +588,7 @@ Reviewed end to end on 2026-08-27; findings and reasoning in
 ## 9. Verifying a change
 
 ```bash
-npm test                                             # 246 tests
+npm test                                             # 295 tests
 node --check server.js monitor.js store.js diagnose.js auth.js
 
 # Against production

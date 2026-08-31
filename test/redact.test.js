@@ -178,3 +178,40 @@ test('no advice or error-catalogue constant contains an email address', () => {
   const offenders = literals.filter((s) => EMAIL_RE.test(s) && (EMAIL_RE.lastIndex = 0) === 0);
   assert.deepEqual(offenders, [], `address-bearing literals in diagnose.js: ${offenders.join(' ')}`);
 });
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   Per-station alert recipients are not published
+
+   The allowlist in publicStationConfig() was written before this field existed,
+   specifically so that a field added later would be withheld without anyone
+   remembering to come back here. This asserts that it worked — the claim is
+   worth nothing untested, and the cost of it being wrong is every station's
+   staff addresses served to anyone who loads /api/stations.
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+test('a station\'s alert recipients are withheld from anonymous callers', () => {
+  const config = {
+    version: 1,
+    hosts: [{ id: 'h', host: 'streams.example.org:9000', statusUrl: 'https://u:p@streams.example.org:9000/admin/stats.xml' }],
+    stations: [{
+      id: 'wpfw',
+      name: 'WPFW Washington DC',
+      timezone: 'America/New_York',
+      alerts: { enabled: true, recipients: ['gm@wpfw.org'], cc: ['eng@pacifica.org'] },
+      channels: [{ id: 'wpfw', name: 'WPFW', url: 'https://streams.example.org:9000/wpfw_128', mounts: ['/wpfw_128'] }],
+    }],
+  };
+
+  const pub = publicStationConfig(config);
+  const serialised = JSON.stringify(pub);
+
+  assert.equal(pub.stations[0].alerts, undefined, 'the alert block must not be projected');
+  assert.equal(/gm@wpfw\.org|eng@pacifica\.org/.test(serialised), false,
+    'no recipient address may appear anywhere in the public response');
+  assert.equal(serialised.includes('u:p@'), false, 'nor may a status URL carrying credentials');
+
+  // The station itself is still fully described — withholding must not turn
+  // into hiding what is monitored, which is the part the public pages render.
+  assert.equal(pub.stations[0].name, 'WPFW Washington DC');
+  assert.equal(pub.stations[0].channels[0].id, 'wpfw');
+});

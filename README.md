@@ -315,6 +315,8 @@ forgets to set a password gets a broken button, not a silent hole.
 | Route | Access |
 |---|---|
 | `/api/test-alert`, `/api/weekly-roundup` | **Authenticated** — both send mail |
+| `PUT /api/stations/:id/alerts` | **Authenticated** — sets who a station emails |
+| `/station.html`, `/admin.html` and their assets | **Authenticated** — the alerts screen displays people's addresses |
 | `POST /api/login`, `/api/logout`, `GET /api/me` | Public |
 | `/api/events`, `/api/stations`, `/api/diagnostics` | Public, but **redacted** — see below |
 | Everything else | Public by default; set `REQUIRE_LOGIN_FOR_READ=true` to gate reads too |
@@ -366,6 +368,42 @@ need a UI and so never conflict.
 `GET /api/stations` returns the live configuration: the host pool, the stations,
 and each station's channels. To overwrite a bad seed, set `CONFIG_RESEED=true`
 and restart — wiping the volume would also destroy the incident history.
+
+### Who gets alerted
+
+**Alert recipients are per station**, edited at `/station.html` and stored in the
+data volume beside the rest of the configuration. Before this, recipients were a
+single global list and `ALERT_STATIONS` was the only thing stopping one station's
+3am outage reaching another station's staff — which meant every station not named
+in that variable was monitored, diagnosed and recorded, and could reach nobody.
+
+| Station has | Alerts go to |
+|---|---|
+| its own `alerts.recipients` | those addresses, plus its own `alerts.cc` |
+| nothing | `ALERT_EMAILS` / `ALERT_CC` — so existing deployments are unchanged |
+
+`alerts.enabled: false` mutes a station while still recording everything: the
+setting for a station being trialled, or one whose staff are not onboarded yet.
+It is kept separate from an empty recipient list on purpose — an empty list is an
+unfinished setup, a disabled station is a decision, and collapsing them makes
+"we turned this off deliberately" indistinguishable from "someone deleted the
+last address by accident".
+
+**A station configured in the app overrides `ALERT_STATIONS`.** This follows the
+rule the rest of the configuration already runs on — the store is authoritative,
+env only seeds it — and the alternative fails in the worst available way: an
+operator adds recipients, saves, sees them stored, and nothing ever sends,
+because of a variable typed into a hosting panel weeks earlier and visible from
+nowhere in the UI.
+
+**One alert message never spans two stations.** Alerts are consolidated so that
+one incident produces one email rather than five, and that consolidation was
+written when the monitor watched a single station — it grouped by nothing at all.
+Because these stations share an Icecast host, a server-side fault fails all of
+them in the same second, so a single consolidated message would have gone to
+whichever station sorted first: telling them about stations in other cities, and
+telling everyone else nothing. Grouping happens in `sendGroupedAlert()`, the one
+point every alert passes through, so a new alert type cannot reintroduce it.
 
 **Hosts are a shared pool, not a property of a station.** Many stations share one
 Icecast server (all five Pacifica sister stations are on one; ~28 affiliates on
@@ -430,9 +468,17 @@ SMTP_PASS=YourPasswordHere
 SMTP_FROM="KPFT Stream Monitor <monitor@example.com>"
 
 # ── Alert Recipients ─────────────────────────────────
+# The FALLBACK list. Each station can have its own recipients, set in the app
+# at /station.html and stored in the data volume; a station with none of its
+# own falls back to these, so a single-station deployment needs nothing else.
 ALERT_EMAILS=manager@example.com,engineer@example.com
-ALERT_STATIONS=                  # Station ids that may email; empty = all
-ALERT_CC=monitor-owner@example.com
+ALERT_STATIONS=                  # Station ids that may email; empty = all.
+                                 # A station configured in the app OVERRIDES
+                                 # this — see "Who gets alerted" below.
+ALERT_CC=monitor-owner@example.com   # Copied on every alert AND on the weekly
+                                     # roundup — this is the monitor owner, and
+                                     # the roundup is what tells them the
+                                     # monitor is still running at all.
 
 # ── Dashboard Link in Emails ─────────────────────────
 DASHBOARD_URL=https://kpft-icecast.supersoul.top
@@ -470,7 +516,9 @@ ALERT_ON_HARMLESS_OUTAGE=false
 WEEKLY_ROUNDUP=true             # false disables it entirely
 WEEKLY_ROUNDUP_DAY=1            # 0=Sun … 6=Sat (default: 1, Monday)
 WEEKLY_ROUNDUP_HOUR=9           # 24h clock, in STATION_TZ (default: 9)
-WEEKLY_ROUNDUP_EMAILS=          # falls back to ALERT_EMAILS when empty
+WEEKLY_ROUNDUP_EMAILS=          # falls back to ALERT_EMAILS when empty.
+                                # Overrides who it is FOR; ALERT_CC is still
+                                # copied either way.
 STATION_TZ=America/Chicago      # timezone for all email timestamps + schedule
 
 # ── Retention ────────────────────────────────────────
@@ -604,6 +652,12 @@ as a whole one.
 | `?to=user@example.com` | sends it to one address instead of the configured recipients |
 | `?days=7` | window to report on (default 7) |
 
+It goes to `WEEKLY_ROUNDUP_EMAILS` (falling back to `ALERT_EMAILS`), **copying
+`ALERT_CC`** — the same people an alert reaches. Until 2026-08-31 it omitted the
+CC, so an address configured only as `ALERT_CC` received every 3am outage alert
+and never the one message that says the monitor is still alive. A `?to=` send
+copies nobody: it is for checking the message, not for mailing the station.
+
 The scheduled job sends this on its own; this route exists so the message can be checked
 without waiting a week. Last-sent state is persisted in `events.json` under `meta`, keyed by
 station-local date — so a container that redeploys six times on a Monday still sends one
@@ -614,6 +668,27 @@ than skipping the week.
 Re-renders the alert email for a stored event, from that event's own diagnosis and frozen
 audience figures. An email template that can only be seen during an outage is one nobody
 ever checks.
+
+### `PUT /api/stations/:id/alerts`
+Sets a station's alert recipients. Authenticated — these are people's addresses.
+
+```json
+{ "recipients": ["gm@station.org"], "cc": ["engineer@example.org"], "enabled": true }
+```
+
+`recipients` accepts an array or one comma-separated string, deduplicates
+case-insensitively while storing each address as typed, and drops any address
+that also appears in `recipients` from `cc` so nobody is mailed twice. **A field
+that is omitted is left unchanged, not cleared** — a panel saving only the field
+it edited must not silently empty the other. An explicitly empty array does
+clear, because removing the last address is a real act.
+
+The response includes `effective`: whether mail will actually go out, and if not,
+which of the four independent conditions is blocking it — SMTP unconfigured, not
+a deployed instance, station muted, or no recipients.
+
+### `GET /api/stations/:id/alerts/preview`
+The same `effective` verdict without saving anything.
 
 ### `GET /api/diagnostics`
 Live Icecast server state — the full mount inventory including other Pacifica stations, which is what the classifier correlates against.
