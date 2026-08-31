@@ -564,7 +564,7 @@
      * TEST is the only verification this screen offers, deliberately (see
      * admin-dev.md §6.3). It proves the address works BEFORE an outage proves it
      * does not. It sends to that one address and nobody else. */
-    box.addEventListener('click', (e) => {
+    box.addEventListener('click', async (e) => {
       const d = alertDrafts[s.id];
       const msg = box.querySelector('[data-msg]');
 
@@ -612,7 +612,26 @@
 
       const drop = e.target.closest('[data-drop-addr]');
       if (drop) {
-        d.recipients.splice(Number(drop.dataset.i), 1);
+        const i = Number(drop.dataset.i);
+        const addr = d.recipients[i];
+        const left = d.recipients.filter((_, j) => j !== i);
+
+        const ok = await confirmAction({
+          title: `Stop alerting ${addr}?`,
+          body: [
+            `<strong>${esc(addr)}</strong> stops receiving <strong>${esc(s.name)}</strong>'s
+             outage alerts, recovery notices and weekly report.`,
+            left.length
+              ? `${left.length} address${left.length === 1 ? '' : 'es'} will still be alerted.`
+              : `This is the <strong>last address</strong> on this station. Nobody will be
+                 told when it goes off air — outages are still recorded, but no email is sent.`,
+          ],
+          keep: 'Nothing changes until you press <strong>Save recipients</strong> — reopening the panel puts it back.',
+          confirmLabel: 'Remove address',
+        });
+        if (!ok) return;
+
+        d.recipients.splice(i, 1);
         d.editing = null;
         clear(msg);
         paintAlerts(s.id);
@@ -717,6 +736,121 @@
    * it orphans it, and the channel silently restarts from zero while uptime is
    * computed from the empty one. A NEW channel gets an id generated from its
    * name, shown before saving so it is never a surprise. */
+  /* ── Live mount inventory ───────────────────────────────────────────────── */
+
+  /* What the station's Icecast host is serving right now, so a mount can be
+   * checked BEFORE it is saved rather than discovered wrong weeks later.
+   *
+   * The check is free — the monitor already holds the inventory — and it opens
+   * no connection. That matters: Icecast counts every connection as a listener,
+   * ours included, so a real probe is something a person presses, never
+   * something a form does while you type. Presence in the inventory catches the
+   * typo, which is the mistake that actually happens.
+   */
+  const mountCache = {};
+
+  async function loadMounts(stationId) {
+    if (mountCache[stationId]) return mountCache[stationId];
+    const res = await api(`/api/stations/${encodeURIComponent(stationId)}/mounts`);
+    if (!res || !res.ok) return null;
+    mountCache[stationId] = res.body;
+    return res.body;
+  }
+
+  /** The datalist backing every mount field in one editor. */
+  function mountDatalistHtml(id, inv) {
+    if (!inv || !inv.available) return '';
+    return `<datalist id="${esc(id)}">${
+      inv.mounts.map((m) => {
+        const bits = [];
+        if (m.name) bits.push(m.name);
+        if (m.listeners != null) bits.push(`${m.listeners} listening`);
+        if (m.assignedTo) bits.push(`already on ${m.assignedTo.channelId}`);
+        return `<option value="${esc(m.path)}"${bits.length ? ` label="${esc(bits.join(' · '))}"` : ''}>`;
+      }).join('')
+    }</datalist>`;
+  }
+
+  /* ── Timezones ──────────────────────────────────────────────────────────── */
+
+  /* US zones first, named by the city an operator actually knows.
+   *
+   * This was a free-text field holding an IANA identifier. "America/Chicago" is
+   * not something most people can produce from memory, a typo is only caught on
+   * save, and the identifier says nothing about which offset it means —
+   * Houston is Central, and nothing in the string says Houston.
+   *
+   * Every US station is in one of the first eight. Arizona is listed separately
+   * because it does not observe daylight saving, which is exactly the kind of
+   * thing that silently shifts a weekly report by an hour for half the year.
+   */
+  const US_ZONES = [
+    ['America/New_York', 'Eastern — New York, Washington DC, Atlanta'],
+    ['America/Chicago', 'Central — Chicago, Houston, New Orleans'],
+    ['America/Denver', 'Mountain — Denver, Salt Lake City'],
+    ['America/Phoenix', 'Mountain, no daylight saving — Phoenix, Arizona'],
+    ['America/Los_Angeles', 'Pacific — Los Angeles, Seattle, San Francisco'],
+    ['America/Anchorage', 'Alaska — Anchorage'],
+    ['Pacific/Honolulu', 'Hawaii — Honolulu'],
+    ['America/Puerto_Rico', 'Atlantic — San Juan, Puerto Rico'],
+  ];
+
+  const NEARBY_ZONES = [
+    ['America/Toronto', 'Eastern — Toronto'],
+    ['America/Vancouver', 'Pacific — Vancouver'],
+    ['America/Mexico_City', 'Central — Mexico City'],
+    ['Europe/London', 'London'],
+    ['Europe/Berlin', 'Berlin, Paris, Madrid'],
+    ['UTC', 'UTC — no local time'],
+  ];
+
+  /** The current offset, so a reader can sanity-check the choice at a glance. */
+  function zoneOffsetLabel(tz) {
+    try {
+      const name = new Intl.DateTimeFormat('en-US', { timeZone: tz, timeZoneName: 'short' })
+        .formatToParts(new Date()).find((p) => p.type === 'timeZoneName')?.value;
+      return name ? ` (${name})` : '';
+    } catch { return ''; }
+  }
+
+  function zoneOption(value, label, current) {
+    const sel = value === current ? ' selected' : '';
+    return `<option value="${esc(value)}"${sel}>${esc(label)}${esc(zoneOffsetLabel(value))}</option>`;
+  }
+
+  function timezoneSelectHtml(current) {
+    const listed = new Set([...US_ZONES, ...NEARBY_ZONES].map(([v]) => v));
+
+    // Every other IANA zone, so nothing is unreachable — but below the ones a US
+    // station will actually pick.
+    let rest = [];
+    try {
+      rest = (Intl.supportedValuesOf ? Intl.supportedValuesOf('timeZone') : [])
+        .filter((z) => !listed.has(z));
+    } catch { rest = []; }
+
+    // A stored value that is in no list must still appear, and stay selected —
+    // otherwise opening the editor silently changes the station's timezone to
+    // whatever happens to be first.
+    const orphan = current && !listed.has(current) && !rest.includes(current)
+      ? `<option value="${esc(current)}" selected>${esc(current)}${esc(zoneOffsetLabel(current))}</option>`
+      : '';
+
+    return `
+      <select data-f="tz" class="tz-select">
+        ${orphan}
+        <optgroup label="United States">
+          ${US_ZONES.map(([v, l]) => zoneOption(v, l, current)).join('')}
+        </optgroup>
+        <optgroup label="Nearby and common">
+          ${NEARBY_ZONES.map(([v, l]) => zoneOption(v, l, current)).join('')}
+        </optgroup>
+        ${rest.length ? `<optgroup label="All other timezones">
+          ${rest.map((z) => zoneOption(z, z, current)).join('')}
+        </optgroup>` : ''}
+      </select>`;
+  }
+
   function channelRowHtml(c, isNew) {
     return `
       <div class="edit-ch" data-cid="${esc(c.id)}"${isNew ? ' data-new="1"' : ''}>
@@ -741,7 +875,7 @@
           <p class="note">Every bitrate variant of this channel. Listener counts are summed across all of them.</p>
           <div class="chips" data-mounts>${mountChipsHtml(c.mounts || [])}</div>
           <div class="add-row">
-            <input data-add-mount placeholder="/live_64" autocapitalize="off" autocorrect="off" spellcheck="false">
+            <input data-add-mount placeholder="/live_64" list="mountlist" autocapitalize="off" autocorrect="off" spellcheck="false">
             <button class="ghost" data-add-mount-btn type="button">Add mount</button>
           </div>
         </div>
@@ -783,7 +917,10 @@
     box.innerHTML = `
       <div class="fields">
         <label>Name<input data-f="name" value="${esc(s.name)}"></label>
-        <label>Timezone<input data-f="tz" value="${esc(s.timezone || 'UTC')}"></label>
+        <label>Timezone
+          ${timezoneSelectHtml(s.timezone || 'UTC')}
+          <span class="note">Sets when this station's weekly report arrives, and the day boundaries in its figures.</span>
+        </label>
       </div>
       <h3>Channels</h3>
       <p class="hint">A channel's identifier is fixed — it keys this channel's recorded history. Everything else can change.</p>
@@ -797,17 +934,49 @@
         <button class="primary" data-save="${esc(s.id)}">Save changes</button>
         <button class="ghost" data-cancel="1" type="button">Cancel</button>
       </div>
-      <div class="msg" data-msg="1"></div>`;
+      <div class="msg" data-msg="1"></div>
+      <span data-mountlist></span>`;
     box.classList.remove('hidden');
 
     const msgEl = box.querySelector('[data-msg]');
+
+    // Fetched once per station and cached. Feeds the autocomplete on every
+    // mount field, and the check when one is added.
+    loadMounts(s.id).then((inv) => {
+      const slot = box.querySelector('[data-mountlist]');
+      if (slot) slot.innerHTML = mountDatalistHtml('mountlist', inv);
+    });
 
     box.addEventListener('click', async (e) => {
       // ── Remove one mount ──────────────────────────────────────────────────
       const dropMount = e.target.closest('[data-drop-mount]');
       if (dropMount) {
         const row = dropMount.closest('.edit-ch');
-        const left = rowMounts(row).filter((m) => m !== dropMount.dataset.dropMount);
+        const path = dropMount.dataset.dropMount;
+        const chName = row.querySelector('[data-f=cname]').value.trim() || row.dataset.cid;
+        const left = rowMounts(row).filter((m) => m !== path);
+
+        // Asked for, because the consequence is invisible: the channel keeps
+        // working and its listener count quietly drops by whatever that mount
+        // was carrying. On this server /live_64 regularly carries a third of
+        // KPFT Main's audience.
+        const ok = await confirmAction({
+          title: `Remove ${path} from ${chName}?`,
+          body: [
+            `Its listeners stop being counted toward <strong>${esc(chName)}</strong>, and
+             this mount stops being checked — so it can go off air without anyone
+             being told.`,
+            left.length
+              ? `The channel keeps ${left.length} mount${left.length === 1 ? '' : 's'}:
+                 <strong>${esc(left.join(', '))}</strong>.`
+              : `This is the channel's <strong>last mount</strong>. Only the stream URL
+                 above will be counted.`,
+          ],
+          keep: 'Nothing changes until you press <strong>Save changes</strong> — Cancel puts it back.',
+          confirmLabel: 'Remove mount',
+        });
+        if (!ok) return;
+
         row.querySelector('[data-mounts]').innerHTML = mountChipsHtml(left);
         clear(msgEl);
         return;
@@ -828,9 +997,57 @@
         }
         const current = rowMounts(row);
         if (current.includes(value)) return show(msgEl, `${value} is already on this channel.`);
+
+        // Checked against what the server is serving right now. Free, and it
+        // catches the mistake that actually happens: a mistyped path saves
+        // cleanly and then under-reports the channel's audience for ever, or
+        // raises a degraded alert for a mount that never existed.
+        const inv = await loadMounts(s.id);
+        const found = inv && inv.available
+          ? inv.mounts.find((m) => m.path === value)
+          : null;
+
+        if (inv && inv.available && !found) {
+          const ok = await confirmAction({
+            title: `${value} is not being served right now`,
+            body: [
+              `The Icecast server at <strong>${esc((inv.hosts || []).join(', ') || 'this host')}</strong>
+               is not currently publishing this mount.`,
+              `That usually means a typo. It can also mean a mount whose source is
+               temporarily disconnected — which is real, and worth monitoring.`,
+            ],
+            keep: inv.mounts.length
+              ? `Currently served: <strong>${esc(inv.mounts.slice(0, 12).map((m) => m.path).join(', '))}</strong>`
+              : 'The server is publishing no mounts at all right now.',
+            confirmLabel: 'Add it anyway',
+            icon: '?',
+          });
+          if (!ok) { input.focus(); input.select(); return; }
+        }
+
+        if (found && found.assignedTo && found.assignedTo.channelId !== row.dataset.cid) {
+          const ok = await confirmAction({
+            title: `${value} is already on another channel`,
+            body: [
+              `It belongs to <strong>${esc(found.assignedTo.channelId)}</strong>. A mount on two
+               channels has its listeners counted twice, in both channels' figures.`,
+            ],
+            keep: 'Remove it from the other channel if it should only be counted once.',
+            confirmLabel: 'Add it anyway',
+            icon: '?',
+          });
+          if (!ok) { input.focus(); input.select(); return; }
+        }
+
         row.querySelector('[data-mounts]').innerHTML = mountChipsHtml([...current, value]);
         input.value = '';
-        clear(msgEl);
+        if (found) {
+          show(msgEl, `${value} added — the server is serving it${
+            found.listeners != null ? ` to ${found.listeners} listener${found.listeners === 1 ? '' : 's'}` : ''
+          } right now.`, 'ok');
+        } else {
+          clear(msgEl);
+        }
         return;
       }
 

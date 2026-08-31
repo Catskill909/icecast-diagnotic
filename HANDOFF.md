@@ -18,7 +18,7 @@ shortest path to being useful.
 **Orient yourself (2 minutes).**
 
 ```bash
-npm test                                   # 305 tests, all should pass
+npm test                                   # 318 tests, all should pass
 curl -s https://kpft-icecast.supersoul.top/api/stations | jq   # what it monitors
 curl -s https://kpft-icecast.supersoul.top/api/status   | jq   # how it is doing
 ```
@@ -87,7 +87,7 @@ regression, however green the tests are.**
   so the host-as-shared-pool design (§3.6) is now carrying real traffic rather
   than being argued for. One snapshot fetch per host per cycle serves every
   station on it.
-- **305 tests**, `npm test`, Node's built-in runner, no test framework dependency.
+- **318 tests**, `npm test`, Node's built-in runner, no test framework dependency.
 - **Dependencies: express, nodemailer 9, dotenv.** That is the whole list, and it
   is deliberate. Crypto, testing and HTTP are all Node built-ins. Adding a
   dependency should require an argument.
@@ -357,6 +357,11 @@ and would have looked correct in review.
 | A new channel's id is generated at **save**, not when the row appears | So the id matches the name the operator settled on rather than the placeholder the row started with |
 | The alerts route returns JSON on every path | It could throw and return express's HTML error page; the panel parsed that as JSON, got nothing, and showed its generic fallback |
 | `api()` keeps a non-JSON body; `failureText()` names the failure | `res.json().catch(() => ({}))` threw away the evidence, and every failure rendered the same six words |
+
+| Timezone is a **dropdown**, US zones first, named by city | It was free text holding an IANA identifier. "America/Chicago" is not producible from memory, a typo was caught only on save, and the string says nothing about which offset it means — Houston is Central, and nothing in it says Houston. Arizona is listed separately because it does not observe daylight saving, which silently shifts a weekly report by an hour for half the year |
+| A new mount is **checked against the live inventory** | Free — the monitor already holds it — and it opens no connection. Autocompletes from what the host actually serves, warns when a path is not being served, and warns when it already belongs to another channel |
+| The test email is **scoped to its station** and names it | It rendered every stream the monitor watches. Testing an address just added to WPFW sent that person KPFT, KPFK and WBAI's listener counts — four cities' figures that are not theirs |
+| Removing a mount or a recipient asks first | Both consequences are invisible: a channel keeps working while its listener count quietly drops by whatever that mount carried, and a removed address simply stops being told |
 
 **"Could not save." was reported and could not be reproduced.** Tried against a
 copy of the production configuration, as a deployed instance with SMTP
@@ -634,6 +639,39 @@ Reviewed end to end on 2026-08-27; findings and reasoning in
   system — rare, technical, restricted. Reporting is frequent and GM-facing, and
   belongs on the history page and fleet view. Collapsing them puts "delete
   station" a tab away from a weekly report (§8b of the scope doc).
+- **TUNE-INS ARE FROZEN AT COMPACTION, AND prune() RUNS EVERY CYCLE.** The
+  figure is computed from raw samples as they expire, because the samples are
+  then destroyed and nothing can recompute it. prune() therefore almost always
+  sees ONE expiring sample, and treating the first sample of a batch as
+  "everyone already connected" adds the whole listener count once a minute
+  instead of once a period — turning the stored figure into listener-MINUTES
+  under the name tune-ins, wrong by about sixty times. Production carried
+  tuneIns=2956 for a KPFT Main hour that averaged 50 listeners and peaked at 57,
+  and a month-to-date reach of 270,436 against a week of 520. The previous
+  reading is now carried across prune calls in `meta.compactCarry`.
+  **Any test for this must drive prune() one sample at a time**; a single-batch
+  test passes against the bug. `test/tunein-compaction.test.js` — all six cases
+  fail against the old code, verified.
+- **A number that cannot be recomputed must be erased, not corrected.** The
+  wrong tune-in figures could not be recovered — the samples behind them were
+  gone. `repairTuneIns()` deletes them once, so those hours report as
+  *unrecorded* (`hoursMissing`), which every reader already handles, rather than
+  continuing to publish a figure wrong by sixty times.
+- **A MOUNT PATH IS NOT UNIQUE ACROSS SERVERS.** This deployment serves two
+  different `/wpfw_128` mounts on two different hosts. `snapshotForStream()` in
+  diagnose.js exists for this on the measurement side — one global snapshot
+  indexed by bare path once made WBAI's mounts read as missing while a
+  same-named mount inherited Pacifica's audience. The lesson was then
+  **reintroduced on the configuration side** in the admin mount inventory, which
+  keyed "who already owns this mount" by path alone and reported the Pacifica
+  `/wpfw_128` as belonging to a channel on the other host. Anything mapping
+  mounts to anything else keys by **host + path**: `discover.mountAssignments()`,
+  with `test/mount-assignments.test.js` on the real colliding fixture.
+- **Checking a mount must not open a connection.** The admin panel verifies a
+  new mount against the inventory the monitor already holds, which is free. A
+  probe proves more — Icecast can list a mount it will not serve — but every
+  connection is counted as a listener, so a probe is something a person presses,
+  never something a form does while you type.
 - **The channel editor must never offer a field for a channel id.** Ids key every
   sample, rollup and event. A new channel's id is GENERATED from its name and
   shown before saving; an existing one is read from the row and is not editable.
@@ -693,7 +731,7 @@ Reviewed end to end on 2026-08-27; findings and reasoning in
 ## 9. Verifying a change
 
 ```bash
-npm test                                             # 305 tests
+npm test                                             # 318 tests
 node --check server.js monitor.js store.js diagnose.js auth.js
 
 # Against production

@@ -605,3 +605,33 @@ function setStationAlerts(config, stationId, alerts) {
 module.exports.validateAlertsPayload = validateAlertsPayload;
 module.exports.setStationAlerts = setStationAlerts;
 module.exports.parseAddressList = parseAddressList;
+
+
+/**
+ * Every mount already claimed by a channel, keyed by HOST **and** path.
+ *
+ * A mount path is not unique across servers, and on this deployment it is not
+ * unique in practice: streams.pacifica.org:9000 and streaming.wbai.org both
+ * publish a `/wpfw_128`. Keyed by path alone, the Pacifica one reports as
+ * belonging to a channel on the other host.
+ *
+ * `diagnose.snapshotForStream()` exists for exactly this reason on the
+ * measurement side — one global snapshot indexed by bare path once made WBAI's
+ * mounts read as missing while a same-named mount inherited Pacifica's
+ * audience. This is the same rule applied to configuration.
+ */
+function mountAssignments(config) {
+  const assigned = new Map();
+  for (const station of config?.stations || []) {
+    for (const channel of station.channels || []) {
+      let host;
+      try { host = new URL(channel.url).host; } catch { continue; }
+      for (const mount of channel.mounts || []) {
+        assigned.set(`${host}${mount}`, { channelId: channel.id, stationId: station.id });
+      }
+    }
+  }
+  return assigned;
+}
+
+module.exports.mountAssignments = mountAssignments;

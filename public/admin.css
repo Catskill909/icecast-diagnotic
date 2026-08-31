@@ -304,3 +304,29 @@ label input { margin-top: 6px; }
 
 .actions-inline { margin-top: 11px; }
 .edit-ch[data-new] { border-color: var(--primary); background: rgba(124,106,239,.06); }
+
+/* ── Timezone select ─────────────────────────────────────────────────────── */
+
+/* A select, not a text field. An IANA identifier is not something most people
+   can produce from memory, a typo was only caught on save, and the string says
+   nothing about which offset it means — Houston is Central, and "America/
+   Chicago" does not say Houston anywhere. */
+.tz-select {
+  display: block; width: 100%; margin-top: 5px;
+  padding: 10px 34px 10px 12px; font: inherit; font-size: 14px;
+  background: var(--field-bg); color: var(--text-primary);
+  border: 1px solid var(--field-border); border-radius: 9px;
+  outline: none; cursor: pointer;
+  /* The native arrow is invisible on a near-black field in several browsers. */
+  appearance: none; -webkit-appearance: none;
+  background-image: linear-gradient(45deg, transparent 50%, var(--text-secondary) 50%),
+                    linear-gradient(135deg, var(--text-secondary) 50%, transparent 50%);
+  background-position: calc(100% - 18px) 50%, calc(100% - 13px) 50%;
+  background-size: 5px 5px, 5px 5px;
+  background-repeat: no-repeat;
+  transition: border-color .15s ease, box-shadow .15s ease;
+}
+.tz-select:hover { border-color: #8a8aa8; }
+.tz-select:focus { border-color: var(--primary); box-shadow: 0 0 0 3px rgba(124,106,239,.18); }
+.tz-select optgroup { background: var(--surface-1); color: var(--text-muted); font-style: normal; }
+.tz-select option { background: var(--surface-1); color: var(--text-primary); padding: 6px; }

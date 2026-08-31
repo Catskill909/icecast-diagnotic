@@ -575,6 +575,16 @@ STATION_LABEL=KPFT              # Station name used in operator-facing evidence 
 
 **Listener-minutes are the honest unit of harm.** `9 outages` and `35 minutes down` both understate a midday failure and overstate a 4am one. Each resolved event freezes an `audience` block using the pre-failure listener count. Outages up to one hour use audience × duration; longer outages use the stream's hour-of-day audience curve when enough history exists, falling back to the flat calculation otherwise. Events proven to have no listener impact are charged **zero**. The block is frozen at recovery because the raw measurements compact after `SAMPLE_RETENTION_DAYS`.
 
+**Reach for periods older than the raw window may read "not recorded".** Tune-ins
+are computed from raw samples and frozen onto each hour's rollup as those samples
+compact, because the churn is unrecoverable afterwards — an hourly average cannot
+show that forty listeners left as forty arrived. Figures recorded before
+2026-08-31 were **listener-minutes, not arrivals**: `prune()` runs every cycle, so
+it added a channel's whole listener count roughly once a minute instead of once
+per period, inflating them about sixtyfold. They could not be recomputed and were
+erased, so those hours report as unrecorded rather than wrong. Reach rebuilds
+from the fix onward.
+
 **Listener counts during an outage.** When a mount vanishes, listeners correctly read **0** — the mount cannot serve anyone because it no longer exists. Earlier builds carried the last known count forward, which made outages appear to retain their full audience and hid the real loss. Counts are only carried forward when Icecast itself is unreachable and the true figure is genuinely unknown.
 
 **True outage duration.** Polling every 60s bounds resolution to a minute, but `stream_start_iso8601` records the exact moment a source reconnected. Recovery events carry a `sourceOutage` block with the real duration derived from it.

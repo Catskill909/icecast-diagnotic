@@ -155,9 +155,59 @@ function load(streamIds = []) {
   }
 
   applySeed();
+  repairTuneIns();
   // Must run BEFORE prune(): compaction destroys the raw samples this reads.
   backfillAudience();
   prune();
+}
+
+/**
+ * Discards tune-in figures that were never tune-ins.
+ *
+ * Until 2026-08-31, prune() added a channel's whole listener count once per
+ * expiring BATCH, and prune runs every check cycle — so it added it roughly once
+ * per minute. The stored figure therefore was not arrivals at all: it was the
+ * sum of every reading in the hour, which is listener-minutes. Measured on
+ * production, one KPFT Main hour with avgListeners=50 and peak=57 carried
+ * tuneIns=2956, and the month-to-date reach read 270,436 against a week of 520.
+ *
+ * THE TRUE VALUE CANNOT BE RECOVERED. Tune-ins are computed from raw samples at
+ * compaction precisely because the samples are then destroyed, so there is
+ * nothing left to recompute from. The only honest repair is to erase the wrong
+ * number: `null` means "not recorded", which every reader already handles —
+ * getTuneIns() counts those hours as `hoursMissing` and the UI says the period
+ * is only partly counted. Leaving them would keep publishing a figure that is
+ * wrong by about sixty times, which is worse than publishing none.
+ *
+ * Runs once, guarded by a marker, so it cannot erase correct figures written
+ * after the fix.
+ */
+function repairTuneIns() {
+  if (getMeta('tuneInsRepaired')) return;
+
+  let cleared = 0;
+  for (const id of Object.keys(rollups)) {
+    for (const r of rollups[id] || []) {
+      if (r.tuneIns == null) continue;
+      delete r.tuneIns;
+      cleared++;
+    }
+  }
+
+  setMeta('tuneInsRepaired', new Date().toISOString());
+  // The carry starts empty: there is no trustworthy previous reading to resume
+  // from, and seeding it wrongly would put one bad hour at the boundary.
+  setMeta('compactCarry', {});
+  dirtySamples = true;
+  dirtyEvents = true;
+
+  if (cleared) {
+    console.warn(
+      `[Store] Cleared ${cleared} tune-in figure(s) recorded before 2026-08-31 — ` +
+      'they were listener-minutes, not arrivals, and cannot be recomputed. ' +
+      'Those hours now report as unrecorded rather than wrong.',
+    );
+  }
 }
 
 /**
@@ -709,19 +759,40 @@ function prune() {
         const ordered = [...expire]
           .filter((s) => s.status === 'up' && s.listeners != null)
           .sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
-        for (let i = 0; i < ordered.length; i++) {
-          const key = hourKey(ordered[i].timestamp);
-          const prev = ordered[i - 1];
+
+        // THE PREVIOUS SAMPLE MUST CARRY ACROSS PRUNE CALLS.
+        //
+        // prune() runs every check cycle, so samples expire a handful at a time
+        // — usually ONE. Treating the first sample of each batch as "everyone
+        // already connected" then adds the channel's whole listener count once
+        // per minute instead of once per period, and the stored figure stops
+        // being tune-ins at all: it becomes the sum of every reading, which is
+        // listener-MINUTES. Measured on production before this was fixed, one
+        // KPFT Main hour averaging 50 listeners and peaking at 57 carried
+        // tuneIns=2956 — almost exactly 50 x 60 readings.
+        //
+        // The carry is persisted, so a restart between two prunes does not
+        // reintroduce it once per deploy.
+        const carry = getMeta('compactCarry') || {};
+        const carried = carry[id];
+        let prev = carried && isFinite(carried.t) ? carried : null;
+
+        for (const cur of ordered) {
+          const t = new Date(cur.timestamp).getTime();
+          const key = hourKey(cur.timestamp);
           let add;
           if (!prev) {
-            add = ordered[i].listeners;      // everyone already connected
-          } else if (new Date(ordered[i].timestamp) - new Date(prev.timestamp) > 5 * 60 * 1000) {
+            add = cur.listeners;              // genuinely the first ever reading
+          } else if (t - prev.t > 5 * 60 * 1000) {
             add = 0;                          // a gap is not a surge of listeners
           } else {
-            add = Math.max(0, ordered[i].listeners - prev.listeners);
+            add = Math.max(0, cur.listeners - prev.listeners);
           }
           tuneInsByHour.set(key, (tuneInsByHour.get(key) || 0) + add);
+          prev = { t, listeners: cur.listeners };
         }
+
+        if (prev) setMeta('compactCarry', { ...carry, [id]: prev });
       }
       for (const s of expire) {
         const key = hourKey(s.timestamp);

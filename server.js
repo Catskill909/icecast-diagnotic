@@ -395,6 +395,65 @@ app.delete('/api/stations/:id', auth.requireAuth, (req, res) => {
   });
 });
 
+// What this station's Icecast host is actually serving right now.
+//
+// Used to check a mount BEFORE it is saved. The check is free: the monitor
+// already fetches each host's full inventory once a cycle, so asking "does this
+// mount exist" costs nothing and — crucially — opens no connection. Probing
+// would prove more (Icecast can list a mount it will not serve) but Icecast
+// counts every connection as a listener, ours included, so a probe is a button
+// somebody presses, never something a form does while you type.
+//
+// Authenticated: it is an admin tool, and there is no reason to widen a new
+// endpoint beyond the panel that uses it.
+app.get('/api/stations/:id/mounts', auth.requireAuth, (req, res) => {
+  const config = monitor.getStationConfig();
+  if (!config) return res.status(503).json({ error: 'Configuration not initialised yet' });
+
+  const station = (config.stations || []).find((s) => s.id === req.params.id);
+  if (!station) return res.status(404).json({ error: `No station with id "${req.params.id}"` });
+
+  const snapshot = monitor.getSnapshot();
+  if (!snapshot) {
+    // Not an error. Before the first cycle completes there is simply nothing to
+    // compare against, and the panel must say that rather than report every
+    // mount as missing.
+    return res.json({ available: false, reason: 'No Icecast snapshot yet — the first check cycle has not completed', mounts: [] });
+  }
+
+  // The hosts this station's own channels live on, so a shared server does not
+  // offer one station the mounts of the 28 others sitting beside it.
+  const hosts = new Set();
+  for (const c of station.channels || []) {
+    try { hosts.add(new URL(c.url).host); } catch { /* an unparseable URL contributes no host */ }
+  }
+
+  // Which mounts are already spoken for, so the panel can say so instead of
+  // letting someone attach the same mount to two channels. Keyed by host AND
+  // path — see mountAssignments().
+  const assigned = discover.mountAssignments(config);
+
+  const mounts = Object.values(snapshot.mounts || {})
+    .filter((m) => hosts.has(m.host))
+    .map((m) => ({
+      path: m.pathname,
+      host: m.host,
+      listeners: m.listeners ?? null,
+      bitrate: m.bitrate ?? null,
+      name: m.serverName || null,
+      assignedTo: assigned.get(`${m.host}${m.pathname}`) || null,
+    }))
+    .sort((a, b) => a.path.localeCompare(b.path));
+
+  res.json({
+    available: true,
+    reachable: snapshot.reachable !== false,
+    fetchedAt: snapshot.fetchedAt || null,
+    hosts: [...hosts],
+    mounts,
+  });
+});
+
 // ── Alert recipients ────────────────────────────────────────────────────────
 // Who a station's alerts go to. A route of its own rather than a field on the
 // station edit, because the two are different jobs for different people: editing
