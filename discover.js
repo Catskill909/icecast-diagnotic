@@ -91,6 +91,79 @@ function channelKeyFor(pathname) {
  * The result is a SUGGESTION. An operator confirms or regroups it; the point is
  * that the common case needs no thought.
  */
+/** The call sign a mount announces itself under: "KPFA AIR" -> "KPFA". */
+function callSignOf(m) {
+  const name = String(m?.serverName || '').trim();
+  return (name.match(/\b([A-Z]{3,5})\b/) || [])[1] || null;
+}
+
+/**
+ * Merges groups that are demonstrably the same audio under unrelated names.
+ *
+ * Path-prefix grouping is right for the common case and blind to the one that
+ * matters most on real servers: a mount whose NAME follows no convention.
+ * KPFA's main stream is `/padma` — 245 of its 253 listeners — and it shares no
+ * prefix with `/kpfa`, so it was left out and the station reported 5 listeners
+ * out of 253.
+ *
+ * TWO signals together, never either alone:
+ *
+ *   · the SAME non-empty title at this instant — the same programme is playing
+ *   · the SAME call sign in server_name — it is the same station's stream
+ *
+ * Title alone is unsafe and would be actively wrong here: five Pacifica sister
+ * stations share one host and carry the same network programmes, so during
+ * Democracy Now every station's title matches every other's. The call sign is
+ * what separates them. Requiring a non-empty title is what keeps a nameless
+ * relay like `/ku_right` — same call sign, no title — out of the group rather
+ * than guessed into it.
+ */
+function mergeByProgramme(groups) {
+  const keys = [...groups.keys()];
+  const merged = new Set();
+
+  for (let i = 0; i < keys.length; i++) {
+    if (merged.has(keys[i])) continue;
+    const a = groups.get(keys[i]);
+    const aTitle = String(a.find((m) => m.title)?.title || '').trim();
+    const aSign = a.map(callSignOf).find(Boolean);
+    if (!aTitle || !aSign) continue;
+
+    for (let j = i + 1; j < keys.length; j++) {
+      if (merged.has(keys[j])) continue;
+      const b = groups.get(keys[j]);
+      const bTitle = String(b.find((m) => m.title)?.title || '').trim();
+      const bSign = b.map(callSignOf).find(Boolean);
+      if (!bTitle || !bSign) continue;
+
+      // AN ORPHAN JOINS A LADDER; TWO LADDERS NEVER MERGE.
+      //
+      // A group with several mounts is already a well-formed channel — its own
+      // bitrate ladder, named to a convention. Two of those are two channels,
+      // even when both conditions above hold, and merging them would be wrong
+      // in a way nobody would notice.
+      //
+      // KPFT Main (/live_128, /live_64) and KPFT HD2 (/HD3, /HD3_128, /HD3_64)
+      // share the call sign KPFT and are separate services. They carry
+      // different programmes today, but a simulcast — a fund drive, an election
+      // night — would give them the same title and silently collapse two
+      // channels into one, taking HD2's audience with it.
+      //
+      // What the KPFA case actually is: ONE unconventionally-named mount
+      // (/padma) that belongs to an existing ladder. That is the shape to
+      // merge, and it is the shape this allows.
+      const orphanJoiningLadder = a.length === 1 || b.length === 1;
+
+      if (aTitle === bTitle && aSign === bSign && orphanJoiningLadder) {
+        a.push(...b);
+        groups.delete(keys[j]);
+        merged.add(keys[j]);
+      }
+    }
+  }
+  return groups;
+}
+
 function suggestChannels(mounts, origin) {
   const groups = new Map();
 
@@ -100,6 +173,8 @@ function suggestChannels(mounts, origin) {
     if (!groups.has(key)) groups.set(key, []);
     groups.get(key).push(m);
   }
+
+  mergeByProgramme(groups);
 
   const channels = [];
   for (const [key, list] of groups) {
@@ -283,7 +358,7 @@ function freeStationId(baseId, channels, config) {
 module.exports = {
   altSchemeUrl,
   isTransportFailure, toStatusUrl, channelKeyFor, suggestChannels, summarise, suggestStationIdentity,
-  deriveChannelId, freeStationId };
+  deriveChannelId, freeStationId, callSignOf };
 
 /* ═══════════════════════════════════════════════════════════════════════════
    Validating a station before it is written
