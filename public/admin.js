@@ -304,7 +304,13 @@
     // A suggested id is a decision, not a placeholder. Only fall back to
     // slugging the name when discovery could not work one out.
     idFixed = !!s.id;
-    $('st-tz').value = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
+    // The same grouped select the station EDITOR uses — US zones first, named by
+    // city. This form kept a bare text input for an IANA identifier, which is
+    // not something most people can produce from memory and was only validated
+    // on save. Two forms asking for the same value must ask for it the same way.
+    let guess = 'America/New_York';
+    try { guess = Intl.DateTimeFormat().resolvedOptions().timeZone || guess; } catch { /* keep the default */ }
+    $('st-tz-slot').innerHTML = timezoneSelectHtml(guess);
     $('results').classList.remove('hidden');
     $('st-name').focus();
     $('st-name').select();
@@ -350,7 +356,11 @@
       return;
     }
     const payload = {
-      station: { id: stationId, name: $('st-name').value.trim(), timezone: $('st-tz').value.trim() },
+      station: {
+        id: stationId,
+        name: $('st-name').value.trim(),
+        timezone: (document.querySelector('#st-tz-slot [data-f=tz]') || {}).value || 'UTC',
+      },
       // Channel ids are prefixed with the station so they stay unique across
       // stations — they key this channel's history permanently.
       channels: picked.map((c) => ({
