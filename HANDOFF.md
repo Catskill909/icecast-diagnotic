@@ -18,7 +18,7 @@ shortest path to being useful.
 **Orient yourself (2 minutes).**
 
 ```bash
-npm test                                   # 327 tests, all should pass
+npm test                                   # 332 tests, all should pass
 curl -s https://kpft-icecast.supersoul.top/api/stations | jq   # what it monitors
 curl -s https://kpft-icecast.supersoul.top/api/status   | jq   # how it is doing
 ```
@@ -87,7 +87,7 @@ regression, however green the tests are.**
   so the host-as-shared-pool design (§3.6) is now carrying real traffic rather
   than being argued for. One snapshot fetch per host per cycle serves every
   station on it.
-- **327 tests**, `npm test`, Node's built-in runner, no test framework dependency.
+- **332 tests**, `npm test`, Node's built-in runner, no test framework dependency.
 - **Dependencies: express, nodemailer 9, dotenv.** That is the whole list, and it
   is deliberate. Crypto, testing and HTTP are all Node built-ins. Adding a
   dependency should require an argument.
@@ -639,6 +639,20 @@ Reviewed end to end on 2026-08-27; findings and reasoning in
   system — rare, technical, restricted. Reporting is frequent and GM-facing, and
   belongs on the history page and fleet view. Collapsing them puts "delete
   station" a tab away from a weekly report (§8b of the scope doc).
+- **WHAT A MESSAGE SAYS IS SCOPED THE SAME WAY AS WHO IT IS SENT TO.** Recipients
+  became per-station so KPFT's GM is not paged about Los Angeles; the message
+  BODY was not, and every alert ended with an "ALL STREAMS OVERVIEW" rendered
+  from every stream the monitor watches. A KPFT outage therefore reached
+  gm@kpft.org carrying WPFW's, KPFK's and WBAI's live listener counts — the same
+  cross-station exposure per-station recipients exist to prevent, one layer down
+  where nobody looked. `sendGroupedAlert()` already guarantees the entries in a
+  message share a station, so the body has a station to scope by.
+  `test/alert-email-scope.test.js`, whose second case asserts the station's OWN
+  channels still appear — so it cannot be satisfied by showing nothing.
+- **A scoped feature needs the client to pass the scope.** `/api/test-alert`
+  took a `stationId` and the panel never sent one, so the server fell back to
+  "every stream" whenever more than one station existed. The server fix was
+  written and verified; the caller was not, and the bug shipped looking fixed.
 - **`stationAlerts` MUST NOT LEAVE `getStatus()`.** It rides on each flattened
   stream so the alert path can resolve recipients mid-send without re-reading
   configuration. `getStatus()` spread the stream straight into its response, and
@@ -756,7 +770,7 @@ Reviewed end to end on 2026-08-27; findings and reasoning in
 ## 9. Verifying a change
 
 ```bash
-npm test                                             # 327 tests
+npm test                                             # 332 tests
 node --check server.js monitor.js store.js diagnose.js auth.js
 
 # Against production

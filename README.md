@@ -680,8 +680,8 @@ as a whole one.
 | `?to=user@example.com` | sends it to one address instead of the configured recipients |
 | `?days=7` | window to report on (default 7) |
 
-**One report per station**, addressed to that station's own recipient list — the
-same people its outage alerts reach — scoped to its own channels, and sent at
+**One report per station**, named for it in the subject, and addressed to that
+station's own recipient list — the same people its outage alerts reach — scoped to its own channels, and sent at
 `WEEKLY_ROUNDUP_HOUR` in **its own timezone**. Until 2026-08-31 it read a
 separate monitor-wide list and omitted `ALERT_CC`, so the operator running the
 monitor received every 3am outage alert and, in seven weeks, not one roundup.

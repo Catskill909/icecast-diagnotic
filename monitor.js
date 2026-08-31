@@ -1919,6 +1919,11 @@ function renderStreamBlock(entry, index, total) {
  * that genuinely covers the whole monitor.
  */
 function renderAllStreamsTable(stationId) {
+  // Scoped to one station. sendGroupedAlert() guarantees every entry in a
+  // message shares a station, so the table can be addressed the same way the
+  // message is: KPFT's general manager reading a KPFT outage has no business
+  // being shown WPFW, KPFK and WBAI's listener counts, and it is the same
+  // cross-station exposure per-station recipients exist to prevent.
   const scoped = stationId ? streams.filter((s) => s.stationId === stationId) : streams;
   const rows = scoped.map((s) => {
     const st = streamStatus[s.id] || {};
@@ -2206,7 +2211,7 @@ function composeAlert({ kind, entries, scope, consolidated = false, recoveredFro
       ${row('Detected At', `<span class="val-col" style="color:#f8fafc !important;">${detectedAt} CT</span>`, true)}
     </table>
     <hr style="border: none; border-top: 1px solid #28283d; margin: 20px 0;">
-    ${renderAllStreamsTable()}`;
+    ${renderAllStreamsTable(entries?.[0]?.stream?.stationId)}`;
 
   const html = buildEmailHtml({
     title: `${emoji} Stream ${statusText}`,
@@ -2630,8 +2635,13 @@ function fmtStationDate(iso, opts = {}) {
   });
 }
 
-function buildWeeklyRoundup(rollup) {
+function buildWeeklyRoundup(rollup, stationId) {
   const { counts: c, audience: a, alerts, narrative } = rollup;
+  // Named, because this is now ONE REPORT PER STATION. A recipient on more than
+  // one station's list — an engineer covering several — otherwise receives
+  // identically-titled reports and cannot tell which is which without opening
+  // them. Falls back to the generic title for a single-station install.
+  const stationName = getStations().find((st) => st.id === stationId)?.name;
   const rangeLabel = `${fmtStationDate(rollup.since)} – ${fmtStationDate(rollup.until, { year: 'numeric' })}`;
   // "Clean" means no listener heard a break — not that our probe never tripped.
   const clean = c.listenerAffecting === 0;
@@ -2653,7 +2663,7 @@ function buildWeeklyRoundup(rollup) {
       : `${c.significant} significant outage${c.significant === 1 ? '' : 's'}`,
     rollup.downtimeMs ? `${diagnose.fmtDuration(rollup.downtimeMs)} elapsed off-air window` : null,
   ].filter(Boolean);
-  const subject = `📊 Pacifica Weekly Stream Report — ${rangeLabel}: ${subjectFacts.join(', ')}`;
+  const subject = `📊 ${stationName || 'Pacifica'} Weekly Stream Report — ${rangeLabel}: ${subjectFacts.join(', ')}`;
 
   const uptimeColor = rollup.uptime == null ? '#94a3b8'
     : rollup.uptime >= 99.5 ? '#4ade80' : rollup.uptime >= 98 ? '#fbbf24' : '#f87171';
@@ -2800,7 +2810,7 @@ function buildWeeklyRoundup(rollup) {
     <p class="label-col" style="margin:20px 0 0 0; font-size:11px; line-height:1.6; color:#94a3b8 !important;"><span class="label-col" style="color:#94a3b8 !important;">This is a scheduled weekly summary, not an alert — it arrives whether or not anything went wrong.<br><br><strong>Listener interruptions</strong> is a headcount taken as each outage began; someone interrupted by two separate outages counts twice.<br><br><strong>Listening lost</strong> is audience multiplied by outage duration — 50 people for one hour is 50 listener-hours. It is not clock time.<br><br><strong>Elapsed off-air window</strong> is clock time with at least one of the ${rollup.perStream.length} monitored audio streams down; simultaneous stream outages count once. These are streams on the Icecast service, not ${rollup.perStream.length} separate servers. <strong>Summed stream-time</strong> adds each affected stream separately and is the basis of uptime. The path cards divide interruption records; they are not downtime totals.</span></p>`;
 
   const html = buildEmailHtml({
-    title: '📊 Pacifica Weekly Stream Report',
+    title: `📊 ${stationName || 'Pacifica'} Weekly Stream Report`,
     subtitle: `${rangeLabel} · ${rollup.perStream.length} streams monitored · scheduled summary`,
     headerBg: clean
       ? 'linear-gradient(135deg, #0f766e, #115e59)'
@@ -2825,7 +2835,7 @@ function previewWeeklyRoundup(windowMs = WEEKLY_ROUNDUP_WINDOW_MS, stationId) {
   // a different scope than the send is worse than no preview, because it is
   // trusted. Defaults to the only station when there is one.
   const station = stationId || (getStations().length === 1 ? getStations()[0].id : undefined);
-  return buildWeeklyRoundup(getPeriodRollup(windowMs, station));
+  return buildWeeklyRoundup(getPeriodRollup(windowMs, station), station);
 }
 
 /**
@@ -2877,7 +2887,7 @@ async function sendWeeklyRoundup({ to, windowMs = WEEKLY_ROUNDUP_WINDOW_MS, stat
   // tell one station's staff about outages in other cities and — worse — fold
   // those figures into the uptime number they read as their own.
   const rollup = getPeriodRollup(windowMs, station);
-  const { subject, html } = buildWeeklyRoundup(rollup);
+  const { subject, html } = buildWeeklyRoundup(rollup, station);
 
   try {
     const mailOptions = {
@@ -3008,6 +3018,7 @@ module.exports = {
   saveStationConfig,
   abandonEpisode,
   // Exported for tests.
+  composeAlert, renderAllStreamsTable,
   normaliseStreams, normaliseMounts, buildDefaultConfig, flattenChannels,
   trackVariantDegradation, runChecks, probeVariants,
   getVariantHealth: (streamId) => variantHealth[streamId] || {},

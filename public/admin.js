@@ -717,7 +717,13 @@
     if (!to) return show(msg, 'Add an address first — a test needs somewhere to go.', 'warn');
 
     show(msg, `Sending a test message to ${to}…`, 'warn');
-    const res = await api(`/api/test-alert?to=${encodeURIComponent(to)}`);
+    // The station goes with it. Without it the server cannot tell which station
+    // the test is for and falls back to showing every stream the monitor
+    // watches — which is what shipped: a test for a KPFT address arrived listing
+    // all four stations' listener counts.
+    const res = await api(
+      `/api/test-alert?to=${encodeURIComponent(to)}&stationId=${encodeURIComponent(s.id)}`,
+    );
     if (!res) return;
     if (!res.ok) return show(msg, failureText(res, 'send the test message'));
     show(msg, `Test message sent to ${to} and nobody else. If it does not arrive, check the spam folder first.`, 'ok');
