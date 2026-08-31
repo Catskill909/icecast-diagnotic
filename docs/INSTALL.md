@@ -191,6 +191,12 @@ ALERT_EMAILS=engineer@example.org,gm@example.org
 DASHBOARD_URL=https://monitor.example.org
 ```
 
+`ALERT_EMAILS` **seeds** the recipient list and, for a single-station install, is
+all you need. It is read once on first boot; after that each station owns an
+explicit list, edited with the **Alerts** button on its card in `/admin.html`.
+There is no send-time fallback — what the panel shows is what gets emailed — and
+one message is never addressed across two stations.
+
 Alerts are gated on **listener impact**, not probe failure — see
 [`DIAGNOSTICS.md`](DIAGNOSTICS.md). A station that would rather be told about
 everything can set `ALERT_ON_HARMLESS_OUTAGE=true`, though the production data

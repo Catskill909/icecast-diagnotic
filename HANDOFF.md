@@ -18,7 +18,7 @@ shortest path to being useful.
 **Orient yourself (2 minutes).**
 
 ```bash
-npm test                                   # 295 tests, all should pass
+npm test                                   # 305 tests, all should pass
 curl -s https://kpft-icecast.supersoul.top/api/stations | jq   # what it monitors
 curl -s https://kpft-icecast.supersoul.top/api/status   | jq   # how it is doing
 ```
@@ -87,7 +87,7 @@ regression, however green the tests are.**
   so the host-as-shared-pool design (§3.6) is now carrying real traffic rather
   than being argued for. One snapshot fetch per host per cycle serves every
   station on it.
-- **295 tests**, `npm test`, Node's built-in runner, no test framework dependency.
+- **305 tests**, `npm test`, Node's built-in runner, no test framework dependency.
 - **Dependencies: express, nodemailer 9, dotenv.** That is the whole list, and it
   is deliberate. Crypto, testing and HTTP are all Node built-ins. Adding a
   dependency should require an argument.
@@ -314,8 +314,39 @@ was being watched and could not be told.
 | Recipients resolved inside `sendAlert()` from the entries' own station | So a new alert type gets the right list by default rather than by remembering to pass one |
 | `describeAlertRouting()` and the routing banner | Four independent conditions must hold before mail goes out and each fails silently. The screen states the verdict and names the blocker, computed server-side from the same rules the sender uses |
 | The station block overrides `ALERT_STATIONS` | The alternative is a screen that saves addresses and sends nothing, blocked by a hosting-panel variable no page displays |
-| `/station.*` added to `ADMIN_PAGES` | It displays named people's email addresses. Found because its stylesheet returned 302 while the page returned 200 |
+| The recipient editor's page gated in `ADMIN_PAGES` | It can display named people's email addresses. Found on the standalone page because its stylesheet returned 302 while the page itself returned 200; the gate moved with the editor into `/admin.html` |
 | `recipientSource` on the delivery record | "Sent to 2 people" is not an audit line if nobody can tell whether those two were the station's own contacts or the global fallback |
+| **The weekly roundup now copies `ALERT_CC`** | It read a different recipient list from alerts — To only. The operator running the monitor was on `ALERT_CC`, so he received every 3am outage alert and, in seven weeks, not one roundup. The worst possible address to omit: the roundup is the only message that arrives in a quiet week, and therefore the only thing separating "nothing broke" from "the monitor died" |
+| One recipient list per station, no CC field | To/CC separates people — "act on this" from "for your awareness". In an automated alert it separates nothing: identical message, identical delivery, anyone can act |
+
+### The env fallback retired, and the roundup follows (later the same day)
+
+The first pass left recipients as a per-station **override** on top of the
+`ALERT_EMAILS` env list. The operator opened the panel and found the flaw
+immediately: the banner read "2 recipients" directly above a list reading "none
+set". Both were true. KPFT's actual recipients lived in an environment variable
+the screen could not show, edit or correct.
+
+**Two sources of truth was the whole bug**, and it contradicted a rule this
+project already settled — env seeds once, the store owns. Recipients were the
+last configuration still read from the environment at send time.
+
+| Change | Why |
+|---|---|
+| `seedAlertsFromEnv()` — a one-time migration | `ALERT_EMAILS` + `ALERT_CC` become each station's own list, merged and deduplicated. Guarded by a `meta` marker, **not** by "does any station have alerts": an operator clearing the last address must not look like a fresh volume and get the env list written back underneath them |
+| The send-time fallback is gone | `recipientsFor()` reads the store and nothing else. `ALERT_STATIONS` no longer gates anything at run time — it is a migration input, once |
+| **One weekly roundup per station** | It read one monitor-wide list, so a station configured in the panel got its alerts and never its own report |
+| Roundup hour in each station's **own timezone** | WPFW is Eastern, KPFK Pacific. A 9am report should arrive at 9am where the reader lives |
+| The once-a-week marker is **per station** | One shared marker meant the first station to send declared the week finished for all of them, so three stations would silently never receive one. Retries are per station for the same reason |
+| Edit and Test on every recipient row | "Remove it and type it again" is not editing. A transposed character is the likeliest mistake here and the quietest — mail goes nowhere and nothing reports it |
+| `recipientSource` removed from the delivery record | With one source of truth it could only ever hold one value, and a constant field implies a choice that no longer exists |
+
+**The migration's own test is the point of it.** `test/alert-migration.test.js`
+computes the recipient set for every station before and after, under the real
+production configuration, and asserts they are identical. The obvious
+implementation — copy `ALERT_EMAILS` onto every station — would have signed
+KPFT's general manager up for outages in Washington, Los Angeles and New York,
+and would have looked correct in review.
 
 ### Corrections worth inheriting
 
@@ -392,12 +423,13 @@ Build order, with the current position marked:
    a picker. Without it, adding a second station made the first one's uptime
    silently wrong
 6. ✅ Edit and remove stations — ids immutable, history retained on removal
-7. ✅ **Per-station alert recipients** (2026-08-31). Each station has its own
-   `alerts: { enabled, recipients, cc }` block in the config store, edited at
-   the **Alerts** button on each station card in the admin panel. A station with none
-   falls back to `ALERT_EMAILS`, so existing deployments are unchanged; a station
-   configured in the app overrides the `ALERT_STATIONS` env mute. **The load-
-   bearing part is that one message never spans two stations** — see §8
+7. ✅ **Per-station alert recipients** (2026-08-31). Each station owns an
+   explicit `alerts: { enabled, recipients }` list in the config store, edited
+   with the **Alerts** button on its card in the admin panel, with Edit and Test
+   on every row. `ALERT_EMAILS` / `ALERT_CC` / `ALERT_STATIONS` seeded those
+   lists once and are never read again — **there is no send-time fallback**.
+   The weekly roundup follows the same lists, one report per station.
+   **The load-bearing part is that one message never spans two stations** — §8
 8. ✅ Listener analytics page — audience as its own destination, station-scoped,
    with per-channel and per-mount breakdowns and CSV export
 9. 🔶 **Audience page phase 1** — [`docs/AUDIENCE-ROADMAP.md`](docs/AUDIENCE-ROADMAP.md)
@@ -474,18 +506,29 @@ Reviewed end to end on 2026-08-27; findings and reasoning in
   call `sendAlert()` and are safe only because they are single-stream by
   construction. `test/alert-recipients.test.js` reproduces the four-station
   shared-host cycle.
-- **A station configured in the app overrides `ALERT_STATIONS`.** Deliberate, and
-  it will look wrong to anyone who reads the env var as a hard kill-switch. The
-  store is authoritative over env everywhere else in this system, and the
-  alternative fails silently in the way that matters most: an operator adds
-  recipients, saves, sees them stored, and nothing sends — because of a variable
-  typed into a hosting panel weeks earlier that no screen displays. To mute a
-  station now, switch it off on its own alerts screen.
-- **An empty `alerts` block is not a decision.** `{}` must read as "never
-  configured" so the env fallback still applies; `enabled: false` is the
-  decision. `setStationAlerts()` deletes an empty block rather than storing one.
-  Collapsing the two makes "we turned this off deliberately" and "somebody
-  deleted the last address" indistinguishable.
+- **THERE IS NO RECIPIENT FALLBACK, and putting one back is a regression.**
+  `ALERT_EMAILS`, `ALERT_CC` and `ALERT_STATIONS` seed the store once at
+  migration and are never read again. A send-time fallback is what let the panel
+  display one list while a different one was emailed — the banner said "2
+  recipients" directly above a list saying "none set", and the two addresses that
+  actually received KPFT's alerts could not be seen, edited or corrected from the
+  screen whose entire job is managing them. `test/alert-stations.test.js` and
+  `test/roundup-recipients.test.js` are regression guards: they set those
+  variables and assert none of them reaches a send.
+- **The migration is guarded by a `meta` marker, not by "has any station got
+  alerts".** An operator who clears the last address from every station must not
+  look like a fresh volume and get the env list written back underneath them.
+  Verified against a running instance: cleared, restarted, still cleared.
+- **A station with no `alerts` block is ON with nobody on it.** Not muted. It
+  sends nothing because there is nobody to send to, and `describeAlertRouting()`
+  says exactly that — "no recipients have been added yet", which is a to-do an
+  operator can act on. A silent mute looks identical to a working configuration.
+- **The weekly roundup is one report PER STATION**, addressed to that station's
+  own list, scoped to its own channels, and timed in **its own timezone**. Its
+  once-a-week marker and its retry counter are per station too: one shared marker
+  meant the first station to send declared the week finished for all of them, so
+  the others would silently never receive one. Adding a station-wide send back is
+  the same class of bug as an ungrouped alert.
 - **A gated page and its assets must be gated together.** `ADMIN_PAGES` in
   server.js lists individual paths, so both directions break quietly: an
   un-gated page borrowing a gated stylesheet renders unstyled for exactly the
@@ -623,7 +666,7 @@ Reviewed end to end on 2026-08-27; findings and reasoning in
 ## 9. Verifying a change
 
 ```bash
-npm test                                             # 295 tests
+npm test                                             # 305 tests
 node --check server.js monitor.js store.js diagnose.js auth.js
 
 # Against production

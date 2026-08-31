@@ -1,18 +1,21 @@
 /* ═══════════════════════════════════════════════════════════════════════════
-   Which stations may send email
+   ALERT_STATIONS is a migration input, not a run-time gate
 
-   Recipients are a single global list. So the moment a second station is added
-   through the admin panel, its outages start paging the first station's staff —
-   a general manager woken at 3am about a transmitter in another city, with no
-   setting anywhere that says so.
+   It used to decide, on every send, which stations were allowed to email. That
+   made it the only thing keeping one station's 3am outage out of another
+   station's inbox — and, because nothing displayed it, the reason three
+   monitored stations could reach nobody at all while looking fully configured.
 
-   ALERT_STATIONS is the gate. Empty means every station, which is what a
-   single-station deployment has always had and must keep having.
+   On 2026-08-31 recipients moved into the store. ALERT_STATIONS now has exactly
+   one job, once: it decides which stations get seeded with the environment's
+   addresses and which are seeded explicitly off (see alert-migration.test.js).
+   After that it is never read again.
 
-   The invariant that must NOT bend: recording is unaffected. A station that
-   emails nobody is still fully monitored, and its events still enter the
-   permanent record — otherwise "we are not paging you about this" quietly
-   becomes "we are not watching this".
+   THESE ARE REGRESSION GUARDS. Every case here fails if env-based gating is put
+   back at send time. That would be a regression even though it would look like
+   a safety feature: it reintroduces a rule that overrides the admin panel and
+   appears on no screen, so an operator adds recipients, saves them, sees them
+   stored, and is never told why nothing arrives.
    ═══════════════════════════════════════════════════════════════════════════ */
 
 const test = require('node:test');
@@ -23,27 +26,46 @@ const fs = require('fs');
 
 process.env.DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'alertstations-'));
 process.env.SEED_FILE = '/nonexistent';
+// Deliberately restrictive. Under the old rules this permitted kpft and nothing
+// else; under the current rules it must permit nothing and forbid nothing.
 process.env.ALERT_STATIONS = 'kpft';
+process.env.ALERT_EMAILS = 'env-list@example.org';
 
 const monitor = require('../monitor');
-const { alertsEnabledFor } = monitor;
+const { alertsEnabledFor, recipientsFor } = monitor;
 
-test('a station on the list may alert', () => {
-  assert.equal(alertsEnabledFor({ stationId: 'kpft' }), true);
+test('a station NOT named by ALERT_STATIONS may still email', () => {
+  assert.equal(
+    alertsEnabledFor({ stationId: 'wpfw', stationAlerts: { enabled: true, recipients: ['gm@wpfw.org'] } }),
+    true,
+  );
 });
 
-test('a station NOT on the list may not — this is the whole point', () => {
-  assert.equal(alertsEnabledFor({ stationId: 'wpfw' }), false);
-  assert.equal(alertsEnabledFor({ stationId: 'kpfk' }), false);
+test('a station named by ALERT_STATIONS is still muted when switched off', () => {
+  // The panel's switch is the authority in both directions, not just the
+  // permissive one.
+  assert.equal(
+    alertsEnabledFor({ stationId: 'kpft', stationAlerts: { enabled: false, recipients: ['gm@kpft.org'] } }),
+    false,
+  );
 });
 
-test('matching ignores case, because the value is typed into a hosting panel', () => {
-  assert.equal(alertsEnabledFor({ stationId: 'KPFT' }), true);
+test('ALERT_EMAILS never reaches a send', () => {
+  // It is set above. If it appears in any resolved recipient list, the
+  // send-time fallback has been reintroduced.
+  for (const stream of [
+    { stationId: 'kpft' },
+    { stationId: 'wpfw' },
+    { stationId: 'kpft', stationAlerts: { enabled: true, recipients: [] } },
+    {},
+  ]) {
+    assert.deepEqual(recipientsFor(stream).recipients, [],
+      `ALERT_EMAILS leaked into ${JSON.stringify(stream)}`);
+  }
 });
 
-test('a stream with no station cannot alert while a list is set', () => {
+test('a stream with no station reaches nobody', () => {
   // Failing open here would mean anything unrecognised pages everyone.
-  assert.equal(alertsEnabledFor({}), false);
-  assert.equal(alertsEnabledFor(null), false);
-  assert.equal(alertsEnabledFor({ stationId: '' }), false);
+  assert.deepEqual(recipientsFor({}).recipients, []);
+  assert.deepEqual(recipientsFor(null).recipients, []);
 });

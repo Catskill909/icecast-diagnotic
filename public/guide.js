@@ -105,11 +105,13 @@
          out. Simultaneous failures across channels are correlated and consolidated
          into one message rather than several — but never across two stations. A
          station only ever hears about its own channels.`,
-        `<strong>Each station has its own recipients</strong>, set with the Alerts
-         button on its card in the admin panel. A station with none falls back to
-         the monitor-wide list. Switching a station off there stops its email
-         without stopping its monitoring: the outages are still recorded in full,
-         and still appear on every page.`,
+        `<strong>Each station has its own list of addresses</strong>, set with the
+         Alerts button on its card in the admin panel. That one list receives
+         everything the station sends — outage alerts, recovery notices and its
+         weekly report. A station with nobody on its list emails nobody.`,
+        `Switching a station off there stops its email without stopping its
+         monitoring: the outages are still recorded in full, still diagnosed, and
+         still appear on every page.`,
         `Alerts lead with the root cause, the listener reach, and specific things to
          check. Every event records whether its alert actually sent.`,
         `A <strong>degraded channel</strong> — still playing, but missing one of its
@@ -240,6 +242,12 @@
         `Sending it after a quiet week is deliberate: it is the only message that
          proves monitoring is still running. Silence from a monitor is ambiguous —
          a quiet week and a dead monitor look identical from the inbox.`,
+        `<strong>One report per station</strong>, covering only that station's
+         channels and going to exactly the people its outage alerts go to. It
+         arrives at the chosen hour in the station's own timezone, so a 9am report
+         reaches a reader in Los Angeles at 9am, not at 7am.`,
+        `A station with nobody on its recipient list, or with alerts switched off,
+         gets no roundup — there is nobody to send it to.`,
       ],
     },
   ];

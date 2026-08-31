@@ -100,17 +100,19 @@ const SAVE_INTERVAL = parseInt(process.env.SAVE_INTERVAL_MS, 10) || 60 * 1000;
 // the real alerts in noise. Tolerant of case and stray whitespace, because this
 // gets typed into a hosting-panel text field where a capitalised value or a
 // pasted tab would otherwise leave alerts silently switched on.
-// Which stations may send email. Empty means all of them, which is what a
-// single-station deployment has always had.
+// Which stations may send email, for stations that have NOT been configured in
+// the admin panel. Empty means all of them, which is what a single-station
+// deployment has always had.
 //
-// Recipients are still one global list, so every station's alerts reach the same
-// inbox. Until they are per-station, adding a station to the panel silently
-// signs KPFT's recipients up for its outages — a GM paged at 3am about a station
-// in another city.
+// This was written as a stopgap: recipients were one global list, so any station
+// added to the panel would have signed the first station's staff up for its
+// outages — a GM paged at 3am about a station in another city. Recipients are
+// now per-station, and a station configured there answers for itself and
+// overrides this variable entirely (see alertsEnabledFor).
 //
-// This is the stopgap and it is also a real setting: a station being trialled,
-// or one whose staff have not been onboarded yet, should be recorded in full and
-// email nobody.
+// It remains as the DEFAULT for stations nobody has configured yet, which is the
+// right default: a station being trialled, or one whose staff have not been
+// onboarded, should be recorded in full and email nobody.
 const ALERT_STATIONS = (process.env.ALERT_STATIONS || '')
   .split(',').map((s) => s.trim().toLowerCase()).filter(Boolean);
 
@@ -151,56 +153,105 @@ const PROBE_ERROR = 'probe_error';    // our probe failed; Icecast served on
  * Only the notification is withheld, and the event says so.
  */
 function alertsEnabledFor(stream) {
-  const own = stream?.stationAlerts;
-
-  // A station configured in the panel answers for itself, and OVERRIDES the
-  // ALERT_STATIONS env var rather than being ANDed with it.
+  // The store is the only authority. ALERT_STATIONS seeded this at migration and
+  // is not consulted again — reading it here as well would mean a station could
+  // be switched on in the panel and still send nothing because of a variable
+  // typed into a hosting panel weeks earlier that no screen displays. A silent
+  // no-op is the one failure a screen like this must not have.
   //
-  // This follows the rule the rest of the configuration already runs on: the
-  // store is authoritative, env only seeds it. The alternative was worse in the
-  // specific way that matters — an operator adds recipients for WPFW, saves,
-  // sees the addresses stored, and still nothing sends, because of a variable
-  // typed into a hosting panel weeks earlier and visible from nowhere in the UI.
-  // A silent no-op is the one failure a screen like this must not have.
-  if (own && Object.keys(own).length) return own.enabled !== false;
+  // A station with no block at all — added since the migration — is ON with an
+  // empty list, so nothing is sent and describeAlertRouting() says exactly why:
+  // "no recipients have been added yet". That is a to-do an operator can act on,
+  // where a silent mute is not.
+  return stream?.stationAlerts?.enabled !== false;
+}
 
-  if (!ALERT_STATIONS.length) return true;
-  return ALERT_STATIONS.includes(String(stream?.stationId || '').toLowerCase());
+/**
+ * One-time migration: environment recipient lists become each station's own.
+ *
+ * Recipients were the last piece of configuration still read from the
+ * environment at send time, which is why the admin panel could show a station
+ * "2 recipients" in one line and "none set" in the next: the two addresses that
+ * actually received KPFT's alerts lived in a variable no screen could display or
+ * edit. Every other setting in this system follows "env seeds once, the store
+ * owns" — this brings recipients into line with that, and the panel becomes
+ * ordinary as a result.
+ *
+ * THE ONE THING THIS MUST NOT DO IS CHANGE WHO RECEIVES EMAIL.
+ *
+ * `ALERT_STATIONS` currently names the only station permitted to email. Copying
+ * ALERT_EMAILS onto every station would sign that station's staff up for three
+ * others in three different cities — the exact 3am failure per-station
+ * recipients exist to prevent. So a station is seeded with the addresses only if
+ * it may email today; every other station is seeded explicitly empty and
+ * disabled, which is what it already effectively is.
+ *
+ * ALERT_CC is merged into the same single list rather than seeded separately.
+ * To/CC distinguishes people, not automated alerts, and it has a real member
+ * today whose loss would silently stop the monitor owner receiving anything.
+ *
+ * Pure and exported so the before/after equivalence can be tested against the
+ * real production shape without booting anything.
+ */
+function seedAlertsFromEnv(config, env = {}) {
+  const emails = (env.alertEmails ?? process.env.ALERT_EMAILS ?? '')
+    .split(',').map((e) => e.trim()).filter(Boolean);
+  const cc = (env.alertCc ?? process.env.ALERT_CC ?? '')
+    .split(',').map((e) => e.trim()).filter(Boolean);
+  const stations = (env.alertStations ?? process.env.ALERT_STATIONS ?? '')
+    .split(',').map((e) => e.trim().toLowerCase()).filter(Boolean);
+
+  // Merged and deduplicated case-insensitively, keeping the form as typed.
+  const merged = [];
+  const seen = new Set();
+  for (const addr of [...emails, ...cc]) {
+    const key = addr.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    merged.push(addr);
+  }
+
+  const next = JSON.parse(JSON.stringify(config));
+  next.stations = (next.stations || []).map((station) => {
+    // A station already configured in the panel is never overwritten. The store
+    // is authoritative; this only fills in what was never set.
+    if (station.alerts && Object.keys(station.alerts).length) return station;
+
+    const permitted = !stations.length || stations.includes(String(station.id).toLowerCase());
+    return {
+      ...station,
+      alerts: permitted
+        ? { enabled: true, recipients: merged }
+        // Explicitly empty and off, rather than absent. "Nobody has set this up"
+        // and "this was switched off" must not be the same state, and today's
+        // answer for these stations is genuinely the second one.
+        : { enabled: false, recipients: [] },
+    };
+  });
+  return next;
 }
 
 /** Why nothing was sent, in the words of whichever rule actually withheld it. */
 function mutedReasonFor(stream) {
-  const own = stream?.stationAlerts;
-  if (own && Object.keys(own).length && own.enabled === false) {
-    return `alerts are switched off for station "${stream?.stationId || 'unknown'}"`;
-  }
-  return `alerts not enabled for station "${stream?.stationId || 'unknown'}" (ALERT_STATIONS)`;
+  return `alerts are switched off for station "${stream?.stationId || 'unknown'}"`;
 }
 
 /**
  * Who this stream's alerts go to.
  *
- * Falls back to the global list when a station has none of its own, so every
- * deployment that predates per-station recipients keeps behaving exactly as it
- * did. `source` is returned because it belongs in the delivery record: "sent to
- * 2 people" is not a useful audit line if nobody can tell whether those two were
- * the station's own contacts or the catch-all everything falls back to.
+ * There is no fallback. `ALERT_EMAILS` seeded these lists once at migration and
+ * is never read again — the panel would otherwise be able to display a list that
+ * is not the list being emailed, which is exactly the confusion this replaced.
  */
 function recipientsFor(stream) {
-  const own = stream?.stationAlerts;
-
-  if (own && Array.isArray(own.recipients) && own.recipients.length) {
-    return {
-      recipients: [...own.recipients],
-      cc: Array.isArray(own.cc) ? [...own.cc] : [],
-      source: 'station',
-    };
-  }
-
+  const own = stream?.stationAlerts || {};
   return {
-    recipients: (process.env.ALERT_EMAILS || '').split(',').map((e) => e.trim()).filter(Boolean),
-    cc: (process.env.ALERT_CC || '').split(',').map((e) => e.trim()).filter(Boolean),
-    source: 'global',
+    recipients: Array.isArray(own.recipients) ? [...own.recipients] : [],
+    // Retained only so a value stored before CC was retired is still honoured
+    // rather than silently dropped. Nothing writes it any more and the panel
+    // does not offer it.
+    cc: Array.isArray(own.cc) ? [...own.cc] : [],
+    source: 'station',
   };
 }
 
@@ -243,7 +294,7 @@ let intervalHandle = null;
 let checkInFlight = false;   // guards against overlapping check cycles
 let flushHandle = null;
 let roundupHandle = null;
-let roundupAttempts = { day: null, count: 0 };  // send retries for today's slot
+let roundupAttempts = {};  // send retries for today's slot, keyed by station id
 let transporter = null;
 
 // ── Initialize ──────────────────────────────────────────────────────────────
@@ -550,6 +601,36 @@ function init() {
     );
   }
 
+  // Recipients move out of the environment and into the store, once. Guarded by
+  // a marker rather than by "does any station have alerts", because an operator
+  // clearing the last address from every station must not look like a fresh
+  // volume and get the env list written back underneath them.
+  if (!store.getMeta('alertRecipientsSeeded')) {
+    const before = JSON.stringify(cfg.stations.map((st) => st.alerts || null));
+    cfg = seedAlertsFromEnv(cfg);
+    store.setStationConfig(cfg);
+    store.setMeta('alertRecipientsSeeded', new Date().toISOString());
+    store.saveEvents();
+
+    // The weekly roundup's one shared "sent this week" marker becomes one per
+    // station. Copied rather than dropped: dropped, a container that redeploys
+    // after a Monday send would send the same report a second time.
+    const legacyDay = store.getMeta('lastWeeklyRoundupDay');
+    if (legacyDay) {
+      for (const st of cfg.stations) {
+        if (store.getMeta(`lastWeeklyRoundupDay:${st.id}`)) continue;
+        store.setMeta(`lastWeeklyRoundupDay:${st.id}`, legacyDay);
+      }
+    }
+
+    if (JSON.stringify(cfg.stations.map((st) => st.alerts || null)) !== before) {
+      const summary = cfg.stations
+        .map((st) => `${st.id}=${st.alerts?.enabled === false ? 'off' : (st.alerts?.recipients || []).length}`)
+        .join(' ');
+      console.log(`[Monitor] Seeded alert recipients from environment — ${summary}`);
+    }
+  }
+
   streams = normaliseStreams(flattenChannels(cfg));
   store.ensureStreams(streams.map((s) => s.id));
 
@@ -568,7 +649,16 @@ function init() {
 
   console.log(`[Monitor] Initialized with ${streams.length} streams`);
   console.log(`[Monitor] Check interval: ${CHECK_INTERVAL}ms, Failure threshold: ${FAILURE_THRESHOLD}`);
-  console.log(`[Monitor] Email alerts: ${ALERT_STATIONS.length ? 'only ' + ALERT_STATIONS.join(', ') : 'every station'}`);
+  // Reports what the STORE says, not what the env says. ALERT_STATIONS no longer
+  // routes anything — a log line quoting it would describe a rule that is not
+  // running, which is worse than no log line at all.
+  const routing = (cfg.stations || [])
+    .map((st) => {
+      const n = (st.alerts?.recipients || []).length;
+      return `${st.id}: ${st.alerts?.enabled === false ? 'off' : `${n} recipient(s)`}`;
+    })
+    .join(' · ');
+  console.log(`[Monitor] Email alerts — ${routing || 'no stations configured'}`);
   console.log(`[Monitor] Retention: newest ${store.MAX_EVENTS} events, raw samples ${store.SAMPLE_RETENTION_DAYS}d then hourly rollups`);
 }
 
@@ -1875,10 +1965,6 @@ function describeAlertRouting(stationId) {
   const out = {
     recipientCount: resolved.recipients.length,
     ccCount: resolved.cc.length,
-    // Named so the panel can distinguish "your own list" from "the fallback
-    // everyone shares" — which look identical from a count alone, and mean very
-    // different things to a station manager reading the screen.
-    recipientSource: resolved.source,
     enabled,
   };
 
@@ -1976,7 +2062,6 @@ async function sendAlert(opts) {
       reason: resolved.source === 'station'
         ? 'no recipients configured for this station'
         : 'no recipients configured',
-      recipientSource: resolved.source,
       attemptedAt,
     };
   }
@@ -2000,10 +2085,6 @@ async function sendAlert(opts) {
       sentAt: new Date().toISOString(),
       recipients,
       cc: ccRecipients,
-      // "Sent to 2 people" is not an audit line if nobody can tell whether those
-      // two were this station's own contacts or the catch-all list everything
-      // falls back to. Redaction keeps this — it names no one.
-      recipientSource: resolved.source,
       subject,
       messageId: info?.messageId || null,
       accepted: info?.accepted?.length ?? recipients.length,
@@ -2018,7 +2099,6 @@ async function sendAlert(opts) {
       attemptedAt,
       recipients,
       cc: ccRecipients,
-      recipientSource: resolved.source,
       subject,
       error: err.message,
       errorCode: err.code || null,
@@ -2407,7 +2487,14 @@ function getConfig() {
       day: WEEKLY_ROUNDUP_DAY,
       hour: WEEKLY_ROUNDUP_HOUR,
       timezone: STATION_TZ,
-      lastSent: store.getMeta('lastWeeklyRoundup')?.sentAt || null,
+      // The most recent send across every station, plus the per-station detail.
+    // A single figure alone would read as "the roundup went out" when three of
+    // four stations had not received one.
+    lastSent: roundupHistory().reduce(
+      (latest, r) => (r.sentAt && (!latest || r.sentAt > latest) ? r.sentAt : latest),
+      store.getMeta('lastWeeklyRoundup')?.sentAt || null,
+    ),
+    perStation: roundupHistory().map((r) => ({ stationId: r.stationId, sentAt: r.sentAt || null })),
     },
     sampleRetentionDays: store.SAMPLE_RETENTION_DAYS,
     eventRetention: 'not-pruned-by-age',
@@ -2682,61 +2769,72 @@ function buildWeeklyRoundup(rollup) {
   return { subject, html };
 }
 
+/** Each station's last roundup delivery record, for the config endpoint. */
+function roundupHistory() {
+  return getStations().map((st) => {
+    const rec = store.getMeta(`lastWeeklyRoundup:${st.id}`) || {};
+    return { stationId: st.id, sentAt: rec.sentAt || null };
+  });
+}
+
 /** The roundup as it would be sent, without sending it. */
-function previewWeeklyRoundup(windowMs = WEEKLY_ROUNDUP_WINDOW_MS) {
-  // Preview what would actually be sent, scope included.
-  const station = ALERT_STATIONS.length === 1 ? ALERT_STATIONS[0] : undefined;
+function previewWeeklyRoundup(windowMs = WEEKLY_ROUNDUP_WINDOW_MS, stationId) {
+  // Previews what would ACTUALLY be sent, scope included — a preview drawn from
+  // a different scope than the send is worse than no preview, because it is
+  // trusted. Defaults to the only station when there is one.
+  const station = stationId || (getStations().length === 1 ? getStations()[0].id : undefined);
   return buildWeeklyRoundup(getPeriodRollup(windowMs, station));
 }
 
 /**
- * Who the weekly roundup goes to.
+ * Who a station's weekly roundup goes to.
  *
- * ALERT_CC is copied for the same reason it is on every alert: it is the monitor
- * owner's address, and the roundup is the ONE message that arrives in a week when
- * nothing went wrong — which is the only thing that distinguishes a quiet week
- * from a monitor that has silently stopped running. Omitting it meant whoever
- * runs the monitor received every 3am outage alert and never the report saying
- * the system was still alive. Reported by the operator on 2026-08-31, who had
- * had no roundup at all while alerts arrived normally.
+ * The same list its outage alerts go to, because they are the same question
+ * asked at different times: who should hear about this station. It read a
+ * different list until 2026-08-31 — `ALERT_EMAILS` without `ALERT_CC` — and the
+ * consequence was the operator running the monitor receiving every 3am outage
+ * alert and, in seven weeks, not one weekly report. That is the worst address to
+ * omit: the roundup is the only message that arrives in a quiet week, so it is
+ * the only thing that separates "nothing broke" from "the monitor died".
  *
- * An explicit `to` sends to that one address and copies NOBODY. That parameter
- * exists so a person can check the message, and quietly mailing the whole
- * station every time somebody previews it is the opposite of what it is for.
+ * An explicit `to` sends to that one address and copies nobody. It exists so a
+ * person can check the message, and quietly mailing the whole station every time
+ * somebody previews it is the opposite of what it is for.
  */
-function roundupRecipients(to) {
+function roundupRecipients(to, stationId) {
   if (to) return { recipients: [to], cc: [] };
 
-  const recipients = (process.env.WEEKLY_ROUNDUP_EMAILS || process.env.ALERT_EMAILS || '')
-    .split(',').map((e) => e.trim()).filter(Boolean);
+  const stream = streams.find((st) => st.stationId === stationId);
+  const own = stream?.stationAlerts || {};
+  if (own.enabled === false) return { recipients: [], cc: [] };
 
-  const cc = (process.env.ALERT_CC || '').split(',').map((e) => e.trim()).filter(Boolean)
-    // An address on both lists would receive the roundup twice.
-    .filter((a) => !recipients.some((r) => r.toLowerCase() === a.toLowerCase()));
-
-  return { recipients, cc };
+  return {
+    recipients: Array.isArray(own.recipients) ? [...own.recipients] : [],
+    cc: Array.isArray(own.cc) ? [...own.cc] : [],
+  };
 }
 
 /**
  * Builds and sends the roundup. Returns the same delivery-outcome shape as
  * sendAlert, so a failure is reported rather than logged and forgotten.
  */
-async function sendWeeklyRoundup({ to, windowMs = WEEKLY_ROUNDUP_WINDOW_MS } = {}) {
+async function sendWeeklyRoundup({ to, windowMs = WEEKLY_ROUNDUP_WINDOW_MS, stationId } = {}) {
   const attemptedAt = new Date().toISOString();
   if (!transporter) return { attempted: false, sent: false, reason: 'SMTP not configured', attemptedAt };
 
-  const { recipients, cc: ccRecipients } = roundupRecipients(to);
+  // Defaults to the only station when there is one, so a single-station install
+  // and every existing caller keep working without naming it.
+  const station = stationId || (getStations().length === 1 ? getStations()[0].id : undefined);
+
+  const { recipients, cc: ccRecipients } = roundupRecipients(to, station);
   if (!recipients.length) {
-    return { attempted: false, sent: false, reason: 'no recipients configured', attemptedAt };
+    return { attempted: false, sent: false, reason: 'no recipients configured', attemptedAt, stationId: station };
   }
 
-  // The roundup covers exactly what alerts cover. Recipients are one global list,
-  // so a report spanning every station would tell KPFT's staff about outages at
-  // stations in other cities — and, worse, fold those figures into the uptime
-  // number they read as their own.
-  const roundupStation = ALERT_STATIONS.length === 1 ? ALERT_STATIONS[0] : undefined;
-
-  const rollup = getPeriodRollup(windowMs, roundupStation);
+  // Scoped to this station's own channels. A report spanning every station would
+  // tell one station's staff about outages in other cities and — worse — fold
+  // those figures into the uptime number they read as their own.
+  const rollup = getPeriodRollup(windowMs, station);
   const { subject, html } = buildWeeklyRoundup(rollup);
 
   try {
@@ -2752,11 +2850,11 @@ async function sendWeeklyRoundup({ to, windowMs = WEEKLY_ROUNDUP_WINDOW_MS } = {
     console.log(`[Monitor] 📊 Weekly roundup sent to ${recipients.length} recipient(s)${ccRecipients.length ? ` + ${ccRecipients.length} CC` : ''} — ${subject}`);
     return {
       attempted: true, sent: true, attemptedAt, sentAt: new Date().toISOString(),
-      recipients, cc: ccRecipients, subject, messageId: info?.messageId || null,
+      recipients, cc: ccRecipients, subject, stationId: station, messageId: info?.messageId || null,
     };
   } catch (err) {
     console.error('[Monitor] 📊 FAILED to send weekly roundup:', err.message);
-    return { attempted: true, sent: false, attemptedAt, recipients, cc: ccRecipients, subject, error: err.message };
+    return { attempted: true, sent: false, attemptedAt, recipients, cc: ccRecipients, subject, stationId: station, error: err.message };
   }
 }
 
@@ -2785,47 +2883,73 @@ function zonedParts(date, tz) {
  * and a monitor that was down at the scheduled hour still sends when it comes
  * back later that same day rather than skipping the week entirely.
  */
+/**
+ * Fires each station's roundup on its scheduled day, at most once per week each.
+ *
+ * ONE REPORT PER STATION, and three things follow from that which a single
+ * global send did not have to think about:
+ *
+ *   · The hour is read in the STATION'S OWN timezone. WPFW is Eastern, KPFK is
+ *     Pacific. A 9am report should arrive at 9am where the person reading it
+ *     lives, not at 9am in Houston.
+ *   · The once-a-week marker is PER STATION. One shared marker meant the first
+ *     station to send declared the week finished for all of them, so three
+ *     stations would silently never receive a report.
+ *   · Retries are per station too. A refused connection for one must not consume
+ *     another's attempts, and must not mark another's week done.
+ */
 function checkWeeklyRoundup() {
   if (!WEEKLY_ROUNDUP_ENABLED || !transporter) return;
 
-  const now = zonedParts(new Date(), STATION_TZ);
-  if (now.weekday !== WEEKLY_ROUNDUP_DAY || now.hour < WEEKLY_ROUNDUP_HOUR) return;
-  if (store.getMeta('lastWeeklyRoundupDay') === now.day) return;
+  for (const station of getStations()) {
+    const tz = station.timezone || STATION_TZ;
+    const now = zonedParts(new Date(), tz);
+    if (now.weekday !== WEEKLY_ROUNDUP_DAY || now.hour < WEEKLY_ROUNDUP_HOUR) continue;
 
-  // A monitor with almost no history for the period would report a week of
-  // silence it never actually watched. Claim the slot anyway so it does not
-  // retry every five minutes for the rest of the day.
-  // Coverage is measured over the same scope the roundup reports on, or a
-  // station with weeks of history would vouch for one added yesterday.
-  const rollup = getPeriodRollup(WEEKLY_ROUNDUP_WINDOW_MS,
-    ALERT_STATIONS.length === 1 ? ALERT_STATIONS[0] : undefined);
-  if (rollup.coverageMs < 12 * 60 * 60 * 1000) {
-    console.log('[Monitor] 📊 Weekly roundup skipped — under 12h of monitoring data for the period');
-    store.setMeta('lastWeeklyRoundupDay', now.day);
-    store.saveEvents();
-    return;
-  }
+    const dayKey = `lastWeeklyRoundupDay:${station.id}`;
+    if (store.getMeta(dayKey) === now.day) continue;
 
-  // Claim the slot BEFORE sending, so a send that takes longer than the tick
-  // interval cannot be started twice.
-  store.setMeta('lastWeeklyRoundupDay', now.day);
-  roundupAttempts = roundupAttempts.day === now.day
-    ? { day: now.day, count: roundupAttempts.count + 1 }
-    : { day: now.day, count: 1 };
+    // Nobody to send to is not a failure and not a slot to claim: the day it is
+    // configured, it should send that week rather than having been marked done
+    // while it had no recipients.
+    if (!roundupRecipients(undefined, station.id).recipients.length) continue;
 
-  sendWeeklyRoundup()
-    .then((res) => {
-      store.setMeta('lastWeeklyRoundup', res);
-      // A refused SMTP connection should not cost the whole week's report, but
-      // nor should a broken mail server be retried 288 times before midnight.
-      // Release the slot for a few more attempts, then leave it claimed.
-      if (!res.sent && res.attempted && roundupAttempts.count < ROUNDUP_MAX_ATTEMPTS) {
-        store.setMeta('lastWeeklyRoundupDay', null);
-        console.warn(`[Monitor] 📊 Weekly roundup send failed — retrying in ${ROUNDUP_TICK_MS / 60000} min (attempt ${roundupAttempts.count}/${ROUNDUP_MAX_ATTEMPTS})`);
-      }
+    // A monitor with almost no history for the period would report a week of
+    // silence it never actually watched. Claim the slot anyway so it does not
+    // retry every five minutes for the rest of the day. Coverage is measured
+    // over this station's own scope, or a station with weeks of history would
+    // vouch for one added yesterday.
+    const rollup = getPeriodRollup(WEEKLY_ROUNDUP_WINDOW_MS, station.id);
+    if (rollup.coverageMs < 12 * 60 * 60 * 1000) {
+      console.log(`[Monitor] 📊 Weekly roundup for ${station.id} skipped — under 12h of monitoring data`);
+      store.setMeta(dayKey, now.day);
       store.saveEvents();
-    })
-    .catch((err) => console.error('[Monitor] 📊 Weekly roundup failed:', err.message));
+      continue;
+    }
+
+    // Claim the slot BEFORE sending, so a send that takes longer than the tick
+    // interval cannot be started twice.
+    store.setMeta(dayKey, now.day);
+    const prev = roundupAttempts[station.id];
+    roundupAttempts[station.id] = prev && prev.day === now.day
+      ? { day: now.day, count: prev.count + 1 }
+      : { day: now.day, count: 1 };
+    const attempt = roundupAttempts[station.id].count;
+
+    sendWeeklyRoundup({ stationId: station.id })
+      .then((res) => {
+        store.setMeta(`lastWeeklyRoundup:${station.id}`, res);
+        // A refused SMTP connection should not cost the whole week's report, but
+        // nor should a broken mail server be retried 288 times before midnight.
+        // Release the slot for a few more attempts, then leave it claimed.
+        if (!res.sent && res.attempted && attempt < ROUNDUP_MAX_ATTEMPTS) {
+          store.setMeta(dayKey, null);
+          console.warn(`[Monitor] 📊 Weekly roundup for ${station.id} failed — retrying in ${ROUNDUP_TICK_MS / 60000} min (attempt ${attempt}/${ROUNDUP_MAX_ATTEMPTS})`);
+        }
+        store.saveEvents();
+      })
+      .catch((err) => console.error(`[Monitor] 📊 Weekly roundup for ${station.id} failed:`, err.message));
+  }
 }
 
 module.exports = {
@@ -2838,6 +2962,7 @@ module.exports = {
   getStations, streamIdsFor,
   reloadConfig,
   alertsEnabledFor, recipientsFor, mutedReasonFor, describeAlertRouting, groupEntriesByStation,
+  seedAlertsFromEnv,
   saveStationConfig,
   abandonEpisode,
   // Exported for tests.

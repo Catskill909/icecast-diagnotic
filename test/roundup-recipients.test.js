@@ -4,17 +4,20 @@
    Reported 2026-08-31: the operator running the monitor had received every
    outage alert for weeks and not one weekly roundup. The cause was not a
    delivery failure — the Aug 24 roundup sent successfully — it was that alerts
-   and the roundup read DIFFERENT recipient lists. sendAlert() sends to
-   ALERT_EMAILS plus ALERT_CC; the roundup sent to ALERT_EMAILS alone, so an
-   address configured only as CC got the 3am pages and never the report.
+   and the roundup read DIFFERENT recipient lists. Alerts went to ALERT_EMAILS
+   plus ALERT_CC; the roundup went to ALERT_EMAILS alone, so an address
+   configured only as CC got the 3am pages and never the report.
 
    That matters more than an ordinary missing copy. The roundup is the ONE
    message that arrives in a week when nothing went wrong, and it is therefore
    the only thing distinguishing a quiet week from a monitor that has silently
-   died. The person most in need of that signal is precisely the one on ALERT_CC.
+   died. The person most in need of that signal is precisely the one who was
+   omitted.
 
-   Written against the class: any message the monitor sends on its own schedule
-   must reach the same people as the ones it sends on an incident.
+   THE RULE, now that recipients live in the store: a station's roundup goes to
+   the same list as its alerts. Not a parallel list, not an env var — the same
+   list. Two lists is what caused this, and any second source of truth
+   reintroduces it.
    ═══════════════════════════════════════════════════════════════════════════ */
 
 const test = require('node:test');
@@ -25,89 +28,92 @@ const fs = require('fs');
 
 process.env.DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'roundup-'));
 process.env.SEED_FILE = '/nonexistent';
+// Set deliberately. None of these may reach a send any more.
+process.env.ALERT_EMAILS = 'env-alerts@example.org';
+process.env.ALERT_CC = 'env-cc@example.org';
+process.env.WEEKLY_ROUNDUP_EMAILS = 'env-roundup@example.org';
 
 const monitor = require('../monitor');
-const { roundupRecipients } = monitor;
+const { roundupRecipients, recipientsFor, reloadConfig } = monitor;
 
-/** Restores the env after each case, so ordering cannot make one pass falsely. */
-function withEnv(vars, fn) {
-  const saved = {};
-  for (const [k, v] of Object.entries(vars)) {
-    saved[k] = process.env[k];
-    if (v === undefined) delete process.env[k];
-    else process.env[k] = v;
-  }
-  try { return fn(); } finally {
-    for (const [k, v] of Object.entries(saved)) {
-      if (v === undefined) delete process.env[k];
-      else process.env[k] = v;
-    }
-  }
-}
+/* Two stations with different lists, so "the right list" is a real assertion
+   rather than something a single-station fixture would pass by accident. */
+const CONFIG = {
+  version: 1,
+  hosts: [{ id: 'h', host: 'streams.example.org:9000' }],
+  stations: [
+    {
+      id: 'kpft',
+      name: 'KPFT',
+      timezone: 'America/Chicago',
+      alerts: { enabled: true, recipients: ['gm@kpft.org', 'paul@hype.net'] },
+      channels: [{ id: 'kpft-main', name: 'Main', url: 'https://streams.example.org:9000/live_128' }],
+    },
+    {
+      id: 'wpfw',
+      name: 'WPFW',
+      timezone: 'America/New_York',
+      alerts: { enabled: true, recipients: ['gm@wpfw.org'] },
+      channels: [{ id: 'wpfw', name: 'WPFW', url: 'https://streams.example.org:9000/wpfw_128' }],
+    },
+    {
+      id: 'kpfk',
+      name: 'KPFK',
+      timezone: 'America/Los_Angeles',
+      alerts: { enabled: false, recipients: ['gm@kpfk.org'] },
+      channels: [{ id: 'kpfk', name: 'KPFK', url: 'https://streams.example.org:9000/kpfk_128' }],
+    },
+  ],
+};
 
-test('the roundup copies ALERT_CC, exactly as an alert does', () => {
-  withEnv({
-    ALERT_EMAILS: 'gm@kpft.org,engineer@kpft.org',
-    ALERT_CC: 'monitor-owner@example.org',
-    WEEKLY_ROUNDUP_EMAILS: undefined,
-  }, () => {
-    const r = roundupRecipients();
-    assert.deepEqual(r.recipients, ['gm@kpft.org', 'engineer@kpft.org']);
-    assert.deepEqual(r.cc, ['monitor-owner@example.org'],
-      'an address configured only as CC must receive the roundup too');
-  });
+const store = require('../store');
+store.load();
+store.setStationConfig(CONFIG);
+reloadConfig();
+
+test('a station\'s roundup goes to the SAME list as its alerts', () => {
+  // The whole finding, as one assertion. Two lists is what caused this.
+  for (const id of ['kpft', 'wpfw']) {
+    const stream = monitor.getStreams().find((s) => s.stationId === id);
+    assert.deepEqual(
+      roundupRecipients(undefined, id).recipients,
+      recipientsFor(stream).recipients,
+      `${id}: the roundup and its alerts must not read different lists`,
+    );
+  }
 });
 
-test('WEEKLY_ROUNDUP_EMAILS overrides the recipients but does NOT drop the CC', () => {
-  // The override chooses who the report is FOR. It is not a statement that the
-  // monitor owner should stop hearing whether the monitor is alive.
-  withEnv({
-    ALERT_EMAILS: 'gm@kpft.org',
-    ALERT_CC: 'monitor-owner@example.org',
-    WEEKLY_ROUNDUP_EMAILS: 'board@kpft.org',
-  }, () => {
-    const r = roundupRecipients();
-    assert.deepEqual(r.recipients, ['board@kpft.org']);
-    assert.deepEqual(r.cc, ['monitor-owner@example.org']);
-  });
+test('each station gets its own list, not another station\'s', () => {
+  assert.deepEqual(roundupRecipients(undefined, 'kpft').recipients, ['gm@kpft.org', 'paul@hype.net']);
+  assert.deepEqual(roundupRecipients(undefined, 'wpfw').recipients, ['gm@wpfw.org']);
 });
 
-test('an explicit ?to= copies nobody', () => {
+test('no environment variable reaches a roundup', () => {
+  // ALERT_EMAILS, ALERT_CC and WEEKLY_ROUNDUP_EMAILS are all set above. A
+  // regression guard: any of them appearing here means a second source of truth
+  // has been reintroduced, which is the bug this file exists for.
+  const all = ['kpft', 'wpfw', 'kpfk', 'nosuchstation']
+    .flatMap((id) => roundupRecipients(undefined, id).recipients)
+    .join(' ');
+  for (const leaked of ['env-alerts@example.org', 'env-cc@example.org', 'env-roundup@example.org']) {
+    assert.equal(all.includes(leaked), false, `${leaked} reached a roundup`);
+  }
+});
+
+test('a station with alerts switched off gets no roundup', () => {
+  // Switching alerts off means "do not email this station's people". A weekly
+  // report is email. It keeps its recipients, so switching back on restores it.
+  assert.deepEqual(roundupRecipients(undefined, 'kpfk').recipients, []);
+});
+
+test('an unknown station reaches nobody rather than falling back', () => {
+  assert.deepEqual(roundupRecipients(undefined, 'nosuchstation').recipients, []);
+});
+
+test('an explicit ?to= sends to that one address and copies nobody', () => {
   // That parameter exists so a person can CHECK the message. Mailing the whole
   // station every time somebody previews it is the opposite of its purpose.
-  withEnv({
-    ALERT_EMAILS: 'gm@kpft.org',
-    ALERT_CC: 'monitor-owner@example.org',
-  }, () => {
-    const r = roundupRecipients('me@example.org');
-    assert.deepEqual(r.recipients, ['me@example.org']);
-    assert.deepEqual(r.cc, [], 'a one-off check must not mail the station');
-  });
-});
-
-test('an address on both lists is not mailed twice', () => {
-  withEnv({
-    ALERT_EMAILS: 'gm@kpft.org',
-    ALERT_CC: 'GM@kpft.org,board@kpft.org',
-  }, () => {
-    const r = roundupRecipients();
-    assert.deepEqual(r.cc, ['board@kpft.org']);
-  });
-});
-
-test('no ALERT_CC configured is not an error, it is simply no copies', () => {
-  withEnv({ ALERT_EMAILS: 'gm@kpft.org', ALERT_CC: undefined }, () => {
-    const r = roundupRecipients();
-    assert.deepEqual(r.recipients, ['gm@kpft.org']);
-    assert.deepEqual(r.cc, []);
-  });
-});
-
-test('no recipients at all is reported, not silently sent to nobody', () => {
-  withEnv({ ALERT_EMAILS: undefined, WEEKLY_ROUNDUP_EMAILS: undefined, ALERT_CC: 'owner@example.org' }, () => {
-    const r = roundupRecipients();
-    assert.deepEqual(r.recipients, [], 'sendWeeklyRoundup() refuses on an empty To list');
-    // Deliberate: a message with only a CC and no To is a shape some servers
-    // reject and every client renders oddly. The refusal is the correct outcome.
-  });
+  const r = roundupRecipients('me@example.org', 'kpft');
+  assert.deepEqual(r.recipients, ['me@example.org']);
+  assert.deepEqual(r.cc, [], 'a one-off check must not mail the station');
 });

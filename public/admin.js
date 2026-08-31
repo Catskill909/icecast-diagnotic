@@ -385,6 +385,20 @@
 
   function alertsBox(id) { return document.querySelector(`[data-alertbox="${CSS.escape(id)}"]`); }
 
+  /* A station card has two panels and they are mutually exclusive.
+   *
+   * Each used to toggle only itself, so Edit followed by Alerts left one card
+   * showing two stacked forms with two Save buttons and nothing on screen
+   * saying which saved what. */
+  function closePanels(id, except) {
+    for (const attr of ['data-editor', 'data-alertbox']) {
+      if (attr === except) continue;
+      const el = document.querySelector(`[${attr}="${CSS.escape(id)}"]`);
+      if (el) el.classList.add('hidden');
+    }
+  }
+
+
   /** Whether mail will actually go out, in the server's words. */
   function routingHtml(routing) {
     if (!routing) return '';
@@ -393,10 +407,7 @@
       const cc = routing.ccCount ? `, copying ${routing.ccCount}` : '';
       return `<div class="routing on">
         <strong>Alerts are on</strong>
-        <span class="why">${n} recipient${n === 1 ? '' : 's'}${cc}.${
-          routing.recipientSource === 'global'
-            ? ' Using the monitor-wide list — this station has none of its own.'
-            : ''}</span></div>`;
+        <span class="why">Emailed to ${n} recipient${n === 1 ? '' : 's'}${cc}.</span></div>`;
     }
     return `<div class="routing off">
       <strong>Nothing is emailed for this station</strong>
@@ -412,28 +423,44 @@
    * everyone receives the identical message, everyone can act on it, and the
    * only difference is which header the address lands on. It was a second field,
    * a second concept and a second decision buying nothing. */
-  function addrRowsHtml(list) {
+  function addrRowsHtml(list, editing) {
     if (!list.length) {
-      return '<div class="addr-empty">None set — this station falls back to the monitor-wide list.</div>';
+      return '<div class="addr-empty">Nobody yet. Add an address below and this station\'s alerts will go to it.</div>';
     }
-    return list.map((a, i) => `
+    return list.map((a, i) => (i === editing ? `
+      <div class="addr editing">
+        <input class="addr-edit" data-edit-input value="${esc(a)}" type="email"
+               autocapitalize="off" autocorrect="off" spellcheck="false">
+        <div class="addr-actions">
+          <button class="mini" data-save-addr data-i="${i}" type="button">Save</button>
+          <button class="mini" data-cancel-addr type="button">Cancel</button>
+        </div>
+      </div>` : `
       <div class="addr">
         <span>${esc(a)}</span>
-        <button class="mini danger" data-drop-addr data-i="${i}" type="button">Remove</button>
-      </div>`).join('');
+        <div class="addr-actions">
+          <button class="mini" data-edit-addr data-i="${i}" type="button">Edit</button>
+          <button class="mini" data-test-addr data-i="${i}" type="button">Test</button>
+          <button class="mini danger" data-drop-addr data-i="${i}" type="button">Remove</button>
+        </div>
+      </div>`)).join('');
   }
 
   function paintAlerts(id) {
     const box = alertsBox(id);
     const d = alertDrafts[id];
     if (!box || !d) return;
-    box.querySelector('[data-recipients]').innerHTML = addrRowsHtml(d.recipients);
+    box.querySelector('[data-recipients]').innerHTML = addrRowsHtml(d.recipients, d.editing);
+    // Focus follows the edit, so the keyboard lands where the eye already is.
+    const edit = box.querySelector('[data-edit-input]');
+    if (edit) { edit.focus(); edit.select(); }
   }
 
   async function openAlerts(s) {
     if (!s) return;
     const box = alertsBox(s.id);
     if (!box.classList.contains('hidden')) { box.classList.add('hidden'); return; }
+    closePanels(s.id, 'data-alertbox');
 
     const a = s.alerts || {};
     // Addresses shown from the monitor-wide fallback are NOT this station's own.
@@ -442,6 +469,7 @@
     alertDrafts[s.id] = {
       recipients: Array.isArray(a.recipients) ? [...a.recipients] : [],
       enabled: a.enabled !== false,
+      editing: null,
     };
 
     box.innerHTML = `
@@ -450,7 +478,8 @@
       <div class="field-group">
         <label class="field-label" for="to-${esc(s.id)}">Alert recipients</label>
         <p class="field-help">Emailed when <strong>${esc(s.name)}</strong> goes off air and
-           again when it recovers. Nobody else is emailed about this station.</p>
+           again when it recovers, and copied on its weekly report. Nobody else is
+           emailed about this station, and this station's alerts go nowhere else.</p>
         <div class="addr-list" data-recipients></div>
         <div class="add-row">
           <input id="to-${esc(s.id)}" data-add="to" type="email" placeholder="name@station.org"
@@ -469,7 +498,6 @@
 
       <div class="actions">
         <button class="primary" data-save-alerts="${esc(s.id)}">Save recipients</button>
-        <button class="ghost" data-test-alert="${esc(s.id)}" type="button">Send a test message</button>
         <button class="linkbtn" data-cancel-alerts="1" type="button">Close</button>
       </div>
       <div class="msg" data-msg="1"></div>`;
@@ -498,17 +526,87 @@
       if (e.key === 'Enter') { e.preventDefault(); commit(); }
     });
 
+    /* Row actions.
+     *
+     * EDIT is here because "remove it and type it again" is not editing. A
+     * transposed character in an address is the most likely mistake anyone makes
+     * on this screen and the one with the quietest consequence — mail goes
+     * nowhere and nothing reports it — so correcting it must be the cheapest
+     * possible action, not a destroy-and-retype.
+     *
+     * TEST is the only verification this screen offers, deliberately (see
+     * admin-dev.md §6.3). It proves the address works BEFORE an outage proves it
+     * does not. It sends to that one address and nobody else. */
     box.addEventListener('click', (e) => {
-      const btn = e.target.closest('[data-drop-addr]');
-      if (!btn) return;
-      alertDrafts[s.id].recipients.splice(Number(btn.dataset.i), 1);
-      clear(box.querySelector('[data-msg]'));
-      paintAlerts(s.id);
+      const d = alertDrafts[s.id];
+      const msg = box.querySelector('[data-msg]');
+
+      const edit = e.target.closest('[data-edit-addr]');
+      if (edit) {
+        d.editing = Number(edit.dataset.i);
+        clear(msg);
+        paintAlerts(s.id);
+        return;
+      }
+
+      const cancel = e.target.closest('[data-cancel-addr]');
+      if (cancel) {
+        d.editing = null;
+        paintAlerts(s.id);
+        return;
+      }
+
+      const save = e.target.closest('[data-save-addr]');
+      if (save) {
+        const input = box.querySelector('[data-edit-input]');
+        const value = input.value.trim();
+        const i = Number(save.dataset.i);
+        if (!value) return show(msg, 'An address cannot be empty. Use Remove to delete it.');
+        // Checked here as well as on the server so the row does not close on a
+        // value the save would then reject.
+        if (!/^[^\s@,;<>]+@[^\s@,;<>]+\.[A-Za-z]{2,}$/.test(value)) {
+          return show(msg, `"${value}" is not an email address.`);
+        }
+        if (d.recipients.some((a, j) => j !== i && a.toLowerCase() === value.toLowerCase())) {
+          return show(msg, `${value} is already on the list.`);
+        }
+        d.recipients[i] = value;
+        d.editing = null;
+        clear(msg);
+        paintAlerts(s.id);
+        return;
+      }
+
+      const test = e.target.closest('[data-test-addr]');
+      if (test) {
+        sendTestTo(s, d.recipients[Number(test.dataset.i)]);
+        return;
+      }
+
+      const drop = e.target.closest('[data-drop-addr]');
+      if (drop) {
+        d.recipients.splice(Number(drop.dataset.i), 1);
+        d.editing = null;
+        clear(msg);
+        paintAlerts(s.id);
+      }
+    });
+
+    // Enter saves the row being edited, Escape abandons it.
+    box.addEventListener('keydown', (e) => {
+      if (!e.target.matches('[data-edit-input]')) return;
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        box.querySelector('[data-save-addr]').click();
+      } else if (e.key === 'Escape') {
+        e.preventDefault();
+        alertDrafts[s.id].editing = null;
+        paintAlerts(s.id);
+      }
     });
 
     box.querySelector('[data-cancel-alerts]').addEventListener('click', () => box.classList.add('hidden'));
     box.querySelector('[data-save-alerts]').addEventListener('click', () => saveAlerts(s));
-    box.querySelector('[data-test-alert]').addEventListener('click', () => sendTestAlert(s));
   }
 
   /** Re-asks the server what it would actually do now. */
@@ -551,6 +649,7 @@
     alertDrafts[s.id] = {
       recipients: Array.isArray(saved.recipients) ? [...saved.recipients] : [],
       enabled: saved.enabled !== false,
+      editing: null,
     };
     s.alerts = saved;
     paintAlerts(s.id);
@@ -558,17 +657,24 @@
     show(msg, 'Saved. This takes effect immediately — no redeploy needed.', 'ok');
   }
 
-  async function sendTestAlert(s) {
+  /**
+   * Sends one test message to one address.
+   *
+   * Targeted rather than "test the list", because the question being asked is
+   * always about a specific address someone just typed. Testing the whole list
+   * mails everyone else on it too, which turns checking a typo into spamming the
+   * general manager.
+   */
+  async function sendTestTo(s, to) {
     const box = alertsBox(s.id);
     const msg = box.querySelector('[data-msg]');
-    const to = alertDrafts[s.id].recipients[0];
     if (!to) return show(msg, 'Add an address first — a test needs somewhere to go.', 'warn');
 
     show(msg, `Sending a test message to ${to}…`, 'warn');
     const res = await api(`/api/test-alert?to=${encodeURIComponent(to)}`);
     if (!res) return;
     if (!res.ok) return show(msg, res.body.error || 'The test message could not be sent.');
-    show(msg, `Test message sent to ${to}. If it does not arrive, check the spam folder first.`, 'ok');
+    show(msg, `Test message sent to ${to} and nobody else. If it does not arrive, check the spam folder first.`, 'ok');
   }
 
   // ── Editing ───────────────────────────────────────────────────────────────
@@ -576,6 +682,7 @@
     if (!s) return;
     const box = document.querySelector(`[data-editor="${CSS.escape(s.id)}"]`);
     if (!box.classList.contains('hidden')) { box.classList.add('hidden'); return; }
+    closePanels(s.id, 'data-editor');
 
     box.innerHTML = `
       <div class="fields">

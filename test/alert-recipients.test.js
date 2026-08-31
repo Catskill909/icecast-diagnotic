@@ -98,32 +98,34 @@ test("a station's own recipients are used in place of the global list", () => {
   assert.equal(r.source, 'station');
 });
 
-test('a station with none of its own falls back to the global list', () => {
-  // Every deployment predating this feature has exactly this shape, and must
-  // keep behaving as it did.
+test('a station with no list of its own reaches NOBODY — there is no fallback', () => {
+  // ALERT_EMAILS is set in this file's environment. It must not leak into a
+  // send. It seeded the stored lists once at migration and is never read again:
+  // a fallback consulted at send time is what let the panel display one list
+  // while a different one was emailed.
   const r = recipientsFor({ stationId: 'kpft' });
-  assert.deepEqual(r.recipients, ['fallback@example.org']);
-  assert.deepEqual(r.cc, ['cc-fallback@example.org']);
-  assert.equal(r.source, 'global');
+  assert.deepEqual(r.recipients, [], 'ALERT_EMAILS must not be consulted at send time');
+  assert.equal(r.source, 'station');
 });
 
-test('an empty recipient list falls back rather than sending to nobody', () => {
+test('an empty recipient list means nobody, not "fall back to the env list"', () => {
   const r = recipientsFor({ stationId: 'wpfw', stationAlerts: { recipients: [], enabled: true } });
-  assert.equal(r.source, 'global');
+  assert.deepEqual(r.recipients, []);
 });
 
 /* ── The gate ──────────────────────────────────────────────────────────────── */
 
-test('a station configured in the panel overrides the ALERT_STATIONS env mute', () => {
-  // ALERT_STATIONS is 'kpft' above, so before this feature WPFW could not email
-  // at all. Adding recipients in the panel must be sufficient on its own — the
-  // alternative is a screen that saves addresses and silently sends nothing
-  // because of a variable typed into a hosting panel weeks earlier.
-  assert.equal(alertsEnabledFor({ stationId: 'wpfw' }), false, 'unset, the env mute still applies');
+test('ALERT_STATIONS does not gate anything at run time', () => {
+  // Set to 'kpft' in this file's environment. A station it does not name must
+  // still be able to email once the panel says so — otherwise an operator adds
+  // recipients, saves, sees them stored, and nothing sends, blocked by a
+  // variable typed into a hosting panel weeks earlier that no screen displays.
+  //
+  // This is a REGRESSION GUARD. It fails if env gating is ever put back.
   assert.equal(
     alertsEnabledFor({ stationId: 'wpfw', stationAlerts: { recipients: ['gm@wpfw.org'] } }),
     true,
-    'configured in the panel, the station may email',
+    'a configured station must email regardless of ALERT_STATIONS',
   );
 });
 
@@ -134,10 +136,14 @@ test('switching a station off mutes it even when it has recipients', () => {
   );
 });
 
-test('an empty block is not a decision, so the env behaviour still applies', () => {
-  // `{}` must read as "never configured", not as "configured to send".
-  assert.equal(alertsEnabledFor({ stationId: 'wpfw', stationAlerts: {} }), false);
-  assert.equal(alertsEnabledFor({ stationId: 'kpft', stationAlerts: {} }), true);
+test('a station with no block is ON with nobody on it, not silently muted', () => {
+  // A station added after the migration. "On, with no recipients" surfaces as
+  // "no recipients have been added yet" — a to-do an operator can act on. A
+  // silent mute looks identical to a working configuration and is not
+  // actionable, which is the failure mode this whole screen exists to remove.
+  assert.equal(alertsEnabledFor({ stationId: 'newstation' }), true);
+  assert.deepEqual(recipientsFor({ stationId: 'newstation' }).recipients, [],
+    'enabled, but nothing is sent because there is nobody to send to');
 });
 
 /* ── Validation ────────────────────────────────────────────────────────────── */

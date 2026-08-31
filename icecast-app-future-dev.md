@@ -421,7 +421,7 @@ different order:
 
 | | Rows per day |
 |---|---|
-| Today: 5 channels, one sample a minute | ~7,000 |
+| Today: 8 channels, one sample a minute | ~11,500 |
 | Per-listener at ~250 concurrent, polled each minute | **~360,000** |
 
 That is fifty times the volume on day one, growing with the audience rather than
@@ -654,7 +654,10 @@ piece of information and everything else has a working default.
 2. **Login.** One admin, credentials in env. That is enough for one operator.
 3. **Add-station flow** with discovery (§5.4).
 4. **Add the five sister stations with it.** ← the dogfood moment.
-5. **Per-station alert recipients** — the first genuinely GM-facing screen.
+5. ✅ **Per-station alert recipients** (2026-08-31). Shipped as a section on each
+   station's card in the admin panel, NOT as the separate GM-facing screen this
+   line anticipated — that split assumes the roles in step 7, which do not exist
+   yet, so it produced two menus for one person. Revisit when step 7 lands.
 6. **Fleet view** (§7).
 7. **Roles and multi-user — only when a real GM asks for a login.**
 

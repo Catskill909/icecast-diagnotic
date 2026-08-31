@@ -225,6 +225,12 @@ label input { margin-top: 6px; }
   border-radius: 8px; padding: 8px 10px; font-size: 13px;
 }
 .addr span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.addr-actions { display: flex; gap: 5px; flex-shrink: 0; }
+
+/* Editing happens in the row, not in a dialog. The address stays where the eye
+   already is, and Cancel puts back exactly what was there. */
+.addr.editing { padding: 6px 8px; gap: 8px; }
+.addr-edit { font-size: 13px; padding: 7px 9px; }
 .addr-empty { color: var(--text-muted); font-size: 12px; padding: 2px 0 8px; }
 
 .toggle { display: flex; gap: 10px; align-items: flex-start; margin-top: 20px; font-size: 13px; }

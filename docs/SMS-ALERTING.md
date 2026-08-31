@@ -95,8 +95,14 @@ listener count plus the dashboard link — the email already computes all three.
 
 ## 6. Dependency
 
-**This should be built after per-station alert recipients** (build-order item 7).
-Phone numbers are per-person and per-station in exactly the way email addresses
-are; building SMS against the current single global recipient list would build
-that routing twice and throw the first away — the same reasoning that put the
-admin panel before adding stations.
+**UNBLOCKED 2026-08-31.** This was to be built after per-station alert
+recipients (build-order item 7), because phone numbers are per-person and
+per-station in exactly the way email addresses are, and building SMS against a
+single global recipient list would build that routing twice and throw the first
+away — the same reasoning that put the admin panel before adding stations.
+
+That routing now exists. Numbers belong in the same per-station `alerts` block,
+and `sendGroupedAlert()` in monitor.js is the seam that already guarantees one
+station's incident reaches only that station's people — so SMS inherits the
+grouping rather than re-deriving it. The admin panel's Alerts section is where
+the field goes.

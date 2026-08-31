@@ -655,17 +655,20 @@ app.get('/api/weekly-roundup', auth.requireAuth, async (req, res) => {
   }
   const days = Math.min(Math.max(parseFloat(req.query.days) || 7, 0.04), 365);
   const windowMs = days * 24 * 60 * 60 * 1000;
+  // The roundup is one report per station. Absent, it falls back to the only
+  // station when there is one, which keeps every existing call working.
+  const stationId = stationOf(req);
 
   // ?preview=1 renders the message in the browser instead of mailing it, so it
   // can be checked before a real one goes out — and without needing SMTP at all.
   if (req.query.preview === '1' || req.query.preview === 'true') {
-    const { subject, html } = monitor.previewWeeklyRoundup(windowMs);
+    const { subject, html } = monitor.previewWeeklyRoundup(windowMs, stationId);
     res.setHeader('X-Roundup-Subject', encodeURIComponent(subject));
     return res.type('html').send(html);
   }
 
   try {
-    const result = await monitor.sendWeeklyRoundup({ to: to || undefined, windowMs });
+    const result = await monitor.sendWeeklyRoundup({ to: to || undefined, windowMs, stationId });
     // A configuration problem is not a server fault — report it as a refusal
     // with its reason rather than a 500 with no explanation.
     if (!result.sent) return res.status(result.attempted ? 502 : 400).json(result);

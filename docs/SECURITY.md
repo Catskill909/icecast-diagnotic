@@ -56,6 +56,24 @@ could do the same to an address of the caller's choosing.
 password configured they return 503 rather than allowing the request, so a
 deployment that forgets to set one gets a broken button, not a silent hole.
 
+**Extended 2026-08-31** for per-station alert recipients:
+`PUT /api/stations/:id/alerts` and `GET /api/stations/:id/alerts/preview` both
+require a session — the first writes people's addresses, the second reports how
+many there are and which rule is withholding delivery.
+
+The addresses themselves are covered by finding 1: `publicStationConfig()` is an
+allowlist, so the `alerts` block was withheld from anonymous callers the moment
+it existed, with no change to `redact.js`. That is the allowlist paying for
+itself, and it is now asserted in `test/redact.test.js` rather than assumed.
+
+**The admin page is gated as a page, not only as an API.** `/admin.html` and
+every asset it loads require a session, because that page can display a list of
+named individuals' addresses. Both halves matter and both fail quietly: an
+un-gated page borrowing a gated stylesheet renders unstyled for exactly the
+visitor being turned away, and a gated stylesheet whose page is not gated
+protects nothing. `test/admin-pages-gate.test.js` walks the set in both
+directions.
+
 ## 3. XSS via Icecast metadata — Medium
 
 All three frontend escape helpers used the DOM trick — set `textContent`, read

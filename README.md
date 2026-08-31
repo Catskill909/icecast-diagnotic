@@ -371,17 +371,20 @@ and restart — wiping the volume would also destroy the incident history.
 
 ### Who gets alerted
 
-**Alert recipients are per station**, edited on each station's card in
-`/admin.html` (the **Alerts** button) and stored in the
-data volume beside the rest of the configuration. Before this, recipients were a
-single global list and `ALERT_STATIONS` was the only thing stopping one station's
-3am outage reaching another station's staff — which meant every station not named
-in that variable was monitored, diagnosed and recorded, and could reach nobody.
+**Each station owns a list of email addresses, and a switch. Everything that
+station sends — outage alerts, recovery notices, its weekly report — goes to that
+list.** Edit it with the **Alerts** button on the station's card in
+`/admin.html`; it is stored in the data volume beside the rest of the
+configuration, and every row can be edited in place or sent a test message.
 
-| Station has | Alerts go to |
-|---|---|
-| its own `alerts.recipients` | those addresses, plus its own `alerts.cc` |
-| nothing | `ALERT_EMAILS` / `ALERT_CC` — so existing deployments are unchanged |
+**There is no fallback.** `ALERT_EMAILS`, `ALERT_CC` and `ALERT_STATIONS` seed
+these lists **once**, on the first boot after upgrading, and are never read
+again. That follows the rule the rest of the configuration already runs on — env
+seeds, the store owns — and it exists because the alternative was demonstrably
+confusing: while recipients were an env fallback with a per-station override, the
+panel showed a station "2 recipients" in one line and "none set" in the next, and
+the two addresses that actually received that station's alerts could not be seen,
+edited or corrected from the screen whose entire purpose is managing them.
 
 `alerts.enabled: false` mutes a station while still recording everything: the
 setting for a station being trialled, or one whose staff are not onboarded yet.
@@ -390,12 +393,22 @@ unfinished setup, a disabled station is a decision, and collapsing them makes
 "we turned this off deliberately" indistinguishable from "someone deleted the
 last address by accident".
 
-**A station configured in the app overrides `ALERT_STATIONS`.** This follows the
-rule the rest of the configuration already runs on — the store is authoritative,
-env only seeds it — and the alternative fails in the worst available way: an
-operator adds recipients, saves, sees them stored, and nothing ever sends,
-because of a variable typed into a hosting panel weeks earlier and visible from
-nowhere in the UI.
+**One list, no CC.** To/CC distinguishes people — "act on this" from "for your
+awareness" — and distinguishes nothing in an automated alert, where everyone
+receives the identical message and anyone can act on it.
+
+#### What the upgrade does to an existing deployment
+
+Nobody gains or loses email. A station is seeded with the environment's addresses
+**only if it may email today** — that is, `ALERT_STATIONS` is empty or names it.
+Every other station is seeded explicitly empty and switched off, which is what it
+already was. `ALERT_CC` is merged into the same single list.
+
+The migration is guarded by a marker in the store, not by "does any station have
+recipients" — so clearing the last address from every station cannot look like a
+fresh volume and get the env list written back underneath you.
+`test/alert-migration.test.js` asserts the before/after recipient set is
+identical per station.
 
 **One alert message never spans two stations.** Alerts are consolidated so that
 one incident produces one email rather than five, and that consolidation was
@@ -468,18 +481,21 @@ SMTP_USER=monitor@example.com
 SMTP_PASS=YourPasswordHere
 SMTP_FROM="KPFT Stream Monitor <monitor@example.com>"
 
-# ── Alert Recipients ─────────────────────────────────
-# The FALLBACK list. Each station can have its own recipients, set in the app
-# on each station's card in /admin.html; a station with none of its
-# own falls back to these, so a single-station deployment needs nothing else.
+# ── Alert Recipients — SEED VALUES ONLY ──────────────
+# These three are read ONCE, on the first boot after upgrading, to seed each
+# station's own recipient list. After that the store is authoritative and none
+# of them is consulted again — edit recipients with the Alerts button on a
+# station's card in /admin.html. A fresh install still only needs ALERT_EMAILS.
 ALERT_EMAILS=manager@example.com,engineer@example.com
-ALERT_STATIONS=                  # Station ids that may email; empty = all.
-                                 # A station configured in the app OVERRIDES
-                                 # this — see "Who gets alerted" below.
-ALERT_CC=monitor-owner@example.com   # Copied on every alert AND on the weekly
-                                     # roundup — this is the monitor owner, and
-                                     # the roundup is what tells them the
-                                     # monitor is still running at all.
+
+# Station ids permitted to email AT MIGRATION; empty = all. Decides which
+# stations are seeded with the addresses above and which are seeded switched
+# off. It gates nothing at send time after that.
+ALERT_STATIONS=
+
+# Merged into that same single list. There is no CC after migration: To/CC
+# separates people, and separates nothing in an automated alert.
+ALERT_CC=monitor-owner@example.com
 
 # ── Dashboard Link in Emails ─────────────────────────
 DASHBOARD_URL=https://kpft-icecast.supersoul.top
@@ -514,13 +530,14 @@ ALERT_ON_HARMLESS_OUTAGE=false
 # lost — sent whether or not anything went wrong. It is the only message that
 # arrives during a quiet week, which is what tells a quiet week apart from a
 # monitor that has silently stopped running.
+#
+# ONE REPORT PER STATION, to that station's own recipient list, scoped to its
+# own channels. WEEKLY_ROUNDUP_EMAILS is retired — there is one list.
 WEEKLY_ROUNDUP=true             # false disables it entirely
 WEEKLY_ROUNDUP_DAY=1            # 0=Sun … 6=Sat (default: 1, Monday)
-WEEKLY_ROUNDUP_HOUR=9           # 24h clock, in STATION_TZ (default: 9)
-WEEKLY_ROUNDUP_EMAILS=          # falls back to ALERT_EMAILS when empty.
-                                # Overrides who it is FOR; ALERT_CC is still
-                                # copied either way.
-STATION_TZ=America/Chicago      # timezone for all email timestamps + schedule
+WEEKLY_ROUNDUP_HOUR=9           # 24h clock, in each station's OWN timezone
+STATION_TZ=America/Chicago      # fallback timezone for a station without one,
+                                # and for email timestamps
 
 # ── Retention ────────────────────────────────────────
 # Events are not pruned by age, but the newest MAX_EVENTS are retained. Raw
@@ -653,11 +670,19 @@ as a whole one.
 | `?to=user@example.com` | sends it to one address instead of the configured recipients |
 | `?days=7` | window to report on (default 7) |
 
-It goes to `WEEKLY_ROUNDUP_EMAILS` (falling back to `ALERT_EMAILS`), **copying
-`ALERT_CC`** — the same people an alert reaches. Until 2026-08-31 it omitted the
-CC, so an address configured only as `ALERT_CC` received every 3am outage alert
-and never the one message that says the monitor is still alive. A `?to=` send
-copies nobody: it is for checking the message, not for mailing the station.
+**One report per station**, addressed to that station's own recipient list — the
+same people its outage alerts reach — scoped to its own channels, and sent at
+`WEEKLY_ROUNDUP_HOUR` in **its own timezone**. Until 2026-08-31 it read a
+separate monitor-wide list and omitted `ALERT_CC`, so the operator running the
+monitor received every 3am outage alert and, in seven weeks, not one roundup.
+That is the worst address to omit: the roundup is the only message that arrives
+in a quiet week, and therefore the only thing separating "nothing broke" from
+"the monitor died".
+
+A station with no recipients, or with alerts switched off, gets no roundup. Add
+`?stationId=` to pick one; with a single station it is inferred. A `?to=` send
+goes to that one address and copies nobody — it is for checking the message, not
+for mailing the station.
 
 The scheduled job sends this on its own; this route exists so the message can be checked
 without waiting a week. Last-sent state is persisted in `events.json` under `meta`, keyed by
@@ -677,12 +702,11 @@ Sets a station's alert recipients. Authenticated — these are people's addresse
 { "recipients": ["gm@station.org"], "cc": ["engineer@example.org"], "enabled": true }
 ```
 
-**The admin panel edits a single list.** To/CC is a meaningful distinction
-between people — "act on this" versus "for your awareness" — and it means
-nothing in an automated alert, where everyone gets the identical message and
-anyone can act on it. The API still accepts `cc` (the monitor-wide fallback has
-one, and the delivery record reports it), but the panel does not offer a second
-field for it, and a request that omits `cc` leaves any stored value untouched.
+**One list, no CC.** To/CC is a meaningful distinction between people — "act on
+this" versus "for your awareness" — and means nothing in an automated alert. The
+API still accepts `cc` so a value stored before it was retired is honoured rather
+than silently dropped, but nothing writes it and the panel does not offer it. A
+request that omits `cc` leaves any stored value untouched.
 
 `recipients` accepts an array or one comma-separated string, deduplicates
 case-insensitively while storing each address as typed, and drops any address
