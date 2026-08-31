@@ -332,8 +332,23 @@ app.post('/api/stations/discover', auth.requireAuth, async (req, res) => {
   // only way through was for the operator to invent a unique one by hand. A
   // general manager pasting a stream URL has no reason to know another server
   // already claimed the obvious name.
-  const free = discover.freeStationId(identity.id, body.channels || [], monitor.getStationConfig());
+  const stationConfig = monitor.getStationConfig();
+  const free = discover.freeStationId(identity.id, body.channels || [], stationConfig);
   body.suggestedStation = { ...identity, id: free.id };
+
+  // A TAKEN STATION ID IS A SIGNAL, NOT AN OBSTACLE.
+  //
+  // When the id derived from the call sign already belongs to a monitored
+  // station, this is almost always that station's stream on a second server —
+  // KPFA on Pacifica's relay and again on its own Icecast. De-conflicting to
+  // `kpfa-2` and saying nothing is what put two "KPFA Berkeley" stations in the
+  // list, splitting one station's audience across two pages.
+  //
+  // Surfaced so the operator can put the channel where it belongs. It stays a
+  // suggestion: `suggestedStation` is still a free id, so adding a genuinely
+  // separate station that happens to share a call sign is still one click away.
+  const existing = discover.existingStationFor(identity.id, stationConfig);
+  body.existingStation = existing ? { id: existing.id, name: existing.name } : null;
 
   if (free.adjusted) {
     body.identityNote = `"${free.base}" is already monitored, so this one is `

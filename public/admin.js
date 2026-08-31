@@ -7,6 +7,9 @@
 (() => {
   const $ = (id) => document.getElementById(id);
   let discovered = null;
+  // The station list as last loaded. Discovery needs the FULL station — its
+  // channels, not just its name — to hand a channel over to its editor.
+  let knownStations = [];
 
   /** Mirrors discover.deriveChannelId() on the server. Keep the two identical. */
   function deriveChannelId(stationId, channelId) {
@@ -141,6 +144,7 @@
     if (!r.ok) { host.textContent = 'Could not load configuration.'; return; }
 
     const stations = r.body.stations || [];
+    knownStations = stations;
     const channels = stations.reduce((n, s) => n + (s.channels || []).length, 0);
     $('summary').textContent =
       `${stations.length} station${stations.length === 1 ? '' : 's'}, ` +
@@ -330,9 +334,80 @@
     let guess = 'America/New_York';
     try { guess = Intl.DateTimeFormat().resolvedOptions().timeZone || guess; } catch { /* keep the default */ }
     $('st-tz-slot').innerHTML = timezoneSelectHtml(guess);
+    renderExistingStationOffer(d);
     $('results').classList.remove('hidden');
     $('st-name').focus();
     $('st-name').select();
+  }
+
+  /**
+   * A channel name that will not collide with the ones the station already has.
+   *
+   * Two channels of one station are told apart by WHERE they come from — being
+   * on different servers is the whole reason there are two. Without this, KPFA's
+   * second stream arrives named "KPFA Berkeley" onto a station named "KPFA
+   * Berkeley", and the station card shows two chips nobody can tell apart.
+   */
+  function distinctChannelName(name, url, station) {
+    const taken = new Set([
+      String(station.name || '').toLowerCase(),
+      ...(station.channels || []).map((c) => String(c.name || '').toLowerCase()),
+    ]);
+    const base = String(name || '').trim();
+    if (base && !taken.has(base.toLowerCase())) return base;
+    let host = '';
+    try { host = new URL(url).host; } catch { /* no host to add; the name stands */ }
+    return host ? `${base || station.name} (${host})` : base;
+  }
+
+  /**
+   * The offer to put this stream on the station it belongs to.
+   *
+   * Shown INSTEAD of nothing, not instead of the form: adding a separate station
+   * is still right when two stations genuinely share a call sign, so the add
+   * form stays exactly where it was and this sits above it.
+   *
+   * This is the case that produced two "KPFA Berkeley" entries. The station id
+   * collided, the server quietly renamed it to `kpfa-2`, the save succeeded, and
+   * one station's audience ended up split across two pages.
+   */
+  function renderExistingStationOffer(d) {
+    const box = $('existing-station');
+    const ex = d.existingStation;
+    if (!ex) { box.className = 'msg hidden'; box.innerHTML = ''; return; }
+
+    box.className = 'msg warn';
+    box.innerHTML = `
+      <strong>${esc(ex.name)} is already being monitored.</strong>
+      <p>This is almost certainly the same station on a second server. Adding it below
+      creates a <em>second</em> station with the same name, and splits one station's
+      listeners across two pages.</p>
+      <button class="mini" type="button" data-join="${esc(ex.id)}">
+        Add the ticked channel(s) to ${esc(ex.name)}
+      </button>`;
+
+    box.querySelector('[data-join]').addEventListener('click', () => {
+      const station = knownStations.find((x) => x.id === ex.id);
+      if (!station) { show($('save-msg'), 'That station is no longer in the list — reload the page.'); return; }
+
+      const picked = [...document.querySelectorAll('#channels input:checked')]
+        .map((cb) => discovered.channels[Number(cb.dataset.i)]);
+      if (!picked.length) { show($('save-msg'), 'Tick at least one channel to add.'); return; }
+
+      // Nothing is saved here. The channels are handed to the station's editor
+      // as unsaved rows, so the operator reviews and presses Save — the same
+      // path as "+ Add a channel", which is what this case always should have
+      // been.
+      $('results').classList.add('hidden');
+      $('url').value = ''; discovered = null; idFixed = false;
+      openEditor(station, picked.map((c) => ({
+        name: distinctChannelName(c.name, c.url, station),
+        url: c.url,
+        mounts: c.mounts || [],
+      })));
+      document.querySelector(`[data-station="${CSS.escape(station.id)}"]`)
+        ?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    });
   }
 
   // The identifier is derived from the name only while nothing better is known.
@@ -964,10 +1039,21 @@
     return id;
   }
 
-  function openEditor(s) {
+  /**
+   * `prefill` carries channels handed over from discovery — this station's
+   * stream found on a second server. They arrive as UNSAVED rows, identical to
+   * pressing "+ Add a channel" and typing them, so the operator reviews the
+   * names and URLs and presses Save. Nothing is written by the handover itself.
+   */
+  function openEditor(s, prefill) {
     if (!s) return;
     const box = document.querySelector(`[data-editor="${CSS.escape(s.id)}"]`);
-    if (!box.classList.contains('hidden')) { box.classList.add('hidden'); return; }
+    // Edit toggles; a HANDOVER always opens. Toggling here would close an
+    // already-open editor and silently discard the channels being handed to it.
+    if (!box.classList.contains('hidden') && !(prefill || []).length) {
+      box.classList.add('hidden');
+      return;
+    }
     closePanels(s.id, 'data-editor');
     clearAddFormMessages();
 
@@ -994,6 +1080,15 @@
       <div class="msg" data-msg="1"></div>
       <span data-mountlist></span>`;
     box.classList.remove('hidden');
+
+    for (const p of prefill || []) {
+      const taken = new Set([...box.querySelectorAll('.edit-ch')].map((r) => r.dataset.cid));
+      box.querySelector('.edit-channels').insertAdjacentHTML('beforeend',
+        channelRowHtml({
+          id: channelIdFrom(s.id, p.name || 'channel', taken),
+          name: p.name || '', url: p.url || '', mounts: p.mounts || [],
+        }, true));
+    }
 
     const msgEl = box.querySelector('[data-msg]');
 

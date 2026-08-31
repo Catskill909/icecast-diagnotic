@@ -355,10 +355,37 @@ function freeStationId(baseId, channels, config) {
   return { id: base, adjusted: false, exhausted: true };
 }
 
+/**
+ * The station this discovery BELONGS TO, when it is one already monitored.
+ *
+ * A station id derived from the call sign that is already taken is not an
+ * obstacle to route around — it is the strongest signal available that this is
+ * the same station's stream on a SECOND SERVER. KPFA is exactly that: carried
+ * on Pacifica's relay and again on its own Icecast, two status documents, so
+ * two separate discovery runs.
+ *
+ * `freeStationId` resolved that collision silently to `kpfa-2`, and a second
+ * "KPFA Berkeley" appeared in the station list with the audience split between
+ * the two halves of one station. The guidance for this case already existed —
+ * the add form catches "already exists" and points at Edit -> "+ Add a channel"
+ * — but pre-resolving the id meant the save SUCCEEDED and that guidance became
+ * unreachable. The collision has to be reported, not consumed.
+ *
+ * Returned as a SUGGESTION, never applied. Two unrelated stations can slug to
+ * the same id, so the operator is offered the existing station and can still
+ * add a separate one; a false positive costs a click, and refusing outright
+ * would make a legitimate second station unaddable.
+ */
+function existingStationFor(baseId, config) {
+  const base = String(baseId || '').toLowerCase();
+  if (!base) return null;
+  return (config?.stations || []).find((s) => String(s.id).toLowerCase() === base) || null;
+}
+
 module.exports = {
   altSchemeUrl,
   isTransportFailure, toStatusUrl, channelKeyFor, suggestChannels, summarise, suggestStationIdentity,
-  deriveChannelId, freeStationId, callSignOf };
+  deriveChannelId, freeStationId, existingStationFor, callSignOf };
 
 /* ═══════════════════════════════════════════════════════════════════════════
    Validating a station before it is written

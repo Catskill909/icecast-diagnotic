@@ -38,6 +38,11 @@
     <div id="results" class="hidden">
       <div class="found" id="found"></div>
 
+      <!-- Shown only when this stream looks like it belongs to a station that is
+           already monitored, so the channel can be added to it rather than
+           creating a second station with the same name. -->
+      <div class="msg hidden" id="existing-station"></div>
+
       <h3>Which channels belong to this station?</h3>
       <p class="hint" id="shared-note"></p>
       <div id="channels" class="channels"></div>
