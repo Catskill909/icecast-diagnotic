@@ -1019,15 +1019,35 @@
         // cleanly and then under-reports the channel's audience for ever, or
         // raises a degraded alert for a mount that never existed.
         const inv = await loadMounts(s.id);
-        const found = inv && inv.available
-          ? inv.mounts.find((m) => m.path === value)
-          : null;
 
-        if (inv && inv.available && !found) {
+        // The inventory only covers hosts this station ALREADY has saved. A
+        // channel being pointed at a new server — KPFA's own Icecast beside the
+        // shared Pacifica one — is not in it yet, and checking a mount against
+        // the wrong server's inventory would report every one of them missing
+        // while naming a host the operator did not type.
+        let rowHost = null;
+        try { rowHost = new URL(row.querySelector('[data-f=curl]').value.trim()).host; } catch { /* incomplete URL */ }
+        const hostKnown = !!inv && inv.available && !!rowHost
+          && (inv.hosts || []).includes(rowHost);
+
+        const found = hostKnown ? inv.mounts.find((m) => m.path === value) : null;
+
+        if (inv && inv.available && rowHost && !hostKnown) {
+          // Honest about which it is: unverifiable, not absent.
+          show(msgEl,
+            `${value} added. It is on ${rowHost}, which is not monitored yet — `
+            + 'save the channel and reopen this editor to check it against that server.',
+            'warn');
+          row.querySelector('[data-mounts]').innerHTML = mountChipsHtml([...current, value]);
+          input.value = '';
+          return;
+        }
+
+        if (hostKnown && !found) {
           const ok = await confirmAction({
             title: `${value} is not being served right now`,
             body: [
-              `The Icecast server at <strong>${esc((inv.hosts || []).join(', ') || 'this host')}</strong>
+              `The Icecast server at <strong>${esc(rowHost || 'this host')}</strong>
                is not currently publishing this mount.`,
               `That usually means a typo. It can also mean a mount whose source is
                temporarily disconnected — which is real, and worth monitoring.`,
