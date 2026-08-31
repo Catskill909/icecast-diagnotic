@@ -3,6 +3,9 @@
   --primary: #7c6aef; --primary-light: #a595ff;
   --up: #22c55e; --down: #ef4444; --warn: #f59e0b;
   --text-primary: #f0f0f5; --text-secondary: #a0a0b8; --text-muted: #6b6b85;
+  /* Form fields sit BELOW every surface they appear on, so they read as
+     recessed regardless of which card is behind them. */
+  --field-bg: #0b0b13; --field-border: #6b6b85;
 }
 * { box-sizing: border-box; margin: 0; padding: 0; }
 body {
@@ -52,12 +55,24 @@ h3 { font-size: 13px; font-weight: 600; color: var(--text-secondary);
          border-radius: 14px; padding: 22px; margin-bottom: 20px; }
 
 .row { display: flex; gap: 10px; }
+/* A form field must be visibly a form field.
+   These were --surface-2 on a --surface-3 border — and a station card is ALSO
+   --surface-2, so every input inside one was the same colour as the card behind
+   it, separated by a border one shade off the same value. The field simply was
+   not there to look at. Inputs are now the darkest surface with a lighter
+   border: recessed, which reads as "type here" on both the panel and the card. */
 input {
   flex: 1; width: 100%; padding: 10px 12px; font: inherit; font-size: 14px;
-  background: var(--surface-2); border: 1px solid var(--surface-3);
+  background: var(--field-bg); border: 1px solid var(--field-border);
   border-radius: 9px; color: var(--text-primary); outline: none;
+  transition: border-color .15s ease, box-shadow .15s ease;
 }
-input:focus { border-color: var(--primary); }
+input::placeholder { color: var(--text-muted); }
+input:hover { border-color: #8a8aa8; }
+input:focus {
+  border-color: var(--primary);
+  box-shadow: 0 0 0 3px rgba(124,106,239,.18);
+}
 button {
   padding: 10px 16px; font: inherit; font-size: 14px; font-weight: 600;
   border: none; border-radius: 9px; cursor: pointer; white-space: nowrap;
@@ -126,9 +141,14 @@ input::placeholder { color: var(--text-muted); opacity: .55; font-style: italic;
 .ch-listeners { color: var(--up); font-weight: 600; }
 
 .more { margin-top: 4px; }
+/* Used by the add-station flow only. The alerts panel had a collapsed "Copy
+   others in" section styled this way and it read as an empty text input —
+   full width, rounded, input-height, on the card's own background. A disclosure
+   control must not look like somewhere to type. That section is now an ordinary
+   labelled field group; this styling stays for genuine "show more" details. */
 .more summary {
   cursor: pointer; padding: 9px 13px; font-size: 12.5px; color: var(--text-muted);
-  background: var(--surface-2); border: 1px dashed var(--surface-3); border-radius: 9px;
+  background: var(--surface-1); border: 1px dashed var(--surface-3); border-radius: 9px;
   list-style: none; user-select: none;
 }
 .more summary::-webkit-details-marker { display: none; }
@@ -206,11 +226,36 @@ label input { margin-top: 6px; }
 }
 .addr span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .addr-empty { color: var(--text-muted); font-size: 12px; padding: 2px 0 8px; }
-.add-row { max-width: 440px; }
-.add-row input { font-size: 13px; padding: 8px 10px; }
-
-.cc-block { margin-top: 16px; }
 
 .toggle { display: flex; gap: 10px; align-items: flex-start; margin-top: 20px; font-size: 13px; }
 .toggle input { width: 16px; height: 16px; margin-top: 1px; flex: none; accent-color: var(--primary); }
 .toggle .note { margin-top: 2px; }
+
+/* ── Labelled field groups ───────────────────────────────────────────────── */
+
+/* Every field gets a real label above it. The first version carried only
+   placeholders, which is a label that disappears the moment someone types and
+   reads as a value that is already filled in. */
+.field-group { margin-top: 22px; }
+.field-group:first-of-type { margin-top: 18px; }
+.field-label {
+  display: block; font-size: 13px; font-weight: 600; color: var(--text-primary);
+  margin-bottom: 3px;
+}
+.optional {
+  margin-left: 6px; font-size: 11px; font-weight: 500; color: var(--text-muted);
+  text-transform: uppercase; letter-spacing: .05em;
+}
+.field-help { color: var(--text-secondary); font-size: 12.5px; margin-bottom: 10px; }
+
+/* Input and its Add button on one line, the button sized to its text. */
+.add-row { display: flex; gap: 8px; max-width: 460px; }
+.add-row input { font-size: 13px; padding: 9px 11px; }
+.add-row button { flex: none; padding: 9px 16px; font-size: 13px; }
+
+/* Buttons that only dismiss should not compete with the one that saves. */
+.linkbtn {
+  background: none; border: none; color: var(--text-muted);
+  font-size: 13px; font-weight: 500; padding: 9px 8px;
+}
+.linkbtn:hover:not(:disabled) { background: none; color: var(--text-primary); }

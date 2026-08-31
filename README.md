@@ -677,6 +677,13 @@ Sets a station's alert recipients. Authenticated — these are people's addresse
 { "recipients": ["gm@station.org"], "cc": ["engineer@example.org"], "enabled": true }
 ```
 
+**The admin panel edits a single list.** To/CC is a meaningful distinction
+between people — "act on this" versus "for your awareness" — and it means
+nothing in an automated alert, where everyone gets the identical message and
+anyone can act on it. The API still accepts `cc` (the monitor-wide fallback has
+one, and the delivery record reports it), but the panel does not offer a second
+field for it, and a request that omits `cc` leaves any stored value untouched.
+
 `recipients` accepts an array or one comma-separated string, deduplicates
 case-insensitively while storing each address as typed, and drops any address
 that also appears in `recipients` from `cc` so nobody is mailed twice. **A field

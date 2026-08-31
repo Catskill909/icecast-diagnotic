@@ -404,14 +404,22 @@
       Outages are still recorded in full — only the email is withheld.</span></div>`;
   }
 
-  function addrRowsHtml(list, kind) {
+  /* One list, not two.
+   *
+   * This panel briefly offered a separate CC list, mirroring the ALERT_CC env
+   * var. To and CC is a meaningful distinction between PEOPLE — "act on this"
+   * versus "for your awareness" — and it means nothing in an automated alert:
+   * everyone receives the identical message, everyone can act on it, and the
+   * only difference is which header the address lands on. It was a second field,
+   * a second concept and a second decision buying nothing. */
+  function addrRowsHtml(list) {
     if (!list.length) {
-      return `<div class="addr-empty">${kind === 'cc' ? 'Nobody copied in.' : 'No addresses — this station uses the monitor-wide list.'}</div>`;
+      return '<div class="addr-empty">None set — this station falls back to the monitor-wide list.</div>';
     }
     return list.map((a, i) => `
       <div class="addr">
         <span>${esc(a)}</span>
-        <button class="mini danger" data-drop-addr="${kind}" data-i="${i}" type="button">Remove</button>
+        <button class="mini danger" data-drop-addr data-i="${i}" type="button">Remove</button>
       </div>`).join('');
   }
 
@@ -419,8 +427,7 @@
     const box = alertsBox(id);
     const d = alertDrafts[id];
     if (!box || !d) return;
-    box.querySelector('[data-recipients]').innerHTML = addrRowsHtml(d.recipients, 'to');
-    box.querySelector('[data-cc]').innerHTML = addrRowsHtml(d.cc, 'cc');
+    box.querySelector('[data-recipients]').innerHTML = addrRowsHtml(d.recipients);
   }
 
   async function openAlerts(s) {
@@ -434,37 +441,24 @@
     // freeze it there, so the draft starts from what the station actually has.
     alertDrafts[s.id] = {
       recipients: Array.isArray(a.recipients) ? [...a.recipients] : [],
-      cc: Array.isArray(a.cc) ? [...a.cc] : [],
       enabled: a.enabled !== false,
     };
 
     box.innerHTML = `
       <div data-routing>${routingHtml(null)}</div>
-      <h3>Who gets alerted</h3>
-      <p class="hint">These addresses receive <strong>${esc(s.name)}</strong>'s outage and
-         recovery alerts, and nobody else's. With none of its own, this station falls
-         back to the monitor-wide list.</p>
-      <div class="addr-list" data-recipients></div>
-      <div class="row add-row">
-        <input data-add="to" type="email" placeholder="engineer@station.org"
-               autocapitalize="off" autocorrect="off" spellcheck="false">
-        <button class="ghost" data-addbtn="to" type="button">Add</button>
-      </div>
-      <span class="note">Paste several at once separated by commas.</span>
 
-      <details class="more cc-block">
-        <summary>Copy others in</summary>
-        <div class="more-body">
-          <p class="hint">Copied on every alert — an engineer who watches several
-             stations without being the person called first.</p>
-          <div class="addr-list" data-cc></div>
-          <div class="row add-row">
-            <input data-add="cc" type="email" placeholder="engineering@example.org"
-                   autocapitalize="off" autocorrect="off" spellcheck="false">
-            <button class="ghost" data-addbtn="cc" type="button">Add</button>
-          </div>
+      <div class="field-group">
+        <label class="field-label" for="to-${esc(s.id)}">Alert recipients</label>
+        <p class="field-help">Emailed when <strong>${esc(s.name)}</strong> goes off air and
+           again when it recovers. Nobody else is emailed about this station.</p>
+        <div class="addr-list" data-recipients></div>
+        <div class="add-row">
+          <input id="to-${esc(s.id)}" data-add="to" type="email" placeholder="name@station.org"
+                 autocapitalize="off" autocorrect="off" spellcheck="false">
+          <button class="ghost" data-addbtn="to" type="button">Add</button>
         </div>
-      </details>
+        <span class="note">One address, or several separated by commas.</span>
+      </div>
 
       <label class="toggle">
         <input type="checkbox" data-enabled ${alertDrafts[s.id].enabled ? 'checked' : ''}>
@@ -476,7 +470,7 @@
       <div class="actions">
         <button class="primary" data-save-alerts="${esc(s.id)}">Save recipients</button>
         <button class="ghost" data-test-alert="${esc(s.id)}" type="button">Send a test message</button>
-        <button class="ghost" data-cancel-alerts="1" type="button">Close</button>
+        <button class="linkbtn" data-cancel-alerts="1" type="button">Close</button>
       </div>
       <div class="msg" data-msg="1"></div>`;
 
@@ -484,33 +478,30 @@
     paintAlerts(s.id);
     refreshRouting(s.id);
 
-    for (const kind of ['to', 'cc']) {
-      const input = box.querySelector(`[data-add="${kind}"]`);
-      const commit = () => {
-        const raw = input.value.trim();
-        if (!raw) return;
-        const list = kind === 'cc' ? alertDrafts[s.id].cc : alertDrafts[s.id].recipients;
-        // Split here as well as on the server, so pasting three addresses shows
-        // three rows now rather than one row that becomes three on save.
-        for (const part of raw.split(/[,;\n]/).map((x) => x.trim()).filter(Boolean)) {
-          if (!list.some((x) => x.toLowerCase() === part.toLowerCase())) list.push(part);
-        }
-        input.value = '';
-        clear(box.querySelector('[data-msg]'));
-        paintAlerts(s.id);
-      };
-      box.querySelector(`[data-addbtn="${kind}"]`).addEventListener('click', commit);
-      // Enter inside the field adds the address rather than doing nothing.
-      input.addEventListener('keydown', (e) => {
-        if (e.key === 'Enter') { e.preventDefault(); commit(); }
-      });
-    }
+    const input = box.querySelector('[data-add="to"]');
+    const commit = () => {
+      const raw = input.value.trim();
+      if (!raw) return;
+      const list = alertDrafts[s.id].recipients;
+      // Split here as well as on the server, so pasting three addresses shows
+      // three rows now rather than one row that becomes three on save.
+      for (const part of raw.split(/[,;\n]/).map((x) => x.trim()).filter(Boolean)) {
+        if (!list.some((x) => x.toLowerCase() === part.toLowerCase())) list.push(part);
+      }
+      input.value = '';
+      clear(box.querySelector('[data-msg]'));
+      paintAlerts(s.id);
+    };
+    box.querySelector('[data-addbtn="to"]').addEventListener('click', commit);
+    // Enter inside the field adds the address rather than doing nothing.
+    input.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') { e.preventDefault(); commit(); }
+    });
 
     box.addEventListener('click', (e) => {
       const btn = e.target.closest('[data-drop-addr]');
       if (!btn) return;
-      const list = btn.dataset.dropAddr === 'cc' ? alertDrafts[s.id].cc : alertDrafts[s.id].recipients;
-      list.splice(Number(btn.dataset.i), 1);
+      alertDrafts[s.id].recipients.splice(Number(btn.dataset.i), 1);
       clear(box.querySelector('[data-msg]'));
       paintAlerts(s.id);
     });
@@ -538,9 +529,11 @@
     const res = await api(`/api/stations/${encodeURIComponent(s.id)}/alerts`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
+      // `cc` is deliberately NOT sent. The panel does not edit it, and an
+      // omitted field is left unchanged by the server — sending an empty array
+      // would silently clear a CC list configured elsewhere.
       body: JSON.stringify({
         recipients: d.recipients,
-        cc: d.cc,
         enabled: box.querySelector('[data-enabled]').checked,
       }),
     });
@@ -557,7 +550,6 @@
     const saved = res.body.alerts || {};
     alertDrafts[s.id] = {
       recipients: Array.isArray(saved.recipients) ? [...saved.recipients] : [],
-      cc: Array.isArray(saved.cc) ? [...saved.cc] : [],
       enabled: saved.enabled !== false,
     };
     s.alerts = saved;

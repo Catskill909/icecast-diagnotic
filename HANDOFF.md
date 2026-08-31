@@ -343,6 +343,23 @@ was being watched and could not be told.
   out when build-order item 12 (roles and multi-user) gives it a distinct
   audience. Splitting it before the roles that justify it bought only a second
   navigation bar.
+- **The per-station panel offers ONE list, not To and CC.** It first mirrored
+  the `ALERT_CC` env var into a second field. To/CC separates people — "act on
+  this" from "for your awareness" — and in an automated alert it separates
+  nothing: identical message, identical delivery, anyone can act. It was a
+  second field, a second concept and a second decision buying only which header
+  an address lands on. The env-level `ALERT_CC` is untouched — it is how the
+  monitor owner currently receives everything — and the API still accepts `cc`,
+  where an omitted field means unchanged rather than cleared.
+- **Form fields were invisible, and it was measurable rather than a matter of
+  taste.** Inputs were `--surface-2` on a `--surface-3` border, and a station
+  card is ALSO `--surface-2` — the field was the same colour as the card behind
+  it, outlined in a shade 1.42:1 against it. WCAG 1.4.11 asks 3:1 for a
+  control's boundary. Fields are now the darkest surface with a `#6b6b85`
+  border, measured at 3.30:1 on the card and 3.60:1 on the panel. A collapsed
+  `<details>` was also styled at input width, height, radius and background, so
+  it read as an empty text box; that section is now an ordinary labelled group.
+  **Placeholders are not labels** — every field carries a real `<label>`.
 - **The header navigation was rebuilt at the same time.** Every item was an
   identical bordered box, so Dashboard, Stations and Sign out read as three
   equal choices and the page title lost the header. Navigation is now quiet
