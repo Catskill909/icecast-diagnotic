@@ -15,6 +15,7 @@ Every finding below was fixed the same day unless marked otherwise.
 |---|---|---|---|
 | 1 | Staff email addresses served on a public endpoint | **High** | ✅ Fixed |
 | 2 | Unauthenticated endpoint that sends mail | **High** | ✅ Fixed |
+| 2b | Alert recipients published on `/api/status` | **High** | ✅ Fixed 2026-08-31 |
 | 3 | XSS via Icecast metadata in HTML attributes | **Medium** | ✅ Fixed |
 | 4 | No Content-Security-Policy or hardening headers | Medium | ✅ Fixed |
 | 5 | Upstream administrator address in stored advice text | Low | ✅ Fixed |
@@ -73,6 +74,36 @@ un-gated page borrowing a gated stylesheet renders unstyled for exactly the
 visitor being turned away, and a gated stylesheet whose page is not gated
 protects nothing. `test/admin-pages-gate.test.js` walks the set in both
 directions.
+
+## 2b. Recipient addresses published on /api/status — High (2026-08-31)
+
+Per-station alert recipients are attached to each flattened stream so the alert
+path can resolve them without re-reading configuration mid-send. `getStatus()`
+spread that object straight into its response — and that response is what
+`/api/status` and `/api/diagnostics` return, both of which are **public**.
+
+Every station's recipient list was therefore served to anyone who loaded the
+dashboard's own API. Found by grepping live public responses for address-shaped
+strings: four real addresses, including a general manager's.
+
+**`redact.js` could not have caught this.** It projects events and station
+configuration; this arrived through neither. The lesson is that a projection
+protects the routes someone routed through it, and nothing forces a new route to
+comply.
+
+**Fixed.** Stripped at the source in `getStatus()` rather than in a projection,
+because two public routes read it. `test/public-status-redaction.test.js` scans
+every public accessor for anything address-shaped, and asserts separately that
+the alert path can still see the recipients — so the guard cannot be satisfied by
+breaking alerting.
+
+**Standing check, cheap enough to run every time:**
+
+```bash
+for ep in /api/status /api/diagnostics /api/events /api/stations /api/config; do
+  curl -s "https://<host>$ep" | grep -oE '[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}'
+done
+```
 
 ## 3. XSS via Icecast metadata — Medium
 

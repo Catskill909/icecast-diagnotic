@@ -2294,8 +2294,26 @@ function stop() {
 
 function getStreams() { return streams; }
 
+/**
+ * Live per-channel state, as anything may see it.
+ *
+ * `stationAlerts` is stripped HERE, at the source, rather than in redact.js.
+ *
+ * It rides on the flattened stream so the alert path can resolve recipients
+ * without re-reading configuration mid-send — but this function feeds
+ * /api/status and /api/diagnostics, both of which are public. It shipped
+ * publishing every station's recipient list to anyone who loaded the dashboard's
+ * own API: `gm@kpft.org`, `omaclay@gmail.com` and two more, live.
+ *
+ * Removed at the source and not in the projection because there are two public
+ * routes reading this and nothing forces a new one through redact.js. A field
+ * that must never be published should not leave the module that owns it.
+ */
 function getStatus() {
-  return streams.map((s) => ({ ...s, ...streamStatus[s.id] }));
+  return streams.map((s) => {
+    const { stationAlerts, ...publishable } = s;
+    return { ...publishable, ...streamStatus[s.id] };
+  });
 }
 
 /** Back-compatible shape for the existing dashboard. */

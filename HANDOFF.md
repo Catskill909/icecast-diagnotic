@@ -18,7 +18,7 @@ shortest path to being useful.
 **Orient yourself (2 minutes).**
 
 ```bash
-npm test                                   # 318 tests, all should pass
+npm test                                   # 323 tests, all should pass
 curl -s https://kpft-icecast.supersoul.top/api/stations | jq   # what it monitors
 curl -s https://kpft-icecast.supersoul.top/api/status   | jq   # how it is doing
 ```
@@ -87,7 +87,7 @@ regression, however green the tests are.**
   so the host-as-shared-pool design (§3.6) is now carrying real traffic rather
   than being argued for. One snapshot fetch per host per cycle serves every
   station on it.
-- **318 tests**, `npm test`, Node's built-in runner, no test framework dependency.
+- **323 tests**, `npm test`, Node's built-in runner, no test framework dependency.
 - **Dependencies: express, nodemailer 9, dotenv.** That is the whole list, and it
   is deliberate. Crypto, testing and HTTP are all Node built-ins. Adding a
   dependency should require an argument.
@@ -639,6 +639,24 @@ Reviewed end to end on 2026-08-27; findings and reasoning in
   system — rare, technical, restricted. Reporting is frequent and GM-facing, and
   belongs on the history page and fleet view. Collapsing them puts "delete
   station" a tab away from a weekly report (§8b of the scope doc).
+- **`stationAlerts` MUST NOT LEAVE `getStatus()`.** It rides on each flattened
+  stream so the alert path can resolve recipients mid-send without re-reading
+  configuration. `getStatus()` spread the stream straight into its response, and
+  that response is `/api/status` and `/api/diagnostics` — **both public**. The
+  monitor published every station's recipient list to anyone who loaded the
+  dashboard's own API, live, until it was found by grepping public responses for
+  anything address-shaped. **redact.js could not have caught it**: that module
+  projects EVENTS and STATION CONFIG, and this arrived through neither. Stripped
+  at the source, not in a projection, because two public routes read it and
+  nothing forces a third through redaction.
+  `test/public-status-redaction.test.js` scans every public accessor, and its
+  first case asserts the alert path can STILL see the recipients — so the guard
+  cannot be satisfied by breaking alerting.
+- **Grep public responses for address-shaped strings after adding any field.**
+  This is now the second time a field added to a stored object walked into a
+  public response — `/api/events` did it with delivery records on 2026-08-27,
+  which is why redact.js exists at all. The check that found both is the same
+  one line: fetch each public endpoint and grep for `@`.
 - **TUNE-INS ARE FROZEN AT COMPACTION, AND prune() RUNS EVERY CYCLE.** The
   figure is computed from raw samples as they expire, because the samples are
   then destroyed and nothing can recompute it. prune() therefore almost always
@@ -731,7 +749,7 @@ Reviewed end to end on 2026-08-27; findings and reasoning in
 ## 9. Verifying a change
 
 ```bash
-npm test                                             # 318 tests
+npm test                                             # 323 tests
 node --check server.js monitor.js store.js diagnose.js auth.js
 
 # Against production
