@@ -309,7 +309,7 @@ was being watched and could not be told.
 | Change | Why |
 |---|---|
 | `alerts: { enabled, recipients, cc }` per station, in the config store | Configuration the operator edits must live where the store is authoritative, or a redeploy reverts it |
-| `/station.html` — a separate GM-facing screen | §6's "two panels, not one" decision. Editing channels is technical and occasional; editing who gets paged is routine and belongs to the station, and must not share a Save button with "remove station" |
+| Recipients edited **on the station card** in the admin panel | First built as a separate `/station.html`, following §6's "two panels, not one". **Retracted the same day** — see the corrections below |
 | **`sendGroupedAlert()` — one message per station** | The consolidation was written for a single station and grouped by nothing. Four stations on shared hosts fail in the same cycle, so one message would have reached one station's staff and named three others' outages |
 | Recipients resolved inside `sendAlert()` from the entries' own station | So a new alert type gets the right list by default rather than by remembering to pass one |
 | `describeAlertRouting()` and the routing banner | Four independent conditions must hold before mail goes out and each fails silently. The screen states the verdict and names the blocker, computed server-side from the same rules the sender uses |
@@ -329,6 +329,24 @@ was being watched and could not be told.
   moment they existed. Verified against a running instance — zero occurrences of
   a saved address in the anonymous `/api/stations` response — and now asserted in
   `test/redact.test.js` rather than left as a claim.
+- **"Two panels, not one" was applied too early, and was retracted.** §6 says
+  "add a station" (rare, technical, restricted) and "my station" (weekly, must
+  be simple) are different jobs for different people, so recipients first
+  shipped as a standalone `/station.html`. **That reasoning assumes two kinds of
+  login, and there is one.** In practice it was the same person, behind the same
+  password, using two menus that each showed half of one station's settings —
+  which the operator reported as confusing within minutes of seeing it. A
+  station's channels and its recipients are one idea: its settings. Recipients
+  now live on the station card, opened by an **Alerts** button beside Edit and
+  Remove, using the same inline-editor pattern.
+  **The design note is not wrong — it is not yet due.** Split the GM screen back
+  out when build-order item 12 (roles and multi-user) gives it a distinct
+  audience. Splitting it before the roles that justify it bought only a second
+  navigation bar.
+- **The header navigation was rebuilt at the same time.** Every item was an
+  identical bordered box, so Dashboard, Stations and Sign out read as three
+  equal choices and the page title lost the header. Navigation is now quiet
+  text; only the action that ends a session keeps an outline.
 - **Two of the four consolidating call sites were the `degraded` paths**, which
   the first pass would have missed. They consolidate exactly like the outage
   paths and would have leaked the same way, less visibly. Fixing this at
@@ -359,7 +377,7 @@ Build order, with the current position marked:
 6. ✅ Edit and remove stations — ids immutable, history retained on removal
 7. ✅ **Per-station alert recipients** (2026-08-31). Each station has its own
    `alerts: { enabled, recipients, cc }` block in the config store, edited at
-   `/station.html` — the first genuinely GM-facing screen. A station with none
+   the **Alerts** button on each station card in the admin panel. A station with none
    falls back to `ALERT_EMAILS`, so existing deployments are unchanged; a station
    configured in the app overrides the `ALERT_STATIONS` env mute. **The load-
    bearing part is that one message never spans two stations** — see §8
@@ -455,7 +473,7 @@ Reviewed end to end on 2026-08-27; findings and reasoning in
   server.js lists individual paths, so both directions break quietly: an
   un-gated page borrowing a gated stylesheet renders unstyled for exactly the
   visitor being turned away, and a gated stylesheet whose page is not gated
-  protects nothing. `/station.html` shipped with this bug and it was caught by a
+  protects nothing. A standalone `/station.html` shipped with this bug and it was caught by a
   302 on a stylesheet. `test/admin-pages-gate.test.js` walks the set.
 - **Icecast counts our own probes as listeners.** Measured: one connection took
   `/kpfk` from 1 listener to 2. So the Icecast snapshot is fetched BEFORE any

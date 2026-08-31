@@ -316,7 +316,7 @@ forgets to set a password gets a broken button, not a silent hole.
 |---|---|
 | `/api/test-alert`, `/api/weekly-roundup` | **Authenticated** — both send mail |
 | `PUT /api/stations/:id/alerts` | **Authenticated** — sets who a station emails |
-| `/station.html`, `/admin.html` and their assets | **Authenticated** — the alerts screen displays people's addresses |
+| `/admin.html` and its assets | **Authenticated** — it edits recipients, so it can display people's addresses |
 | `POST /api/login`, `/api/logout`, `GET /api/me` | Public |
 | `/api/events`, `/api/stations`, `/api/diagnostics` | Public, but **redacted** — see below |
 | Everything else | Public by default; set `REQUIRE_LOGIN_FOR_READ=true` to gate reads too |
@@ -371,7 +371,8 @@ and restart — wiping the volume would also destroy the incident history.
 
 ### Who gets alerted
 
-**Alert recipients are per station**, edited at `/station.html` and stored in the
+**Alert recipients are per station**, edited on each station's card in
+`/admin.html` (the **Alerts** button) and stored in the
 data volume beside the rest of the configuration. Before this, recipients were a
 single global list and `ALERT_STATIONS` was the only thing stopping one station's
 3am outage reaching another station's staff — which meant every station not named
@@ -469,7 +470,7 @@ SMTP_FROM="KPFT Stream Monitor <monitor@example.com>"
 
 # ── Alert Recipients ─────────────────────────────────
 # The FALLBACK list. Each station can have its own recipients, set in the app
-# at /station.html and stored in the data volume; a station with none of its
+# on each station's card in /admin.html; a station with none of its
 # own falls back to these, so a single-station deployment needs nothing else.
 ALERT_EMAILS=manager@example.com,engineer@example.com
 ALERT_STATIONS=                  # Station ids that may email; empty = all.

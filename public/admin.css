@@ -19,7 +19,34 @@ h3 { font-size: 13px; font-weight: 600; color: var(--text-secondary);
 .sub, .hint { color: var(--text-secondary); font-size: 13px; }
 .hint { margin-bottom: 14px; }
 .note { display: block; color: var(--text-muted); font-size: 11px; margin-top: 4px; }
-.head-actions { display: flex; gap: 8px; flex-shrink: 0; }
+/* Header navigation.
+   The first version made every item an identical bordered box — Dashboard,
+   Stations and Sign out reading as three equal choices, which is three times
+   the visual weight the header deserves and gives the eye no order to read
+   them in. Navigation is quiet text; the one action that ENDS something keeps
+   an outline. The page title is what should dominate the header. */
+.head-actions { display: flex; align-items: center; gap: 2px; flex-shrink: 0; }
+.navlink {
+  color: var(--text-secondary); text-decoration: none;
+  font-size: 13px; font-weight: 500; line-height: 1;
+  padding: 8px 11px; border-radius: 8px;
+  transition: color .15s ease, background .15s ease;
+}
+.navlink:hover { color: var(--text-primary); background: var(--surface-2); }
+.signout {
+  margin-left: 8px; padding: 8px 14px;
+  font-size: 13px; font-weight: 600; line-height: 1;
+  background: transparent; color: var(--text-secondary);
+  border: 1px solid var(--surface-3); border-radius: 8px;
+}
+.signout:hover:not(:disabled) {
+  background: var(--surface-2); color: var(--text-primary); border-color: var(--text-muted);
+}
+
+/* Keyboard users must be able to see where they are. */
+.navlink:focus-visible, .signout:focus-visible, .mini:focus-visible {
+  outline: 2px solid var(--primary); outline-offset: 2px;
+}
 
 .panel { background: var(--surface-1); border: 1px solid var(--surface-3);
          border-radius: 14px; padding: 22px; margin-bottom: 20px; }
@@ -158,3 +185,32 @@ label input { margin-top: 6px; }
 .confirm-actions { display: flex; gap: 9px; justify-content: flex-end; margin-top: 22px; }
 .confirm-go { background: #dc2626; color: #fff; }
 .confirm-go:hover:not(:disabled) { background: #ef4444; }
+
+/* ── Alert recipients, inside a station card ─────────────────────────────── */
+
+/* The routing verdict. Colour carries the same meaning as the words and never
+   replaces them — "nothing is emailed" is spelled out, so it survives being
+   read on a phone in sunlight or by someone who does not separate red from
+   green. */
+.routing { padding: 11px 13px; border-radius: 9px; font-size: 13px; margin-bottom: 4px; }
+.routing.on  { background: rgba(34,197,94,.09);  border: 1px solid rgba(34,197,94,.28);  color: #86efac; }
+.routing.off { background: rgba(245,158,11,.09); border: 1px solid rgba(245,158,11,.28); color: #fcd34d; }
+.routing strong { display: block; margin-bottom: 2px; font-size: 13px; }
+.routing .why { color: var(--text-secondary); }
+
+.addr-list { display: grid; gap: 6px; margin-bottom: 10px; }
+.addr {
+  display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  background: var(--surface-1); border: 1px solid var(--surface-3);
+  border-radius: 8px; padding: 8px 10px; font-size: 13px;
+}
+.addr span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.addr-empty { color: var(--text-muted); font-size: 12px; padding: 2px 0 8px; }
+.add-row { max-width: 440px; }
+.add-row input { font-size: 13px; padding: 8px 10px; }
+
+.cc-block { margin-top: 16px; }
+
+.toggle { display: flex; gap: 10px; align-items: flex-start; margin-top: 20px; font-size: 13px; }
+.toggle input { width: 16px; height: 16px; margin-top: 1px; flex: none; accent-color: var(--primary); }
+.toggle .note { margin-top: 2px; }

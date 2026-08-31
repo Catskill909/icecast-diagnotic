@@ -105,10 +105,11 @@
          out. Simultaneous failures across channels are correlated and consolidated
          into one message rather than several — but never across two stations. A
          station only ever hears about its own channels.`,
-        `<strong>Each station has its own recipients</strong>, set on the Alerts
-         screen. A station with none falls back to the monitor-wide list. Switching
-         a station off there stops its email without stopping its monitoring: the
-         outages are still recorded in full, and still appear on every page.`,
+        `<strong>Each station has its own recipients</strong>, set with the Alerts
+         button on its card in the admin panel. A station with none falls back to
+         the monitor-wide list. Switching a station off there stops its email
+         without stopping its monitoring: the outages are still recorded in full,
+         and still appear on every page.`,
         `Alerts lead with the root cause, the listener reach, and specific things to
          check. Every event records whether its alert actually sent.`,
         `A <strong>degraded channel</strong> — still playing, but missing one of its

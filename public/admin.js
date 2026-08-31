@@ -24,9 +24,12 @@
     el.className = 'msg ' + (kind || 'err');
     el.textContent = text;
   }
-  function showList(el, items, kind) {
+  // The intro is a parameter because this now reports failures from three
+  // different actions. Hardcoded, it told someone fixing a mistyped recipient
+  // that their station could not be added.
+  function showList(el, items, intro = 'Could not add this station:', kind) {
     el.className = 'msg ' + (kind || 'err');
-    el.innerHTML = '<strong>Could not add this station:</strong><ul>' +
+    el.innerHTML = `<strong>${esc(intro)}</strong><ul>` +
       items.map((i) => `<li>${esc(i)}</li>`).join('') + '</ul>';
   }
   const clear = (el) => { el.className = 'msg'; el.textContent = ''; };
@@ -119,6 +122,7 @@
             <div class="station-meta">${esc(s.id)} · ${esc(s.timezone || 'UTC')}</div>
           </div>
           <div class="station-actions">
+            <button class="mini" data-alerts="${esc(s.id)}">Alerts</button>
             <button class="mini" data-edit="${esc(s.id)}">Edit</button>
             <button class="mini danger" data-remove="${esc(s.id)}" ${only ? 'disabled title="The only station cannot be removed"' : ''}>Remove</button>
           </div>
@@ -129,8 +133,11 @@
           ).join('')}
         </div>
         <div class="station-editor hidden" data-editor="${esc(s.id)}"></div>
+        <div class="station-editor hidden" data-alertbox="${esc(s.id)}"></div>
       </div>`).join('') || '<div class="hint">No stations configured.</div>';
 
+    host.querySelectorAll('[data-alerts]').forEach((b) =>
+      b.addEventListener('click', () => openAlerts(stations.find((s) => s.id === b.dataset.alerts))));
     host.querySelectorAll('[data-edit]').forEach((b) =>
       b.addEventListener('click', () => openEditor(stations.find((s) => s.id === b.dataset.edit))));
     host.querySelectorAll('[data-remove]').forEach((b) =>
@@ -356,6 +363,221 @@
     $('url').value = ''; discovered = null; idFixed = false;
     loadStations();
   });
+
+  // ── Alert recipients ──────────────────────────────────────────────────────
+  /* Lives ON the station card rather than on a page of its own.
+   *
+   * It shipped first as a separate screen, on the reasoning that configuring
+   * channels is technical and occasional while choosing who gets paged is
+   * routine and belongs to the station. That reasoning assumed two kinds of
+   * login. There is one — so it was the same person, behind the same password,
+   * looking at two menus that each showed half of one station's settings.
+   * A station's channels and a station's recipients are one idea: its settings.
+   *
+   * When per-user roles exist (build order item 12), a GM-facing screen can be
+   * split back out. Splitting it BEFORE the roles that justify it only bought a
+   * second navigation bar.
+   */
+
+  // Edits held per station until Save, so a half-typed address is never what
+  // the monitor is running from.
+  const alertDrafts = {};
+
+  function alertsBox(id) { return document.querySelector(`[data-alertbox="${CSS.escape(id)}"]`); }
+
+  /** Whether mail will actually go out, in the server's words. */
+  function routingHtml(routing) {
+    if (!routing) return '';
+    if (routing.willSend) {
+      const n = routing.recipientCount;
+      const cc = routing.ccCount ? `, copying ${routing.ccCount}` : '';
+      return `<div class="routing on">
+        <strong>Alerts are on</strong>
+        <span class="why">${n} recipient${n === 1 ? '' : 's'}${cc}.${
+          routing.recipientSource === 'global'
+            ? ' Using the monitor-wide list — this station has none of its own.'
+            : ''}</span></div>`;
+    }
+    return `<div class="routing off">
+      <strong>Nothing is emailed for this station</strong>
+      <span class="why">${esc(routing.reason || 'Alerts are not configured.')}
+      Outages are still recorded in full — only the email is withheld.</span></div>`;
+  }
+
+  function addrRowsHtml(list, kind) {
+    if (!list.length) {
+      return `<div class="addr-empty">${kind === 'cc' ? 'Nobody copied in.' : 'No addresses — this station uses the monitor-wide list.'}</div>`;
+    }
+    return list.map((a, i) => `
+      <div class="addr">
+        <span>${esc(a)}</span>
+        <button class="mini danger" data-drop-addr="${kind}" data-i="${i}" type="button">Remove</button>
+      </div>`).join('');
+  }
+
+  function paintAlerts(id) {
+    const box = alertsBox(id);
+    const d = alertDrafts[id];
+    if (!box || !d) return;
+    box.querySelector('[data-recipients]').innerHTML = addrRowsHtml(d.recipients, 'to');
+    box.querySelector('[data-cc]').innerHTML = addrRowsHtml(d.cc, 'cc');
+  }
+
+  async function openAlerts(s) {
+    if (!s) return;
+    const box = alertsBox(s.id);
+    if (!box.classList.contains('hidden')) { box.classList.add('hidden'); return; }
+
+    const a = s.alerts || {};
+    // Addresses shown from the monitor-wide fallback are NOT this station's own.
+    // Pre-filling them would silently copy the fallback onto the station and
+    // freeze it there, so the draft starts from what the station actually has.
+    alertDrafts[s.id] = {
+      recipients: Array.isArray(a.recipients) ? [...a.recipients] : [],
+      cc: Array.isArray(a.cc) ? [...a.cc] : [],
+      enabled: a.enabled !== false,
+    };
+
+    box.innerHTML = `
+      <div data-routing>${routingHtml(null)}</div>
+      <h3>Who gets alerted</h3>
+      <p class="hint">These addresses receive <strong>${esc(s.name)}</strong>'s outage and
+         recovery alerts, and nobody else's. With none of its own, this station falls
+         back to the monitor-wide list.</p>
+      <div class="addr-list" data-recipients></div>
+      <div class="row add-row">
+        <input data-add="to" type="email" placeholder="engineer@station.org"
+               autocapitalize="off" autocorrect="off" spellcheck="false">
+        <button class="ghost" data-addbtn="to" type="button">Add</button>
+      </div>
+      <span class="note">Paste several at once separated by commas.</span>
+
+      <details class="more cc-block">
+        <summary>Copy others in</summary>
+        <div class="more-body">
+          <p class="hint">Copied on every alert — an engineer who watches several
+             stations without being the person called first.</p>
+          <div class="addr-list" data-cc></div>
+          <div class="row add-row">
+            <input data-add="cc" type="email" placeholder="engineering@example.org"
+                   autocapitalize="off" autocorrect="off" spellcheck="false">
+            <button class="ghost" data-addbtn="cc" type="button">Add</button>
+          </div>
+        </div>
+      </details>
+
+      <label class="toggle">
+        <input type="checkbox" data-enabled ${alertDrafts[s.id].enabled ? 'checked' : ''}>
+        <span>Send alerts for this station
+          <span class="note">Turn off while a station is being set up. Outages are
+            still recorded in full — only the email is withheld.</span></span>
+      </label>
+
+      <div class="actions">
+        <button class="primary" data-save-alerts="${esc(s.id)}">Save recipients</button>
+        <button class="ghost" data-test-alert="${esc(s.id)}" type="button">Send a test message</button>
+        <button class="ghost" data-cancel-alerts="1" type="button">Close</button>
+      </div>
+      <div class="msg" data-msg="1"></div>`;
+
+    box.classList.remove('hidden');
+    paintAlerts(s.id);
+    refreshRouting(s.id);
+
+    for (const kind of ['to', 'cc']) {
+      const input = box.querySelector(`[data-add="${kind}"]`);
+      const commit = () => {
+        const raw = input.value.trim();
+        if (!raw) return;
+        const list = kind === 'cc' ? alertDrafts[s.id].cc : alertDrafts[s.id].recipients;
+        // Split here as well as on the server, so pasting three addresses shows
+        // three rows now rather than one row that becomes three on save.
+        for (const part of raw.split(/[,;\n]/).map((x) => x.trim()).filter(Boolean)) {
+          if (!list.some((x) => x.toLowerCase() === part.toLowerCase())) list.push(part);
+        }
+        input.value = '';
+        clear(box.querySelector('[data-msg]'));
+        paintAlerts(s.id);
+      };
+      box.querySelector(`[data-addbtn="${kind}"]`).addEventListener('click', commit);
+      // Enter inside the field adds the address rather than doing nothing.
+      input.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') { e.preventDefault(); commit(); }
+      });
+    }
+
+    box.addEventListener('click', (e) => {
+      const btn = e.target.closest('[data-drop-addr]');
+      if (!btn) return;
+      const list = btn.dataset.dropAddr === 'cc' ? alertDrafts[s.id].cc : alertDrafts[s.id].recipients;
+      list.splice(Number(btn.dataset.i), 1);
+      clear(box.querySelector('[data-msg]'));
+      paintAlerts(s.id);
+    });
+
+    box.querySelector('[data-cancel-alerts]').addEventListener('click', () => box.classList.add('hidden'));
+    box.querySelector('[data-save-alerts]').addEventListener('click', () => saveAlerts(s));
+    box.querySelector('[data-test-alert]').addEventListener('click', () => sendTestAlert(s));
+  }
+
+  /** Re-asks the server what it would actually do now. */
+  async function refreshRouting(id) {
+    const res = await api(`/api/stations/${encodeURIComponent(id)}/alerts/preview`);
+    const box = alertsBox(id);
+    if (!res || !res.ok || !box) return;
+    const slot = box.querySelector('[data-routing]');
+    if (slot) slot.innerHTML = routingHtml(res.body.effective);
+  }
+
+  async function saveAlerts(s) {
+    const box = alertsBox(s.id);
+    const msg = box.querySelector('[data-msg]');
+    clear(msg);
+    const d = alertDrafts[s.id];
+
+    const res = await api(`/api/stations/${encodeURIComponent(s.id)}/alerts`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        recipients: d.recipients,
+        cc: d.cc,
+        enabled: box.querySelector('[data-enabled]').checked,
+      }),
+    });
+    if (!res) return;
+    if (!res.ok) {
+      const errors = res.body.errors;
+      return Array.isArray(errors) && errors.length
+        ? showList(msg, errors, 'That could not be saved:')
+        : show(msg, res.body.error || 'Could not save.');
+    }
+
+    // Re-read rather than trusting the draft: normalisation may have deduped or
+    // dropped something, and the screen must show what is actually stored.
+    const saved = res.body.alerts || {};
+    alertDrafts[s.id] = {
+      recipients: Array.isArray(saved.recipients) ? [...saved.recipients] : [],
+      cc: Array.isArray(saved.cc) ? [...saved.cc] : [],
+      enabled: saved.enabled !== false,
+    };
+    s.alerts = saved;
+    paintAlerts(s.id);
+    box.querySelector('[data-routing]').innerHTML = routingHtml(res.body.effective);
+    show(msg, 'Saved. This takes effect immediately — no redeploy needed.', 'ok');
+  }
+
+  async function sendTestAlert(s) {
+    const box = alertsBox(s.id);
+    const msg = box.querySelector('[data-msg]');
+    const to = alertDrafts[s.id].recipients[0];
+    if (!to) return show(msg, 'Add an address first — a test needs somewhere to go.', 'warn');
+
+    show(msg, `Sending a test message to ${to}…`, 'warn');
+    const res = await api(`/api/test-alert?to=${encodeURIComponent(to)}`);
+    if (!res) return;
+    if (!res.ok) return show(msg, res.body.error || 'The test message could not be sent.');
+    show(msg, `Test message sent to ${to}. If it does not arrive, check the spam folder first.`, 'ok');
+  }
 
   // ── Editing ───────────────────────────────────────────────────────────────
   function openEditor(s) {

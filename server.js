@@ -96,15 +96,12 @@ app.use((req, res, next) => {
 // could only ever have seen an empty form — but a browsable administration
 // screen invites people to try, and there is no reason to serve one.
 //
-// The alerts screen is in here for a stronger reason than the station editor:
-// what it puts on screen is a list of named people's email addresses. Its own
-// stylesheet must be listed too — admin.css is already gated, and a page that
-// borrows it while not being gated itself renders unstyled for exactly the
-// visitor who should not have reached it.
-const ADMIN_PAGES = new Set([
-  '/admin.html', '/admin.js', '/admin.css',
-  '/station.html', '/station.js', '/station.css',
-]);
+// Alert recipients are edited here too, which makes the gate stronger than a
+// preference: what this page can put on screen is a list of named people's
+// email addresses. Every asset the page loads must be listed as well — a page
+// that borrows a gated stylesheet while not being gated itself renders
+// unstyled for exactly the visitor who should not have reached it.
+const ADMIN_PAGES = new Set(['/admin.html', '/admin.js', '/admin.css']);
 app.use((req, res, next) => {
   if (!ADMIN_PAGES.has(req.path)) return next();
   if (auth.currentSession(req)) return next();

@@ -70,14 +70,22 @@ test('every gated asset belongs to a gated page', () => {
   assert.deepEqual(orphans, [], `gated but loaded by no gated page: ${orphans.join(', ')}`);
 });
 
-test('the alerts screen is gated — it displays people\'s email addresses', () => {
+test('the page that edits alert recipients is gated', () => {
   // Not merely an instance of the rule above: this is the one page in the app
-  // whose visible content is a list of named individuals' addresses, so it is
-  // asserted by name rather than left to a general check.
+  // whose visible content can be a list of named individuals' addresses, so it
+  // is asserted by name rather than left to a general check.
+  //
+  // Recipients briefly lived on a station.html of their own. That page was
+  // folded into the admin panel because the split assumed two kinds of login
+  // and there is one — but the gate it needed did not become less necessary
+  // for moving, which is what this asserts.
   const gated = gatedPaths();
-  for (const p of ['/station.html', '/station.js', '/station.css']) {
+  for (const p of ['/admin.html', '/admin.js', '/admin.css']) {
     assert.ok(gated.has(p), `${p} must require a session`);
   }
+
+  const admin = fs.readFileSync(path.join(ROOT, 'public', 'admin.js'), 'utf8');
+  assert.match(admin, /alerts/i, 'the recipient editor is expected to live in the gated admin page');
 });
 
 test('every gated path is a file that actually exists', () => {
