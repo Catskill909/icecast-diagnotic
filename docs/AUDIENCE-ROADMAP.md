@@ -217,6 +217,13 @@ real figure."
 **Phase 2 — needs admin credentials.** Deferred by decision, not blocked: see
 §4.1. Build when a credential exists to build against.
 
+> **Scoped in full in [`ADMIN-ACCESS-SCOPE.md`](ADMIN-ACCESS-SCOPE.md)** —
+> what each `listclients` field unlocks, the listener-map question answered, the
+> storage and privacy decisions that must be made before collection starts, and
+> a build order. Verified there: both production hosts already answer
+> `/admin/listclients` with **401**, so the whole of Phase 2 is gated on one
+> credential and nothing else.
+
 One endpoint unlocks all of it. `/admin/listclients?mount=/live_128` returns a
 row per connected listener; the Icecast docs do not enumerate the fields, so the
 first task is to request it without the `.xsl` suffix and read the raw XML. From

@@ -1925,8 +1925,8 @@ function groupIncidents(list) {
  */
 function faultSide(e) {
   const ice = e.diagnosis?.icecast || {};
-  if (ice.reachable === false) return 'pacifica';   // Pacifica/Icecast path unreachable
-  if (ice.reachable === true) return 'kpft';        // Icecast answered; our mount/source absent
+  if (ice.reachable === false) return 'server';   // Icecast/server path unreachable
+  if (ice.reachable === true) return 'source';    // Icecast answered; the mount/source is absent
   return 'unknown';
 }
 
@@ -2075,11 +2075,21 @@ function getPeriodRollup(streamIds, windowMs) {
   // leads with totals instead of naming these is hiding its own answer.
   const incidents = groupIncidents(significant);
 
-  // WHO HAS TO ACT. Reachability at the moment of failure separates the KPFT
-  // source/feed path from the Pacifica/Icecast path. It does not prove which
-  // individual device or network hop failed, so callers must retain that
+  // WHO HAS TO ACT. Reachability at the moment of failure separates the
+  // station's source/feed path from the Icecast server path. It does not prove
+  // which individual device or network hop failed, so callers must retain that
   // narrower wording.
-  const faultSplit = ['kpft', 'pacifica', 'unknown'].map((side) => {
+  // `source` and `server`, NOT `kpft` and `pacifica`.
+  //
+  // These are the two sides of a handoff every Icecast station has, so the enum
+  // has to be named for the roles rather than for one customer's stations. Named
+  // after KPFT and Pacifica, this reported WBAI New York's outages with
+  // `side: 'kpft'` — a New York station's faults filed under a Houston station's
+  // name, wrong in the API and wrong on the page.
+  //
+  // The value is computed fresh from `diagnosis.icecast.reachable` on every
+  // read and has never been persisted, so the rename needs no data migration.
+  const faultSplit = ['source', 'server', 'unknown'].map((side) => {
     const mine = impactful.filter((e) => faultSide(e) === side);
     return {
       side,

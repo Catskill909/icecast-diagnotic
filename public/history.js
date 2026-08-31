@@ -299,8 +299,8 @@
     // a path, not a particular physical device, so the labels stay deliberately
     // narrower than "equipment failed" or "server failed".
     const FAULT = {
-      kpft: { label: 'Station source/feed path', cls: 'kpft' },
-      pacifica: { label: 'Pacifica/Icecast path', cls: 'pacifica' },
+      source: { label: 'Station source/feed path', cls: 'source' },
+      server: { label: 'Icecast server path', cls: 'server' },
       unknown: { label: 'cause unclear', cls: 'unknown' },
     };
 
@@ -315,8 +315,8 @@
         durationMs: e.durationMs || 0,
         cause: e.diagnosis?.causeLabel || e.message,
         fault: e.diagnosis?.icecast?.reachable === true
-          ? 'kpft'
-          : e.diagnosis?.icecast?.reachable === false ? 'pacifica' : 'unknown',
+          ? 'source'
+          : e.diagnosis?.icecast?.reachable === false ? 'server' : 'unknown',
         listenersTunedIn: e.audience?.listenersBefore || 0,
         eventIds: [e.id],
       }))
@@ -483,19 +483,24 @@
     const host = $('#fault-split');
     if (!host || !lastRollup) return;
 
+    const SOURCE_META = {
+      label: 'Station source/feed path', owner: 'Station / local feed owner', cls: 'source',
+      sub: 'Evidence: Icecast answered, but the monitored source or mount was absent. This identifies the station-to-Icecast feed path, not a specific device.',
+    };
+    const SERVER_META = {
+      label: 'Icecast server path', owner: 'Server / platform engineer', cls: 'server',
+      sub: 'Evidence: the monitor could not reach Icecast. Check the server and its network, DNS, and TLS path; reachability alone does not isolate the component.',
+    };
     const META = {
-      kpft: {
-        label: 'Station source/feed path', owner: 'Station / local feed owner', cls: 'kpft',
-        sub: 'Evidence: Icecast answered, but the monitored source or mount was absent. This identifies the station-to-Icecast feed path, not a specific device.',
-      },
-      pacifica: {
-        label: 'Pacifica/Icecast path', owner: 'Pacifica / platform engineer', cls: 'pacifica',
-        sub: 'Evidence: the monitor could not reach Icecast. Check the server and its network, DNS, and TLS path; reachability alone does not isolate the component.',
-      },
+      source: SOURCE_META,
+      server: SERVER_META,
       unknown: {
         label: 'Path unclear', owner: 'Joint investigation', cls: 'unknown',
         sub: 'The recorded evidence is not sufficient to assign the handoff.',
       },
+      // Recognised on read: a rollup produced by an older build still renders.
+      kpft: SOURCE_META,
+      pacifica: SERVER_META,
     };
 
     const split = lastRollup.faultSplit || [];

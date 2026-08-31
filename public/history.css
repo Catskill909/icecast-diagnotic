@@ -157,8 +157,8 @@ a.help-btn { text-decoration: none; }
   letter-spacing: 0.02em;
   white-space: nowrap;
 }
-.ih-fault.kpft { background: rgba(245, 158, 11, 0.14); color: #fbbf24; }
-.ih-fault.pacifica { background: rgba(56, 189, 248, 0.14); color: #7dd3fc; }
+.ih-fault.source, .ih-fault.kpft { background: rgba(245, 158, 11, 0.14); color: #fbbf24; }
+.ih-fault.server, .ih-fault.pacifica { background: rgba(56, 189, 248, 0.14); color: #7dd3fc; }
 .ih-fault.unknown { background: var(--surface-3); color: var(--text-tertiary); }
 
 .ih-rest {
@@ -382,13 +382,13 @@ a.help-btn { text-decoration: none; }
   border-radius: var(--radius-lg);
   padding: 18px 20px;
 }
-.fs-card.kpft { border-left-color: var(--warn); }
-.fs-card.pacifica { border-left-color: var(--info); }
+.fs-card.source, .fs-card.kpft { border-left-color: var(--warn); }
+.fs-card.server, .fs-card.pacifica { border-left-color: var(--info); }
 
 .fs-head { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-bottom: 10px; }
 .fs-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--text-tertiary); }
-.fs-card.kpft .fs-dot { background: var(--warn); }
-.fs-card.pacifica .fs-dot { background: var(--info); }
+.fs-card.source .fs-dot, .fs-card.kpft .fs-dot { background: var(--warn); }
+.fs-card.server .fs-dot, .fs-card.pacifica .fs-dot { background: var(--info); }
 .fs-label {
   font-size: 0.78rem;
   font-weight: 700;

@@ -171,6 +171,10 @@ app.get('/api/me', (req, res) => {
     authenticated: !!session,
     configured: auth.isConfigured(),
     expiresAt: session?.exp ? new Date(session.exp).toISOString() : null,
+    // The product's own name, so the sign-in page does not hardcode it. Public
+    // by design — it is the name on the door, and this endpoint is reachable
+    // before sign-in precisely because that page needs it.
+    product: monitor.getConfig().product,
   });
 });
 

@@ -18,7 +18,7 @@ shortest path to being useful.
 **Orient yourself (2 minutes).**
 
 ```bash
-npm test                                   # 332 tests, all should pass
+npm test                                   # 336 tests, all should pass
 curl -s https://kpft-icecast.supersoul.top/api/stations | jq   # what it monitors
 curl -s https://kpft-icecast.supersoul.top/api/status   | jq   # how it is doing
 ```
@@ -87,7 +87,7 @@ regression, however green the tests are.**
   so the host-as-shared-pool design (§3.6) is now carrying real traffic rather
   than being argued for. One snapshot fetch per host per cycle serves every
   station on it.
-- **332 tests**, `npm test`, Node's built-in runner, no test framework dependency.
+- **336 tests**, `npm test`, Node's built-in runner, no test framework dependency.
 - **Dependencies: express, nodemailer 9, dotenv.** That is the whole list, and it
   is deliberate. Crypto, testing and HTTP are all Node built-ins. Adding a
   dependency should require an argument.
@@ -428,6 +428,13 @@ which is not the same as knowing what happened.
 
 ## 6. Where it is going
 
+> **Sequencing lives in [`docs/PHASE-PLAN.md`](docs/PHASE-PLAN.md)** — one
+> document, seven phases, with entry and exit conditions and the decisions
+> already made so they are not re-litigated. Planning had spread across five
+> documents carrying four separate build orders; that consolidation happened
+> 2026-08-31. The list below is the historical record of what shipped and in
+> what order, not the plan.
+
 Full reasoning in [`icecast-app-future-dev.md`](icecast-app-future-dev.md) §5 and §10.
 
 **The sequencing decision: build the admin panel BEFORE adding stations.** Adding
@@ -460,6 +467,20 @@ Build order, with the current position marked:
    shipped 2026-08-28. Still to do: day-of-week × hour heatmap, audience retained
    through an outage, per-mount trend over time
 10. Fleet view
+10b. **Icecast admin access** — scoped 2026-08-31 in
+    [`docs/ADMIN-ACCESS-SCOPE.md`](docs/ADMIN-ACCESS-SCOPE.md). Both production
+    hosts already answer `/admin/listclients` with 401, so this is gated on one
+    credential, not on Pacifica changing anything. Unlocks TSL, real (not
+    estimated) ATH, player breakdown, geography, and the one nobody else can
+    build: how much of an audience actually returned after an outage.
+    **Two decisions come before any collection** — storage (this is where the
+    "SQLite not needed yet" note expires, at ~630k rows/day) and listener
+    privacy (`listclients` returns IP addresses and this dashboard is public).
+    Build plan in [`docs/DEEP-ANALYTICS-PLAN.md`](docs/DEEP-ANALYTICS-PLAN.md):
+    go as deep as the data allows and show every limitation on screen, via one
+    confidence envelope rather than a sentence per panel. **Two items in it need
+    no credential at all** — the confidence system, and programme-level audience,
+    which only needs the now-playing title to be STORED instead of discarded
 11. **SMS alerting** — [`docs/SMS-ALERTING.md`](docs/SMS-ALERTING.md). ~$3–4.50/mo
     plus a one-time ~$15–20 10DLC registration. **Unblocked** — item 7 shipped
     the per-station routing it was waiting for. Phone numbers go in the same
@@ -469,8 +490,12 @@ Build order, with the current position marked:
 
 Two design rules already decided:
 
-- **Two panels, not one.** "Add a station" (rare, technical, restricted) and "my
-  station" (weekly, must be simple) are different jobs for different people.
+- ~~**Two panels, not one.**~~ **Resolved 2026-08-31, differently than written.**
+  The note assumed GM-versus-technician and therefore two kinds of login. The
+  real division is **public versus private**: one narrow, `noindex` public status
+  page for reading during an emergency, and everything else behind the single
+  existing admin credential. No per-user roles, no GM accounts. See
+  [`docs/PHASE-PLAN.md`](docs/PHASE-PLAN.md) Phase 7.
 - **Optional capabilities are shown as unavailable, never hidden.** Icecast admin
   credentials are optional and most servers will not have them. A panel that
   disappears teaches nobody anything and makes the page change shape depending on
@@ -639,6 +664,16 @@ Reviewed end to end on 2026-08-27; findings and reasoning in
   system — rare, technical, restricted. Reporting is frequent and GM-facing, and
   belongs on the history page and fleet view. Collapsing them puts "delete
   station" a tab away from a weekly report (§8b of the scope doc).
+- **STATION-SPECIFIC VOCABULARY NEVER BECOMES A WIRE FORMAT.** `faultSplit`'s two
+  sides were `kpft` and `pacifica` — station names used as a generic enum for
+  "which side of the handoff failed". Every Icecast station has those two sides,
+  so on production it reported **WBAI New York's outages with `side: 'kpft'`**.
+  Now `source` / `server` / `unknown`; the value is computed on every read and
+  was never persisted, so nothing stored changed, and readers still recognise the
+  old names. An enum, API field or CSS class named after one customer is
+  invisible until a second customer exists and expensive by then.
+  `test/fault-side-vocabulary.test.js` fails on ANY station name used as a
+  category value, not just these two.
 - **WHAT A MESSAGE SAYS IS SCOPED THE SAME WAY AS WHO IT IS SENT TO.** Recipients
   became per-station so KPFT's GM is not paged about Los Angeles; the message
   BODY was not, and every alert ended with an "ALL STREAMS OVERVIEW" rendered
@@ -770,7 +805,7 @@ Reviewed end to end on 2026-08-27; findings and reasoning in
 ## 9. Verifying a change
 
 ```bash
-npm test                                             # 332 tests
+npm test                                             # 336 tests
 node --check server.js monitor.js store.js diagnose.js auth.js
 
 # Against production

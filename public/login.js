@@ -13,7 +13,14 @@ const $ = (id) => document.getElementById(id);
 
   // Warn early if no credential is configured, so a 503 at submit time is not a
   // mystery.
+  // The product name is not hardcoded here: the destination for this software is
+  // undecided, and a rebrand should be a configuration change rather than an
+  // edit to the sign-in page.
+  let productName = 'Stream Monitor';
+  const setSub = () => { $('sub').textContent = `${productName} · administration`; };
+
   fetch('/api/me').then((r) => r.json()).then((s) => {
+    if (s && s.product) { productName = s.product; setSub(); }
     if (s.authenticated) return location.replace(next());
     if (!s.configured) show('No admin password is configured on the server. Set ADMIN_PASSWORD_HASH and restart.', 'warn');
   }).catch(() => {});
@@ -56,7 +63,7 @@ const $ = (id) => document.getElementById(id);
     $('step2').classList.add('hidden');
     $('step1').classList.remove('hidden');
     $('title').textContent = 'Sign in';
-    $('sub').textContent = 'Pacifica Stream Monitor · administration';
+    setSub();
     $('username').focus();
   });
 

@@ -196,9 +196,14 @@ service, or network hop failed:
 
 | `side` | Means |
 |---|---|
-| `kpft` | Icecast was **reachable** but the monitored source/mount was absent — inspect the KPFT source/feed path |
-| `pacifica` | Icecast could **not be reached** — inspect the Pacifica/Icecast server, network, DNS, and TLS path |
+| `source` | Icecast was **reachable** but the monitored source/mount was absent — inspect the station's source/feed path |
+| `server` | Icecast could **not be reached** — inspect the Icecast server, network, DNS, and TLS path |
 | `unknown` | not enough evidence to assign the handoff; investigate jointly |
+
+These were `kpft` and `pacifica` until 2026-08-31 — station names used as a
+generic enum, which reported WBAI New York's outages with `side: "kpft"`. The
+value is computed on every read and was never persisted, so nothing stored
+changed; readers still recognise the old names.
 
 This is the action-routing field in the record. Its category windows can overlap: if the KPFT
 source path is already down when the Icecast path becomes unreachable, both categories accrue
@@ -496,6 +501,13 @@ ALERT_STATIONS=
 # Merged into that same single list. There is no CC after migration: To/CC
 # separates people, and separates nothing in an automated alert.
 ALERT_CC=monitor-owner@example.com
+
+# ── Product Identity ─────────────────────────────────
+# The name recipients see: the email footer, the test alert, the sign-in page.
+# Defaults to the Pacifica branding; set these to deploy under another name
+# without touching code.
+PRODUCT_NAME="Pacifica Stream Monitor"
+PRODUCT_OWNER="Pacifica Foundation"
 
 # ── Dashboard Link in Emails ─────────────────────────
 DASHBOARD_URL=https://kpft-icecast.supersoul.top

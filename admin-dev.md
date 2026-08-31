@@ -238,6 +238,9 @@ history rather than moving it.
 
 ## 5. Build order
 
+> Where this sits among everything else: **Phase 1** of
+> [`docs/PHASE-PLAN.md`](docs/PHASE-PLAN.md).
+
 Smallest first, and each step is independently shippable.
 
 | | Change | Status |

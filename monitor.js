@@ -123,6 +123,16 @@ const ALERT_ON_HARMLESS_OUTAGE =
 // Every timestamp a human reads is in the station's own timezone, so the report
 // covers the week they lived through rather than a UTC one.
 const STATION_TZ = process.env.STATION_TZ || 'America/Chicago';
+
+// The product's own name, as it appears to recipients — the email footer, the
+// test alert, the sign-in page.
+//
+// A single switch rather than a string repeated across the codebase, because the
+// destination is undecided: Pacifica is the goal now, and the same code may
+// later be deployed elsewhere or under another name. Debranding should be a
+// configuration change, not a search-and-replace through the mailer.
+const PRODUCT_NAME = process.env.PRODUCT_NAME || 'Pacifica Stream Monitor';
+const PRODUCT_OWNER = process.env.PRODUCT_OWNER || 'Pacifica Foundation';
 const WEEKLY_ROUNDUP_ENABLED =
   String(process.env.WEEKLY_ROUNDUP ?? 'true').trim().toLowerCase() !== 'false';
 // 0 = Sunday. Monday morning by default: the week it reports on is complete.
@@ -1728,7 +1738,7 @@ function buildEmailHtml({ title, subtitle, headerBg, contentHtml }) {
           <tr>
             <td class="footer-bg" style="background-color: #0f0f1a; padding: 18px 28px; border-top: 1px solid #222235; text-align: center;">
               <p class="footer-text" style="color: #94a3b8 !important; font-size: 12px; margin: 0; line-height: 1.5;">
-                <span class="footer-text" style="color: #94a3b8 !important;">Pacifica Stream Monitor · Pacifica Foundation</span>
+                <span class="footer-text" style="color: #94a3b8 !important;">${esc(PRODUCT_NAME)}${PRODUCT_OWNER ? ` · ${esc(PRODUCT_OWNER)}` : ''}</span>
               </p>
             </td>
           </tr>
@@ -2507,6 +2517,7 @@ function getSnapshot() { return snapshot; }
 
 function getConfig() {
   return {
+    product: PRODUCT_NAME,
     checkInterval: CHECK_INTERVAL,
     failureThreshold: FAILURE_THRESHOLD,
     silenceProbeInterval: SILENCE_PROBE_INTERVAL_MS,
@@ -2579,7 +2590,7 @@ async function sendTestAlert(toEmail, stationId) {
     title: '🧪 Test Alert — Email Working!',
     subtitle: stationName
       ? `This is a test from the ${stationName} stream monitor. Alerts for ${stationName} will reach this address.`
-      : 'This is a test alert from the Pacifica Stream Monitor. Email alerts are configured correctly.',
+      : `This is a test alert from the ${PRODUCT_NAME}. Email alerts are configured correctly.`,
     headerBg: 'linear-gradient(135deg, #6c5ce7, #5a49c9)',
     contentHtml,
   });
@@ -2589,7 +2600,7 @@ async function sendTestAlert(toEmail, stationId) {
     to: toEmail,
     subject: stationName
       ? `🧪 ${stationName} Stream Monitor — Test Alert`
-      : '🧪 Pacifica Stream Monitor — Test Alert',
+      : `🧪 ${PRODUCT_NAME} — Test Alert`,
     html,
   });
   console.log(`[Monitor] Test alert sent to ${toEmail}`);
@@ -2663,7 +2674,7 @@ function buildWeeklyRoundup(rollup, stationId) {
       : `${c.significant} significant outage${c.significant === 1 ? '' : 's'}`,
     rollup.downtimeMs ? `${diagnose.fmtDuration(rollup.downtimeMs)} elapsed off-air window` : null,
   ].filter(Boolean);
-  const subject = `📊 ${stationName || 'Pacifica'} Weekly Stream Report — ${rangeLabel}: ${subjectFacts.join(', ')}`;
+  const subject = `📊 ${stationName || PRODUCT_NAME} Weekly Stream Report — ${rangeLabel}: ${subjectFacts.join(', ')}`;
 
   const uptimeColor = rollup.uptime == null ? '#94a3b8'
     : rollup.uptime >= 99.5 ? '#4ade80' : rollup.uptime >= 98 ? '#fbbf24' : '#f87171';
@@ -2675,9 +2686,12 @@ function buildWeeklyRoundup(rollup, stationId) {
   // other stations throughout is a studio problem, and the report has to say so
   // before anyone starts a conversation with the wrong department.
   const FAULT_META = {
-    kpft: { label: 'Station source/feed path', sub: 'Icecast answered; the monitored source or mount was absent', color: '#fbbf24' },
-    pacifica: { label: 'Pacifica/Icecast path', sub: 'Icecast was unreachable; check server, network, DNS, and TLS path', color: '#7dd3fc' },
+    source: { label: 'Station source/feed path', sub: 'Icecast answered; the monitored source or mount was absent', color: '#fbbf24' },
+    server: { label: 'Icecast server path', sub: 'Icecast was unreachable; check server, network, DNS, and TLS path', color: '#7dd3fc' },
     unknown: { label: 'Path unclear', sub: 'not enough evidence to assign the handoff', color: '#94a3b8' },
+    // Recognised on read so a rollup computed by an older build still renders.
+    kpft: { label: 'Station source/feed path', sub: 'Icecast answered; the monitored source or mount was absent', color: '#fbbf24' },
+    pacifica: { label: 'Icecast server path', sub: 'Icecast was unreachable; check server, network, DNS, and TLS path', color: '#7dd3fc' },
   };
 
   const faultRows = (rollup.faultSplit || []).map((s) => {
@@ -2810,7 +2824,7 @@ function buildWeeklyRoundup(rollup, stationId) {
     <p class="label-col" style="margin:20px 0 0 0; font-size:11px; line-height:1.6; color:#94a3b8 !important;"><span class="label-col" style="color:#94a3b8 !important;">This is a scheduled weekly summary, not an alert — it arrives whether or not anything went wrong.<br><br><strong>Listener interruptions</strong> is a headcount taken as each outage began; someone interrupted by two separate outages counts twice.<br><br><strong>Listening lost</strong> is audience multiplied by outage duration — 50 people for one hour is 50 listener-hours. It is not clock time.<br><br><strong>Elapsed off-air window</strong> is clock time with at least one of the ${rollup.perStream.length} monitored audio streams down; simultaneous stream outages count once. These are streams on the Icecast service, not ${rollup.perStream.length} separate servers. <strong>Summed stream-time</strong> adds each affected stream separately and is the basis of uptime. The path cards divide interruption records; they are not downtime totals.</span></p>`;
 
   const html = buildEmailHtml({
-    title: `📊 ${stationName || 'Pacifica'} Weekly Stream Report`,
+    title: `📊 ${stationName || PRODUCT_NAME} Weekly Stream Report`,
     subtitle: `${rangeLabel} · ${rollup.perStream.length} streams monitored · scheduled summary`,
     headerBg: clean
       ? 'linear-gradient(135deg, #0f766e, #115e59)'
