@@ -8,6 +8,13 @@
   const $ = (id) => document.getElementById(id);
   let discovered = null;
 
+  /** Mirrors discover.deriveChannelId() on the server. Keep the two identical. */
+  function deriveChannelId(stationId, channelId) {
+    const c = String(channelId || 'channel');
+    const st = String(stationId || '');
+    return (c === st || c.startsWith(st + '-') ? c : `${st}-${c}`).slice(0, 64);
+  }
+
   // Comfortably above the server's own budget for the same request, so a server
   // that IS answering is never cut off by the client sitting in front of it.
   const DISCOVER_TIMEOUT_MS = 45000;
@@ -301,6 +308,9 @@
     const s = d.suggestedStation || {};
     $('st-name').value = s.name || '';
     $('st-id').value = s.id || '';
+    // Say WHY the identifier is not the obvious one, rather than letting it look
+    // like a typo. The station name is untouched; only the internal id moved.
+    if (discovered.identityNote) show($('discover-msg'), discovered.identityNote, 'warn');
     // A suggested id is a decision, not a placeholder. Only fall back to
     // slugging the name when discovery could not work one out.
     idFixed = !!s.id;
@@ -364,12 +374,10 @@
       // Channel ids are prefixed with the station so they stay unique across
       // stations — they key this channel's history permanently.
       channels: picked.map((c) => ({
-        // Prefixed with the station so ids stay unique across stations — they
-        // key this channel's history permanently. Not doubled up when the
-        // channel already carries the station's name: "wpfw-wpfw" helps nobody.
-        id: (c.id === stationId || c.id.startsWith(stationId + '-')
-              ? c.id
-              : `${stationId}-${c.id}`).slice(0, 64),
+        // The SAME rule the server used when it de-conflicted the station id.
+        // It lived only here once, so the server could not predict what this
+        // would produce and could not tell whether it was free.
+        id: deriveChannelId(stationId, c.id),
         name: c.name,
         url: c.url,
         mounts: c.mounts,

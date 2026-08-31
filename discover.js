@@ -217,12 +217,73 @@ function suggestStationIdentity(channel) {
   const slug = (s) => String(s).replace(/[^a-z0-9]+/gi, '-').toLowerCase().replace(/^-+|-+$/g, '');
   const id = callSign ? slug(callSign) : (slug(fromPath) || 'station');
 
-  return { name: callSign || raw || id.toUpperCase(), id };
+  // A bare three-to-five letter token IS a US call sign, so present it the way a
+  // station writes its own name. Without this, a mount with no `server_name` —
+  // KPFA's public /kpfa is a sourceless fallback and has none — proposed the
+  // station name as lowercase "kpfa", leaving the operator to capitalise it by
+  // hand. Every field they have to correct is ingestion that did not happen.
+  const display = callSign || raw || id;
+  const name = /^[a-z]{3,5}$/.test(display) ? display.toUpperCase() : display;
+
+  return { name, id };
+}
+
+/**
+ * The channel id a station id will produce for a discovered channel.
+ *
+ * Lives here, not in the browser, because the SERVER has to predict the same
+ * value in order to check whether it is free. The rule was duplicated in
+ * public/admin.js and the copy in the browser was the only one that knew it.
+ *
+ * The exception — no prefix when the channel already carries the station's name
+ * — exists so ids do not read "wpfw-wpfw". It is also what made KPFA
+ * unaddable: its mount is /kpfa and its natural station id is `kpfa`, so the
+ * prefix was skipped and the id landed on an existing station's channel.
+ */
+function deriveChannelId(stationId, channelId) {
+  const c = String(channelId || 'channel');
+  const s = String(stationId || '');
+  return (c === s || c.startsWith(s + '-') ? c : `${s}-${c}`).slice(0, 64);
+}
+
+/**
+ * A station id that is actually usable — free itself, AND producing channel ids
+ * that are all free.
+ *
+ * Discovery used to propose an id from the call sign alone and hand it to the
+ * form with no idea whether it was taken. Adding a station already monitored on
+ * a DIFFERENT server therefore failed, and the only way through was for the
+ * operator to invent a unique id by hand. That is not ingestion: a general
+ * manager pasting their stream URL has no reason to know another server already
+ * claimed the obvious name.
+ *
+ * Both halves have to be checked together. A free station id is not enough —
+ * the channel ids it derives are what key the history, and those are what
+ * collided.
+ */
+function freeStationId(baseId, channels, config) {
+  const takenStations = new Set((config?.stations || []).map((s) => String(s.id).toLowerCase()));
+  const takenChannels = existingChannelIds(config);
+
+  const base = String(baseId || 'station').toLowerCase();
+  const fits = (candidate) => !takenStations.has(candidate)
+    && (channels || []).every((c) => !takenChannels.has(deriveChannelId(candidate, c.id)));
+
+  if (fits(base)) return { id: base, adjusted: false };
+
+  // Numbered rather than host-derived: "kpfa-streams-kpfa-org" is unreadable,
+  // and the station NAME is where the human distinction belongs.
+  for (let n = 2; n < 50; n++) {
+    const candidate = `${base}-${n}`;
+    if (fits(candidate)) return { id: candidate, adjusted: true, base };
+  }
+  return { id: base, adjusted: false, exhausted: true };
 }
 
 module.exports = {
   altSchemeUrl,
-  isTransportFailure, toStatusUrl, channelKeyFor, suggestChannels, summarise, suggestStationIdentity };
+  isTransportFailure, toStatusUrl, channelKeyFor, suggestChannels, summarise, suggestStationIdentity,
+  deriveChannelId, freeStationId };
 
 /* ═══════════════════════════════════════════════════════════════════════════
    Validating a station before it is written

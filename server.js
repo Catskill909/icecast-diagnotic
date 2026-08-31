@@ -321,7 +321,25 @@ app.post('/api/stations/discover', auth.requireAuth, async (req, res) => {
   // the first attempt at this shipped with realistic placeholders and the form
   // was submitted empty.
   const matched = (body.channels || []).find((c) => c.matched) || (body.channels || [])[0];
-  body.suggestedStation = discover.suggestStationIdentity(matched);
+  const identity = discover.suggestStationIdentity(matched);
+
+  // De-conflicted against what is ALREADY monitored, here rather than in the
+  // browser, because the server is the authority on what is taken.
+  //
+  // Discovery used to propose an id from the call sign alone. A station already
+  // monitored on a DIFFERENT server — KPFA on Pacifica's relay and again on its
+  // own Icecast — therefore arrived with an id that could not be saved, and the
+  // only way through was for the operator to invent a unique one by hand. A
+  // general manager pasting a stream URL has no reason to know another server
+  // already claimed the obvious name.
+  const free = discover.freeStationId(identity.id, body.channels || [], monitor.getStationConfig());
+  body.suggestedStation = { ...identity, id: free.id };
+
+  if (free.adjusted) {
+    body.identityNote = `"${free.base}" is already monitored, so this one is `
+      + `"${free.id}". Rename it freely — the identifier is only used internally.`;
+  }
+
   res.json(body);
 });
 
