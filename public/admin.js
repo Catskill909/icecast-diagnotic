@@ -387,7 +387,15 @@
     if (!r) return;
 
     if (!r.ok) {
-      if (Array.isArray(r.body.errors)) showList($('save-msg'), r.body.errors);
+      const errs = Array.isArray(r.body.errors) ? [...r.body.errors] : [];
+      // "already exists" is not a dead end — it means this belongs on the
+      // station that already has that id, as another channel. Say so, because
+      // the next step is a different button in a different panel.
+      if (errs.some((x) => /already exists|already used by another station/i.test(x))) {
+        errs.push('This looks like a station already being monitored. To add another '
+          + 'stream to it, use Edit on that station below, then "+ Add a channel".');
+      }
+      if (errs.length) showList($('save-msg'), errs);
       else show($('save-msg'), r.body.error || 'Could not add this station.');
       return;
     }
@@ -427,6 +435,17 @@
    * Each used to toggle only itself, so Edit followed by Alerts left one card
    * showing two stacked forms with two Save buttons and nothing on screen
    * saying which saved what. */
+  /* A message must describe the thing in front of you.
+   *
+   * The add-station form's error sits at the top of the page and was cleared
+   * only by that form's own actions. Opening a station editor left it visible,
+   * so a failed "add" read as though the EDIT had just failed — reported by the
+   * operator, who was looking at a correct editor and a stale error together. */
+  function clearAddFormMessages() {
+    clear($('save-msg'));
+    clear($('discover-msg'));
+  }
+
   function closePanels(id, except) {
     for (const attr of ['data-editor', 'data-alertbox']) {
       if (attr === except) continue;
@@ -498,6 +517,7 @@
     const box = alertsBox(s.id);
     if (!box.classList.contains('hidden')) { box.classList.add('hidden'); return; }
     closePanels(s.id, 'data-alertbox');
+    clearAddFormMessages();
 
     const a = s.alerts || {};
     // Addresses shown from the monitor-wide fallback are NOT this station's own.
@@ -929,6 +949,7 @@
     const box = document.querySelector(`[data-editor="${CSS.escape(s.id)}"]`);
     if (!box.classList.contains('hidden')) { box.classList.add('hidden'); return; }
     closePanels(s.id, 'data-editor');
+    clearAddFormMessages();
 
     box.innerHTML = `
       <div class="fields">
