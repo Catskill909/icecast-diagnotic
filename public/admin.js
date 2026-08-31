@@ -373,16 +373,37 @@
    */
   function renderExistingStationOffer(d) {
     const box = $('existing-station');
+    const save = $('save-btn');
     const ex = d.existingStation;
-    if (!ex) { box.className = 'msg hidden'; box.innerHTML = ''; return; }
+
+    if (!ex) {
+      box.className = 'msg hidden';
+      box.innerHTML = '';
+      save.className = 'primary';
+      save.textContent = 'Add station';
+      return;
+    }
+
+    // THE SAFE ACTION BECOMES THE DEFAULT ONE.
+    //
+    // The first version of this left "Add station" as the big primary button
+    // and put the offer in a note above it. The note was read, understood, and
+    // then the primary button was pressed anyway — because that is what a
+    // primary button is for. A warning that competes with a call to action
+    // loses, so the duplicate got created a second time.
+    //
+    // Adding a separate station stays possible; it is no longer what the page
+    // is inviting.
+    save.className = 'ghost';
+    save.textContent = 'Add as a separate station instead';
 
     box.className = 'msg warn';
     box.innerHTML = `
       <strong>${esc(ex.name)} is already being monitored.</strong>
-      <p>This is almost certainly the same station on a second server. Adding it below
-      creates a <em>second</em> station with the same name, and splits one station's
-      listeners across two pages.</p>
-      <button class="mini" type="button" data-join="${esc(ex.id)}">
+      <p>This is almost certainly the same station on a second server. Adding it as its
+      own station would split one station's listeners across two pages — its stream cards
+      stay separate either way.</p>
+      <button class="primary" type="button" data-join="${esc(ex.id)}">
         Add the ticked channel(s) to ${esc(ex.name)}
       </button>`;
 
@@ -469,13 +490,17 @@
     };
 
     const btn = $('save-btn');
+    // Restored rather than hardcoded: when this stream belongs to a station
+    // already monitored the button is relabelled, and putting "Add station"
+    // back would re-promote the action that creates the duplicate.
+    const label = btn.textContent;
     btn.disabled = true; btn.textContent = 'Adding…';
     const r = await api('/api/stations', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
     });
-    btn.disabled = false; btn.textContent = 'Add station';
+    btn.disabled = false; btn.textContent = label;
     if (!r) return;
 
     if (!r.ok) {
