@@ -2,7 +2,7 @@
 
 > **Purpose.** Everything a new session, a new developer, or another model needs
 > to pick this up without reading the conversation it came from. Written
-> 2026-08-27, current as of commit `91114be`.
+> 2026-08-27, current as of commit `07aec1b`.
 >
 > Read this first, then [`README.md`](README.md) for behaviour,
 > [`docs/DIAGNOSTICS.md`](docs/DIAGNOSTICS.md) for the classifier, and
@@ -18,7 +18,7 @@ shortest path to being useful.
 **Orient yourself (2 minutes).**
 
 ```bash
-npm test                                   # 336 tests, all should pass
+npm test                                   # 355 tests, all should pass
 curl -s https://kpft-icecast.supersoul.top/api/stations | jq   # what it monitors
 curl -s https://kpft-icecast.supersoul.top/api/status   | jq   # how it is doing
 ```
@@ -27,7 +27,7 @@ curl -s https://kpft-icecast.supersoul.top/api/status   | jq   # how it is doing
 Those three are what stop you breaking something quietly. Everything else can be
 read when you need it.
 
-**The five things most likely to catch you out**, all of which fail *silently*:
+**The six things most likely to catch you out**, all of which fail *silently*:
 
 | | |
 |---|---|
@@ -36,6 +36,7 @@ read when you need it.
 | Renaming a channel id | Orphans its history rather than moving it. §8 |
 | Adding a module without updating the Dockerfile | Container dies on startup. CI catches it |
 | Assuming a push deployed | Deploys are manual, always |
+| Thinking a station is a server | A card is a CHANNEL; a station only groups them. §5d, §8 |
 
 **How work gets shipped.** Commit, push, then *tell the operator to deploy* — a
 human clicks deploy in Coolify and the build takes 1–5 minutes. Verify against
@@ -78,16 +79,19 @@ regression, however green the tests are.**
 
 ## 2. Current state
 
-- **Live and healthy.** 4 stations (KPFT Houston, WPFW Washington DC, KPFK Los
-  Angeles, WBAI New York), 8 channels, **2 Icecast hosts**, 476 events retained
-  since 2026-08-04. Verified against production 2026-08-31: 99.55% audio uptime
-  over 7 days, every channel up.
+- **Live and healthy.** 5 stations (KPFT Houston, WPFW Washington DC, KPFK Los
+  Angeles, WBAI New York, KPFA Berkeley), 10 channels, **3 Icecast hosts**, 476
+  events retained since 2026-08-04. Verified against production 2026-08-31.
+- **One station now spans two hosts.** KPFA is carried on Pacifica's relay
+  (`streams.pacifica.org:9000`) AND on its own Icecast (`streams.kpfa.org:8443`).
+  That is ONE station with TWO channels: two dashboard cards, watched
+  independently, adding up to one line in the audience dropdown. §5d.
 - **The second host is no longer hypothetical.** WBAI runs on
   `streaming.wbai.org` while the other three share `streams.pacifica.org:9000`,
   so the host-as-shared-pool design (§3.6) is now carrying real traffic rather
   than being argued for. One snapshot fetch per host per cycle serves every
   station on it.
-- **336 tests**, `npm test`, Node's built-in runner, no test framework dependency.
+- **355 tests**, `npm test`, Node's built-in runner, no test framework dependency.
 - **Dependencies: express, nodemailer 9, dotenv.** That is the whole list, and it
   is deliberate. Crypto, testing and HTTP are all Node built-ins. Adding a
   dependency should require an argument.
@@ -170,20 +174,20 @@ silently alters what lands in someone's inbox.
 
 | File | Lines | What it owns |
 |---|---|---|
-| `store.js` | 1916 | Persistence, retention, audience model, rollups, **station config** |
-| `monitor.js` | 2355 | Check cycle, episode state, email composition, weekly roundup |
-| `diagnose.js` | 1079 | Probe, Icecast snapshot, **the classifier and the alert gate** |
-| `server.js` | 592 | HTTP API |
+| `store.js` | 2434 | Persistence, retention, audience model, rollups, **station config** |
+| `monitor.js` | 3039 | Check cycle, episode state, email composition, weekly roundup |
+| `diagnose.js` | 1255 | Probe, Icecast snapshot, **the classifier and the alert gate** |
+| `server.js` | 811 | HTTP API |
 | `auth.js` | ~290 | Admin session gate: scrypt, signed cookie, rate limiting |
 | `redact.js` | ~130 | **Public projections.** What anonymous callers may see |
 | `safe-url.js` | ~150 | **SSRF guard** for fetching user-supplied URLs |
-| `discover.js` | ~240 | Station discovery: mount → channel grouping, validation |
+| `discover.js` | 800 | Station discovery: mount → channel grouping, validation |
 | `public/app.js` | 694 | Dashboard |
 | `public/history.js` | 1530 | History page, station picker, charts |
 | `public/listeners.js` | ~420 | **Audience page**: rendering only — ATH, charts, tables, CSV export |
 | `public/audience-stats.js` | ~190 | **Audience arithmetic**, deliberately separate so Node can test it. Loads as `window.AudienceStats` in the browser and `require()`s in tests |
-| `public/admin.js` | 363 | Admin panel: add, edit, remove stations |
-| `public/guide.js` | ~300 | In-app guide (content lives here as data) — 11 topics |
+| `public/admin.js` | 1385 | Admin panel: add, edit, remove stations |
+| `public/guide.js` | 359 | In-app guide (content lives here as data) — 12 topics |
 | `public/login.js` | ~90 | Two-step sign-in |
 
 No framework, no build step. Every page loads plain files.
@@ -423,6 +427,64 @@ which is not the same as knowing what happened.
   paths and would have leaked the same way, less visibly. Fixing this at
   `sendGroupedAlert()` rather than at the call sites is what makes that
   irrelevant.
+
+---
+
+## 5d. Also 2026-08-31: a station that spans two servers
+
+KPFA appeared **twice** in the station list, its audience split across two pages
+and its channel count double-counted. Both entries were named "KPFA Berkeley".
+
+**Why it is the first station to do this.** Every other multi-channel station's
+mounts live on ONE server, so discovery reads one status document, groups its
+mounts into channels, and the operator adds them in a SINGLE submission. KPFA is
+carried on Pacifica's relay *and* on its own Icecast at
+`streams.kpfa.org:8443` — two status documents, so two discovery runs, and the
+add flow only ever creates a NEW station.
+
+**The mechanism is worth reading, because it was a regression built out of two
+correct fixes.** The guard existed: `validateStationPayload` rejects a taken
+station id, and the admin form answers "this looks like a station already being
+monitored — use Edit, then + Add a channel". Then `freeStationId` was added at
+DISCOVERY time so a colliding id resolved to a free `kpfa-2` before submission —
+so the save succeeded, validation never ran, and that guidance became
+unreachable. A later commit stopped rendering `identityNote`, removing the last
+visible trace. **Pre-resolving a conflict consumed the information the conflict
+carried**: the id collision WAS the evidence that this is the same station.
+
+| Change | Why |
+|---|---|
+| `discover.existingStationFor()` and `existingStation` on the discover response | De-confliction still happens — a genuinely separate station sharing a call sign must stay addable — but the station holding that id is now REPORTED alongside it |
+| The offer hands ticked channels to that station's editor as **unsaved rows** | Identical to pressing "+ Add a channel". Nothing is written by the handover; the operator reviews and saves |
+| A handed-over channel whose name matches the station's gets its **host appended** | Two channels of one station are told apart by which server they come from, which is the whole reason there are two |
+| `openEditor(s, prefill)` does not toggle closed when given a prefill | Edit toggles; a handover always opens, or the channels are silently discarded |
+| **The handover button became the PRIMARY action; "Add station" became a ghost reading "Add as a separate station instead"** | See the correction below |
+| New guide topic **"Stations, channels and mounts"** | The three-level model was documented nowhere the operator could read it |
+
+### Corrections worth inheriting
+
+- **A warning that competes with a call to action loses.** The offer first
+  shipped as a note ABOVE the form with "Add station" left as the big primary
+  button. On the first real use the note was read, understood, **and the primary
+  button was pressed anyway** — recreating the duplicate. That is what a primary
+  button is for. The fix was not a louder warning: when discovery knows the
+  station is already monitored, the safe action IS the primary button and the
+  duplicate-creating one is demoted. Both are still one click; only the default
+  moved.
+- **Grouping channels under a station does NOT merge dashboard cards, and this
+  was the operator's first question.** `flattenChannels()` turns every channel of
+  every station into its own monitored stream and the dashboard renders one card
+  per stream. WBAI has been one station with three separate cards since it was
+  added. A station is a grouping for **alert recipients, the weekly roundup, the
+  timezone, and the Audience page** — nothing else. Answering this wrongly would
+  have talked the operator out of the correct fix.
+- **A mount is not a channel, and picking the wrong one here is destructive.**
+  Adding the second server's URL as MOUNTS on the existing channel would have
+  merged the two into one card with one probe and summed listeners — losing the
+  independent monitoring of a whole Icecast server. The handover adds a CHANNEL.
+- **`freeStationId` is the only pre-emptive de-confliction in the codebase.**
+  Swept after the fix: the channel-id path errors rather than auto-resolving,
+  which is correct. One instance, reported rather than left implied.
 
 ---
 
@@ -746,6 +808,34 @@ Reviewed end to end on 2026-08-27; findings and reasoning in
   probe proves more — Icecast can list a mount it will not serve — but every
   connection is counted as a listener, so a probe is something a person presses,
   never something a form does while you type.
+- **A STATION IS A GROUPING; A DASHBOARD CARD IS A CHANNEL.** `flattenChannels()`
+  turns every channel of every station into its own monitored stream, and the
+  dashboard renders one card per stream. Putting two channels under one station
+  does NOT merge their cards, their probes, their uptime bars or their alert
+  histories — it changes who is emailed, which timezone the roundup uses, and
+  what the Audience page adds together. KPFA is one station on two Icecast hosts
+  and correctly shows two cards. Say this plainly when asked; getting it wrong
+  argues an operator out of the right fix.
+- **A MOUNT IS NOT A CHANNEL, and the choice is destructive in one direction.**
+  Adding a second server's stream as MOUNTS on an existing channel merges them
+  into one card with one probe and summed listeners, silently ending independent
+  monitoring of a whole Icecast server. Adding it as a CHANNEL keeps both. The
+  admin handover adds a channel; anything built near this must too.
+- **NEVER PRE-RESOLVE A CONFLICT THAT CARRIES INFORMATION.** `freeStationId`
+  de-conflicts a taken station id at discovery time so a station monitored on a
+  second server can be added without hand-typing an id. Correct — but the
+  collision was ALSO the only evidence that the pasted stream belongs to a
+  station already being watched, and resolving it silently turned a guided error
+  ("use Edit, then + Add a channel") into a duplicate station that split one
+  station's audience across two pages. It now returns `existingStation` alongside
+  the free id. `test/existing-station-handover.test.js` asserts the pairing for
+  EVERY monitored station, not just the one that broke.
+- **A WARNING THAT COMPETES WITH A PRIMARY BUTTON LOSES.** The offer to add a
+  rediscovered stream to its real station first shipped as a note above the form,
+  with "Add station" still styled primary. On first real use the note was read
+  and the primary button pressed anyway, recreating the duplicate. When the
+  system knows which action is right, that action must BE the primary button —
+  a louder warning is not the fix.
 - **The channel editor must never offer a field for a channel id.** Ids key every
   sample, rollup and event. A new channel's id is GENERATED from its name and
   shown before saving; an existing one is read from the row and is not editable.
@@ -805,7 +895,7 @@ Reviewed end to end on 2026-08-27; findings and reasoning in
 ## 9. Verifying a change
 
 ```bash
-npm test                                             # 336 tests
+npm test                                             # 355 tests
 node --check server.js monitor.js store.js diagnose.js auth.js
 
 # Against production

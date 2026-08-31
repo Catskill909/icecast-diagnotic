@@ -430,6 +430,31 @@ another), so each host's inventory is fetched once per cycle and serves every
 station on it. A minority of stations span more than one host, which the same
 shape supports.
 
+**KPFA is the case that exercises it.** It is carried on Pacifica's relay
+(`streams.pacifica.org:9000/kpfa`) *and* on its own Icecast
+(`streams.kpfa.org:8443/kpfa`) — one station, two channels, on two hosts.
+
+### Stations, channels and mounts
+
+Three levels, and which one something belongs to decides where it appears.
+
+| Level | What it is | Where it shows up |
+|---|---|---|
+| **Mount** | One address on one Icecast server, usually one bitrate | A chip on the dashboard card, with its own listener count |
+| **Channel** | One stream as a listener thinks of it. **Probed independently** | **One dashboard card**, its own uptime bar, its own alert history |
+| **Station** | A grouping of channels | Alert recipients, weekly roundup, timezone, and the Audience page's dropdown |
+
+**Grouping channels under a station does not merge their dashboard cards.** WBAI
+is one station with three channels and has always rendered three cards. A station
+carried on two servers keeps a card per server — monitored separately, reported
+together.
+
+So when a stream is discovered for a station that is already being watched, the
+admin panel offers to add it as a **channel of that station** rather than
+creating a second station with the same name. Adding it as *mounts* on an
+existing channel would be a different and lossy thing: the two would collapse
+into one card with one probe, ending independent monitoring of a whole server.
+
 ### Channels and their mounts
 
 Icecast publishes each bitrate variant of a channel as its own mount, so **KPFT

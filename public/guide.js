@@ -39,6 +39,31 @@
       ],
     },
     {
+      id: 'structure',
+      icon: 'account_tree',
+      title: 'Stations, channels and mounts',
+      lead: 'Three levels. Which one a thing belongs to decides where you see it.',
+      body: [
+        `A <strong>mount</strong> is one address on an Icecast server, usually one
+         bitrate. KPFA's direct server carries seven of them for a single programme.
+         Listener counts are summed across all of a channel's mounts, because somebody
+         on the 24k stream is still somebody listening.`,
+        `A <strong>channel</strong> is one stream as a listener thinks of it, and it is
+         what each dashboard card watches. Every channel is checked on its own, so it
+         keeps its own card, its own uptime bar and its own alert history.`,
+        `A <strong>station</strong> groups channels. It decides who receives the emails,
+         which timezone its weekly report is written in, and what the Audience page adds
+         together when you pick it from the dropdown. It does <em>not</em> merge the
+         dashboard cards.`,
+        `That distinction matters most when one station is carried on two servers — a
+         network relay and the station's own Icecast. That is <strong>one station with
+         two channels</strong>: watched separately on the dashboard, counted together on
+         the Audience page. When you paste a URL belonging to a station already being
+         watched, the panel offers to add it as a channel rather than creating a second
+         station with the same name.`,
+      ],
+    },
+    {
       id: 'checks',
       icon: 'cell_tower',
       title: 'What gets checked, and how often',

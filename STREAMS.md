@@ -29,6 +29,13 @@
 | **KPFA Berkeley — own server** | `https://streams.kpfa.org:8443/kpfa` |
 | KPFA — Pacifica relay | `https://streams.pacifica.org:9000/kpfa` |
 
+**KPFA is one station on two servers.** Both rows above belong to station `kpfa`
+as two separate channels — two dashboard cards, one line in the Audience
+dropdown. Pasting either URL when the other is already monitored makes the panel
+offer **"Add the ticked channel(s) to KPFA Berkeley"**; take that offer rather
+than the demoted "Add as a separate station instead", or you get two stations
+with the same name and a split audience.
+
 **KPFA runs two:** its own Icecast (~250 listeners, the real audience) and a
 relay on Pacifica's shared host (~12). Both are worth monitoring; they are
 separate stations in the app because they are separate servers.
