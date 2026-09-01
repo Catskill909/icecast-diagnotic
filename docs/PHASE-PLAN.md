@@ -45,6 +45,43 @@ forgotten if they are not written down.
 | 0.7 | **`COMPARISON_COVERAGE_FLOOR` is a chosen line, not a derived one** | 0.9 — the earlier window must have ≥90% of its whole hours measured before a percentage is divided out of it. Demanding 100% withheld the week comparison over a single missed hour (24 Aug 01:00); a low floor reinstates the artefact it exists to stop. Documented at the constant in `store.js`. Revisit if real gaps cluster differently |
 | 0.8 | **Reach history is 20 days shorter than level history** | Arrivals were first recorded 2026-08-24; audience levels go back to 2026-08-04. So the 30-day card reports reach as a **floor** and says so on the card. Self-resolves ~2026-09-23, when the 30-day window no longer reaches before tune-in recording |
 | 0.9 | **The 30-day comparison is unavailable until ~2026-10-03** | It needs 60 days; recording began 2026-08-04. Expected, stated on the card, no action — listed so it is not re-diagnosed as a fault |
+| 0.10 | **Backup is a HOST responsibility, and it does not travel with the app** | The application copies its data nowhere — nothing in `store.js`, `monitor.js`, `server.js` or `scripts/` backs anything up, and writes being atomic (temp + rename) protects against a torn write, not against a lost volume. **On the current Coolify VPS this is already solved at the infrastructure layer: the operator has host snapshots and daily backups** (confirmed 2026-09-01), which is the normal and correct place to solve it. Two things follow. **(a)** Confirm the daily backup actually includes the named volume `icecast-monitor-data`, not only the host image — Coolify's scheduled-backup feature is database-oriented and a volume can sit outside it. **(b) The arrangement is a property of THIS host and does not move with the app.** Re-establish it on the Pacifica server before cutover, because two things there have no other source: `events.json` (the permanent incident record since 2026-08-04) and the hourly rollups in `samples.json` (the ONLY long-term audience history — once raw samples compact, the rollup is the sole copy and re-polling Icecast cannot recover a single past hour) |
+
+### Storage: measured 2026-09-01, not projected from assumptions
+
+Live figures: `events.json` **1.15 MB** / 483 events (cap 100,000, FIFO);
+`samples.json` **12.65 MB** / 58,263 raw samples + 1,518 rollups. Measured unit
+costs: **207 bytes per sample, 204 bytes per rollup, ~2.4 KB per event.**
+
+| Store | Bounded? | Steady state / growth |
+|---|---|---|
+| Raw samples | **Yes** — `SAMPLE_RETENTION_DAYS` (7) | ~2 MB per channel, flat for ever |
+| Hourly rollups | **No** — kept for ever, by design | ~1.7 MB per channel per year |
+| Events | **Yes** — newest `MAX_EVENTS` (100,000) | ~238 MB absolute ceiling |
+
+Ten years at today's 10 channels ≈ **240 MB**. Ten years at 33 stations
+(~100 channels) ≈ **2.1 GB**. **Disk is not the constraint and will not become
+one.**
+
+**The eventual constraint is write amplification rather than capacity — and it is
+NOT a defect, NOT urgent, and needs no action now.** `store.save()` rewrites the
+whole of `samples.json` every `SAVE_INTERVAL_MS` (60 s), guarded by a dirty flag
+that is set every cycle in practice, and the whole store is held in memory.
+
+Measured serialisation cost: **2.4 ms per MB.**
+
+| Scale | `samples.json` | Pause per minute | Duty cycle |
+|---|---|---|---|
+| Today, 10 channels | 12.65 MB | ~30 ms | **0.05%** |
+| ~50 channels | ~100 MB | ~240 ms | 0.4% |
+| ~100 channels | ~200 MB | ~480 ms | 0.8% |
+
+Even the last row is under 1% of wall-clock, so this degrades gently and never
+falls over. **Do not pre-emptively rebuild storage for it.** The trigger already
+recorded stands: revisit SQLite **at ~50 mounts, or when per-listener analytics
+begins, whichever comes first** — at which point memory footprint and startup
+parse time matter more than the write itself. Acting earlier means building the
+storage layer twice.
 
 ---
 
