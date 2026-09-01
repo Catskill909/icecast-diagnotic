@@ -45,6 +45,25 @@ const DAY_MS = 24 * HOUR_MS;
  */
 const COMPARISON_COVERAGE_FLOOR = 0.9;
 
+/* ── Arrival sanity gate ────────────────────────────────────────────────────
+   A figure computed once and then separated from its evidence has to be checked
+   while the evidence still exists.
+
+   The listener-minutes fault (see repairTuneIns) stored roughly avgListeners x 60
+   as an hour's arrivals and went unnoticed for a month — by the time anyone read
+   the number, the samples behind it had been discarded and there was nothing left
+   that could contradict it. Twenty days of history were unrecoverable.
+
+   So compaction now refuses to write an arrival count its own hour disproves.
+   Arrivals above this multiple of the hour's peak mean the entire audience turned
+   over every five minutes; real churn does not do that, and a counting fault does
+   — the fault ran at about 60x. The absolute floor keeps a tiny or flapping mount
+   (peak 1, toggling every minute) from tripping a ratio test it cannot help but
+   fail.
+   ─────────────────────────────────────────────────────────────────────────── */
+const TUNE_IN_PEAK_MULTIPLE = parseInt(process.env.TUNE_IN_PEAK_MULTIPLE, 10) || 12;
+const TUNE_IN_SANITY_FLOOR = parseInt(process.env.TUNE_IN_SANITY_FLOOR, 10) || 50;
+
 // Safety ceiling. Events are never pruned by age, but an unbounded array would
 // eventually be a memory problem — at ~35 events/day this is roughly 8 years.
 const MAX_EVENTS = parseInt(process.env.MAX_EVENTS, 10) || 100000;
@@ -938,6 +957,32 @@ function prune() {
         }
       }
 
+      // THE GATE. Checked here because this is the last moment the raw samples
+      // and the figure derived from them exist together.
+      //
+      // The response is to store nothing, not to store the number with a warning
+      // beside it: `null` already means "not recorded" to every reader, and
+      // publishing an arrival count we have just proved impossible is the exact
+      // failure being guarded against. An hour that trips this is reported as
+      // uncounted, which is true, rather than as an audience it never had.
+      for (const b of buckets.values()) {
+        if (b.tuneIns == null) continue;
+        const ceiling = Math.max(TUNE_IN_SANITY_FLOOR, b.listenerPeak * TUNE_IN_PEAK_MULTIPLE);
+        if (b.tuneIns <= ceiling) continue;
+        console.error(
+          `[Store] Implausible arrival count rejected for ${id} at ${b.hour}: ` +
+          `${b.tuneIns} arrivals against a peak of ${b.listenerPeak} over ` +
+          `${b.listenerCount} reading(s) — above the ${TUNE_IN_PEAK_MULTIPLE}x ceiling. ` +
+          'That hour is recorded as unmeasured. This is the signature of the ' +
+          'listener-minutes fault repaired on 2026-08-31; if it recurs, compaction ' +
+          'is miscounting and arrival figures written since should not be trusted.',
+        );
+        b.tuneIns = null;
+        // Distinct from a plain null: a rejected batch must not be quietly added
+        // to a good figure already stored for the same hour by an earlier prune.
+        b.tuneInsRejected = true;
+      }
+
       const existing = new Map((rollups[id] || []).map((r) => [r.hour, r]));
       for (const [key, b] of buckets) {
         // Merge rather than overwrite, in case a prune already wrote this hour.
@@ -974,7 +1019,10 @@ function prune() {
                 // its churn. Absent on rollups written before tune-ins existed,
                 // and left absent rather than defaulted to 0 — "not recorded"
                 // and "nobody tuned in" are different facts.
-                tuneIns: prevRoll.tuneIns == null && b.tuneIns == null
+                // A rejected batch voids the whole hour. Adding 0 to a figure an
+                // earlier prune wrote would leave the hour looking counted while
+                // silently missing the minutes this batch covered.
+                tuneIns: b.tuneInsRejected || (prevRoll.tuneIns == null && b.tuneIns == null)
                   ? undefined
                   : (prevRoll.tuneIns || 0) + (b.tuneIns || 0),
               };
@@ -992,7 +1040,7 @@ function prune() {
               listenerCount: b.listenerCount,
               avgListeners: b.listenerCount ? Math.round(b.listenerSum / b.listenerCount) : null,
               listenerPeak: b.listenerPeak,
-              tuneIns: b.tuneIns,
+              tuneIns: b.tuneInsRejected ? undefined : b.tuneIns,
             };
         if (merged.minResponse === Infinity) merged.minResponse = null;
         existing.set(key, merged);
@@ -2705,5 +2753,7 @@ module.exports = {
   getTuneInRecordingStart,
   getTuneIns, tuneInsFromSamples,
   SAMPLE_RETENTION_DAYS,
+  TUNE_IN_PEAK_MULTIPLE,
+  TUNE_IN_SANITY_FLOOR,
   MAX_EVENTS,
 };
