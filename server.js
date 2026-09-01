@@ -633,7 +633,11 @@ app.get('/api/stats', (req, res) => {
     stationId: stationOf(req) || null,
     summary: monitor.getSummary(windowMs, stationOf(req)),
     daily: monitor.getDailyBuckets(days, stationOf(req)),
-    dailyTimeZone: monitor.getConfig().weeklyRoundup.timezone,
+    // The clock the buckets were actually built in — NOT the roundup's send
+    // schedule, which is a different setting that merely used to hold the same
+    // value. Labelling a day boundary with an unrelated timezone is how a chart
+    // silently starts describing someone else's midnight.
+    dailyTimeZone: monitor.stationTz(stationOf(req)),
     causes: monitor.getCauseBreakdown(windowMs, stationOf(req)),
     storage: monitor.getStorageInfo(),
     stations: monitor.getStations(),

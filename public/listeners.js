@@ -248,6 +248,23 @@
       : clock;
   }
 
+  /**
+   * What the floor and the average are measured over, when that is not the
+   * whole window.
+   *
+   * Silence here would be the bug returning in a quieter form: a figure taken
+   * over five of a hundred and sixty-nine hours, presented under the label
+   * "last 7 days", is still telling the reader something untrue.
+   */
+  function coverageNote(st) {
+    const c = st && st.coverage;
+    if (!c || !c.from || c.used >= c.total) return null;
+    const since = new Date(c.from).toLocaleString('en-US', {
+      weekday: 'short', hour: 'numeric', minute: '2-digit',
+    });
+    return `over the ${c.used} of ${c.total} periods with all ${rows().length} channels — since ${since}`;
+  }
+
   function renderTiles() {
     const list = rows();
     const now = list.reduce((a, s) => a + (s.current || 0), 0);
@@ -270,6 +287,10 @@
       {
         v: fmt(st.avg),
         l: `average listeners, last ${days === 1 ? '24 hours' : days + ' days'}`,
+        // Say what the figure actually covers. Channels get added over time, and
+        // a window reaching back before one existed is not a window in which
+        // the station was quieter — it is one in which it was less watched.
+        sub: coverageNote(st),
       },
       {
         // A TRUE simultaneous peak, from the summed series — not the sum of
@@ -282,6 +303,7 @@
       {
         v: st.low == null ? '—' : Math.round(st.low),
         l: 'quietest moment — the floor the station holds',
+        sub: coverageNote(st),
       },
       {
         v: Number(athMonth).toLocaleString(),

@@ -59,31 +59,89 @@
    * adding them is adding the same instant.
    */
   function stationSeries(seriesByStream, streamIds) {
+    const ids = streamIds || [];
     const merged = new Map();
-    for (const id of streamIds || []) {
+    for (const id of ids) {
       for (const p of (seriesByStream || {})[id] || []) {
         if (p.avg == null) continue;
-        merged.set(p.t, (merged.get(p.t) || 0) + p.avg);
+        const b = merged.get(p.t) || { v: 0, n: 0 };
+        b.v += p.avg;
+        b.n += 1;
+        merged.set(p.t, b);
       }
     }
+    // `n` is HOW MANY CHANNELS actually reported in this bucket, and `of` how
+    // many are in scope. A bucket recorded before half the channels were being
+    // monitored is not a quiet moment for the station — it is a moment the
+    // station was not fully watched, and the two are indistinguishable in the
+    // sum alone. Every consumer needs to be able to tell them apart.
     return [...merged.entries()]
-      .map(([t, v]) => ({ t, v }))
+      .map(([t, b]) => ({ t, v: b.v, n: b.n, of: ids.length }))
       .sort((a, b) => new Date(a.t) - new Date(b.t));
   }
 
-  /** Peak, floor and average of a station-wide concurrent series. */
+  /**
+   * Peak, floor and average of a station-wide concurrent series.
+   *
+   * THE FLOOR AND THE AVERAGE ARE TAKEN ONLY OVER FULLY-COVERED BUCKETS.
+   *
+   * Channels are added to the monitor over time, and a bucket recorded before a
+   * channel existed holds no reading for it — so the sum for that bucket is a
+   * sum over FEWER CHANNELS, not a quieter moment. Averaging those together
+   * with complete ones measures the growth of the monitor and reports it as the
+   * behaviour of the audience.
+   *
+   * Measured on production with ten channels: 72 of 169 buckets held only the
+   * three that had been watched all week. The page therefore showed a station
+   * floor of 12 — which was one station's overnight low, from days before the
+   * other seven were being recorded at all — and a seven-day average of 315
+   * against a true figure of 611.
+   *
+   * The PEAK is kept over every bucket, because a bucket missing a channel can
+   * only ever sum LOW. It cannot invent a high, so including it risks
+   * understating and never overstating — the same direction of error the rest
+   * of this page already declares.
+   *
+   * `coverage` reports how much of the window was complete, so a caller can say
+   * what the figure covers instead of implying the whole range.
+   */
   function stationStats(series) {
-    if (!series || !series.length) return { peak: null, peakAt: null, low: null, avg: null };
+    if (!series || !series.length) {
+      return { peak: null, peakAt: null, low: null, avg: null, coverage: { used: 0, total: 0, from: null } };
+    }
+
     let peak = -Infinity;
     let peakAt = null;
-    let low = Infinity;
-    let sum = 0;
     for (const p of series) {
       if (p.v > peak) { peak = p.v; peakAt = p.t; }
+    }
+
+    // `of` is absent on a series built before this existed; treating such a
+    // bucket as complete keeps any older caller working exactly as it did.
+    const full = series.filter((p) => p.of == null || p.n === p.of);
+    const base = full.length ? full : series;
+
+    let low = Infinity;
+    let sum = 0;
+    for (const p of base) {
       if (p.v < low) low = p.v;
       sum += p.v;
     }
-    return { peak, peakAt, low, avg: sum / series.length };
+
+    return {
+      peak,
+      peakAt,
+      low,
+      avg: sum / base.length,
+      coverage: {
+        used: full.length,
+        total: series.length,
+        // When the window is only partly complete, this is the instant from
+        // which every channel was being recorded — the honest start of the
+        // figure above.
+        from: full.length && full.length < series.length ? full[0].t : null,
+      },
+    };
   }
 
   /**

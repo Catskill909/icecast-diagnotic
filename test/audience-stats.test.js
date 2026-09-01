@@ -59,13 +59,20 @@ test('the floor is the quietest simultaneous moment', () => {
 
 test('buckets are summed by timestamp, so channels align', () => {
   const ser = A.stationSeries(SERIES, IDS);
-  assert.deepEqual(ser, [{ t: T1, v: 179 }, { t: T2, v: 122 }]);
+  // Both channels report in both buckets, so both are complete.
+  assert.deepEqual(ser, [
+    { t: T1, v: 179, n: 2, of: 2 },
+    { t: T2, v: 122, n: 2, of: 2 },
+  ]);
 });
 
 test('a channel with no series contributes nothing rather than breaking', () => {
   const ser = A.stationSeries(SERIES, ['main', 'missing']);
   assert.deepEqual(ser.map((p) => p.v), [130, 40]);
-  assert.deepEqual(A.stationStats([]), { peak: null, peakAt: null, low: null, avg: null });
+  assert.deepEqual(A.stationStats([]), {
+    peak: null, peakAt: null, low: null, avg: null,
+    coverage: { used: 0, total: 0, from: null },
+  });
 });
 
 // ── Per channel ─────────────────────────────────────────────────────────────
@@ -172,4 +179,98 @@ test('days come back newest first, with average, peak and floor', () => {
   assert.equal(older.avg, 20);
   assert.equal(older.peak, 30);
   assert.equal(older.low, 10);
+});
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   A channel that was not being watched is not a quiet channel
+
+   Channels are added to the monitor over time. A bucket recorded before a
+   channel existed carries no reading for it, so the station-wide sum for that
+   bucket is a sum over FEWER CHANNELS — not a quieter moment.
+
+   Averaging those in with complete buckets measures the growth of the MONITOR
+   and reports it as the behaviour of the AUDIENCE. Measured on production with
+   ten channels: 72 of 169 buckets held only the three watched all week, and the
+   page showed a station floor of 12 — one station's overnight low, from days
+   before the other seven were recorded at all — beside a seven-day average of
+   315 against a true 611.
+
+   Both numbers were perfectly plausible, which is exactly why this needs a test
+   rather than a look.
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+const E1 = '2026-08-25T00:00:00.000Z';
+const E2 = '2026-08-25T01:00:00.000Z';
+const E3 = '2026-08-25T02:00:00.000Z';
+
+// `late` starts only at E3 — the shape of a station added mid-window. The two
+// early buckets hold `early` alone and sum to 20; the complete bucket sums 500.
+const GROWING = {
+  early: [
+    { t: E1, avg: 20, peak: 20 },
+    { t: E2, avg: 20, peak: 20 },
+    { t: E3, avg: 100, peak: 100 },
+  ],
+  late: [
+    { t: E3, avg: 400, peak: 400 },
+  ],
+};
+
+test('a bucket records how many channels reported and how many were in scope', () => {
+  const ser = A.stationSeries(GROWING, ['early', 'late']);
+  assert.deepEqual(ser.map((p) => [p.n, p.of]), [[1, 2], [1, 2], [2, 2]]);
+});
+
+test('the floor ignores buckets from before every channel was watched', () => {
+  const st = A.stationStats(A.stationSeries(GROWING, ['early', 'late']));
+  // 20 is what one channel held while the other was not being recorded. Calling
+  // it "the floor the station holds" states something that was never measured.
+  assert.equal(st.low, 500, `floor ${st.low} came from a partially-watched bucket`);
+});
+
+test('the average is not dragged down by hours the monitor was not watching', () => {
+  const st = A.stationStats(A.stationSeries(GROWING, ['early', 'late']));
+  // The diluted answer is (20 + 20 + 500) / 3 = 180, which is not an audience
+  // figure at all — it is two thirds a statement about when monitoring began.
+  assert.equal(st.avg, 500, `average ${st.avg} still blends incomplete buckets`);
+});
+
+test('the peak still spans the whole window, because a short bucket cannot inflate it', () => {
+  const st = A.stationStats(A.stationSeries(GROWING, ['early', 'late']));
+  // A bucket missing a channel can only ever sum LOW, so including it risks
+  // understating and never overstating. Discarding it would throw away a real
+  // maximum for no gain.
+  assert.equal(st.peak, 500);
+  assert.equal(st.peakAt, E3);
+});
+
+test('coverage says how much of the window was complete, and from when', () => {
+  const st = A.stationStats(A.stationSeries(GROWING, ['early', 'late']));
+  assert.deepEqual(st.coverage, { used: 1, total: 3, from: E3 });
+});
+
+test('a fully-covered window reports no coverage caveat', () => {
+  // The single-station case, and the one the page shows most of the time: the
+  // note must not appear when there is nothing to warn about.
+  const st = A.stationStats(A.stationSeries(SERIES, ['main', 'hd2']));
+  assert.equal(st.coverage.from, null);
+  assert.equal(st.coverage.used, st.coverage.total);
+});
+
+test('a series with no coverage information is treated as complete', () => {
+  // Older callers built points as { t, v }. Silently dropping every one of them
+  // would turn this fix into a blank page.
+  const st = A.stationStats([{ t: E1, v: 10 }, { t: E2, v: 30 }]);
+  assert.equal(st.low, 10);
+  assert.equal(st.avg, 20);
+  assert.equal(st.coverage.from, null);
+});
+
+test('when no bucket is complete the figures fall back rather than vanish', () => {
+  // A window entirely before the newest channel existed. Reporting "—" for the
+  // floor of a station that plainly has listeners would be its own falsehood;
+  // the caveat carries the caveat.
+  const st = A.stationStats(A.stationSeries({ early: GROWING.early.slice(0, 2) }, ['early', 'late']));
+  assert.equal(st.low, 20);
+  assert.equal(st.coverage.used, 0);
 });

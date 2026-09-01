@@ -2208,9 +2208,15 @@ function composeAlert({ kind, entries, scope, consolidated = false, recoveredFro
     ? `${nameList} ${entries.length > 1 ? 'have' : 'has'} gone offline.${scopeNote}${audienceNote}`
     : `${nameList} ${entries.length > 1 ? 'are' : 'is'} back online${recoveredFrom ? ` (recovered from ${recoveredFrom})` : ''}.${audienceNote}`;
 
+  // The clock of the station this alert is ABOUT. An engineer reading "2:00 PM"
+  // for a Los Angeles outage assumed Los Angeles; the message meant Houston.
+  // The zone is now named in the string as well, so it cannot be misread.
+  const alertZones = [...new Set(entries.map((e) => e.stream?.stationTimezone).filter(Boolean))];
+  const alertTz = alertZones.length === 1 ? alertZones[0] : 'UTC';
   const detectedAt = new Date().toLocaleString('en-US', {
-    timeZone: STATION_TZ, weekday: 'short', month: 'short', day: 'numeric',
+    timeZone: alertTz, weekday: 'short', month: 'short', day: 'numeric',
     hour: 'numeric', minute: '2-digit', second: '2-digit', hour12: true,
+    timeZoneName: 'short',
   });
 
   const blocks = entries.map((e, i) => renderStreamBlock(e, i, entries.length)).join('');
@@ -2482,6 +2488,40 @@ function getListeners(windowMs, bucketMs, stationId) {
  * the full set would answer a question about one station with a figure covering
  * all of them — the exact failure this exists to prevent.
  */
+/**
+ * The clock a station-scoped figure or message belongs in.
+ *
+ * A calendar day, and the moment an outage began, mean nothing without a
+ * timezone — and this monitor now watches stations three timezones apart. The
+ * global STATION_TZ dates from the single-station install and is simply wrong
+ * for every station but one: it drew Houston's midnight on WPFW's daily chart
+ * and stamped Central time on a Los Angeles outage.
+ *
+ * With several stations in scope there is no single right answer, so UTC is
+ * named honestly rather than one station's clock being imposed on the rest.
+ * This is the same fault the listener counts carried, in a different place.
+ */
+function stationTz(stationId) {
+  if (!stationId) {
+    const zones = [...new Set(streams.map((x) => x.stationTimezone).filter(Boolean))];
+    return zones.length === 1 ? zones[0] : 'UTC';
+  }
+  return streams.find((x) => x.stationId === stationId)?.stationTimezone || STATION_TZ;
+}
+
+/**
+ * The zone's own abbreviation for that instant — "CDT", "PDT", "EST".
+ *
+ * Read from the zone rather than written down, because it changes twice a year
+ * and differs per station. The roundup used to append a hardcoded "CT" to every
+ * outage time, which was a false statement on three of the five stations.
+ */
+function tzAbbr(iso, timeZone) {
+  const part = new Intl.DateTimeFormat('en-US', { timeZone, timeZoneName: 'short' })
+    .formatToParts(new Date(iso)).find((x) => x.type === 'timeZoneName');
+  return part ? part.value : timeZone;
+}
+
 function streamIdsFor(stationId) {
   if (!stationId) return streams.map((s) => s.id);
   return streams.filter((s) => s.stationId === stationId).map((s) => s.id);
@@ -2517,7 +2557,7 @@ function getOverallUptime(windowMs, stationId) { return store.getOverallUptime(s
 /** Uptime as the audience experienced it — probe-only failures excluded. */
 function getAudioUptime(windowMs, stationId) { return store.getAudioUptime(streamIdsFor(stationId), windowMs); }
 function getCoverageStart(stationId) { return store.getCoverageStart(streamIdsFor(stationId)); }
-function getDailyBuckets(days, stationId) { return store.getDailyBuckets(days, STATION_TZ, streamIdsFor(stationId)); }
+function getDailyBuckets(days, stationId) { return store.getDailyBuckets(days, stationTz(stationId), streamIdsFor(stationId)); }
 function getCauseBreakdown(windowMs, stationId) { return store.getCauseBreakdown(windowMs, streamIdsFor(stationId)); }
 function getStorageInfo() { return store.getStorageInfo(); }
 function getSnapshot() { return snapshot; }
@@ -2647,9 +2687,9 @@ function statGrid(cells) {
   return `<table role="presentation" width="100%" border="0" cellspacing="0" cellpadding="0" style="margin:0 -6px 4px -6px;">${rows.join('')}</table>`;
 }
 
-function fmtStationDate(iso, opts = {}) {
+function fmtStationDate(iso, timeZone, opts = {}) {
   return new Date(iso).toLocaleDateString('en-US', {
-    timeZone: STATION_TZ, month: 'short', day: 'numeric', ...opts,
+    timeZone, month: 'short', day: 'numeric', ...opts,
   });
 }
 
@@ -2660,7 +2700,9 @@ function buildWeeklyRoundup(rollup, stationId) {
   // identically-titled reports and cannot tell which is which without opening
   // them. Falls back to the generic title for a single-station install.
   const stationName = getStations().find((st) => st.id === stationId)?.name;
-  const rangeLabel = `${fmtStationDate(rollup.since)} – ${fmtStationDate(rollup.until, { year: 'numeric' })}`;
+  // Every date and time in this report is on the reported station's clock.
+  const tz = stationTz(stationId);
+  const rangeLabel = `${fmtStationDate(rollup.since, tz)} – ${fmtStationDate(rollup.until, tz, { year: 'numeric' })}`;
   // "Clean" means no listener heard a break — not that our probe never tripped.
   const clean = c.listenerAffecting === 0;
 
@@ -2781,10 +2823,10 @@ function buildWeeklyRoundup(rollup, stationId) {
     .filter((e, i, arr) => e && arr.findIndex((x) => x && x.id === e.id) === i)
     .map((e) => {
       const when = new Date(e.timestamp).toLocaleString('en-US', {
-        timeZone: STATION_TZ, weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit',
+        timeZone: tz, weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit',
       });
       const cost = e.listenersBefore ? ` — ${e.listenersBefore} listener(s) were tuned in` : '';
-      return `<li style="color:#e2e8f0 !important; margin-bottom:6px;"><span style="color:#e2e8f0 !important;"><strong>${esc(e.streamName)}</strong> · ${when} CT · ${esc(e.durationLabel || '—')}${e.causeLabel ? ` · ${esc(e.causeLabel)}` : ''}${cost}${e.emailed ? '' : ' <em>(no alert was emailed)</em>'}</span></li>`;
+      return `<li style="color:#e2e8f0 !important; margin-bottom:6px;"><span style="color:#e2e8f0 !important;"><strong>${esc(e.streamName)}</strong> · ${when} ${tzAbbr(e.timestamp, tz)} · ${esc(e.durationLabel || '—')}${e.causeLabel ? ` · ${esc(e.causeLabel)}` : ''}${cost}${e.emailed ? '' : ' <em>(no alert was emailed)</em>'}</span></li>`;
     }).join('');
 
   // A monitor that only started midway through the period cannot speak for all
@@ -3030,7 +3072,7 @@ module.exports = {
   start, stop, getStreams, getStatus, getHistory, getIncidents, getConfig, sendTestAlert,
   getPeriodRollup, sendWeeklyRoundup, previewWeeklyRoundup, previewAlertForEvent, roundupRecipients,
   getEvents, getSamples, getRollups, getListeners, getSummary, getOverallUptime, getAudioUptime, getCoverageStart,
-  getDailyBuckets, getCauseBreakdown, getStorageInfo, getSnapshot,
+  getDailyBuckets, getCauseBreakdown, getStorageInfo, getSnapshot, stationTz,
   getStationConfig: () => store.getStationConfig(),
   getStations, streamIdsFor,
   reloadConfig,
