@@ -2447,14 +2447,21 @@ function getListeners(windowMs, bucketMs, stationId) {
     series,
     outages,
     // HEADCOUNTS for today / this week / this month, each against the same
-    // elapsed span of the previous period. The station clock comes from the
-    // scoped station; with several in scope they share a host and, in practice,
-    // a region — UTC is the honest fallback rather than picking one arbitrarily.
-    counts: store.getListenerCounts(
-      ids,
-      scoped.length === 1 || new Set(scoped.map((x) => x.stationTimezone)).size === 1
-        ? scoped[0]?.stationTimezone || 'UTC'
-        : 'UTC',
+    // elapsed span of the previous period.
+    //
+    // ONE GROUP PER STATION, each on its own clock. This used to fall back to
+    // UTC whenever the scope spanned more than one timezone, which measured
+    // every station over a window none of them keeps: at 00:38 UTC on the 1st,
+    // "All stations · This month" was thirty-eight minutes long and read 805
+    // while KPFT's own month read 10,560. A total below one of its parts is not
+    // a rounding disagreement, it is wrong. Each station's period is now bounded
+    // on its own calendar and the reach summed, which cannot fall below a member.
+    counts: store.getListenerCountsAcross(
+      [...new Map(scoped.map((x) => [x.stationId, x.stationTimezone || 'UTC'])).entries()]
+        .map(([stationId, timeZone]) => ({
+          timeZone,
+          streamIds: scoped.filter((x) => x.stationId === stationId).map((x) => x.id),
+        })),
     ),
     summary: store.getAudienceSummary(ids, windowMs),
     generatedAt: new Date().toISOString(),

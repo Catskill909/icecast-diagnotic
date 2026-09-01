@@ -239,9 +239,13 @@
     $('#count-cards').innerHTML = cards + gated;
 
     const m = (c.today && c.today.totalListenersMeta) || {};
+    // With several timezones in scope there is no single midnight to name, and
+    // printing one station's would misdescribe every other station's day.
+    const clock = c.timeZone
+      || `each station's own clock · ${(c.timeZones || []).length} timezones`;
     $('#counts-hint').textContent = m.floor
-      ? `${c.timeZone} · a floor — brief overlaps are invisible between checks`
-      : c.timeZone;
+      ? `${clock} · a floor — brief overlaps are invisible between checks`
+      : clock;
   }
 
   function renderTiles() {

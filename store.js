@@ -156,6 +156,7 @@ function load(streamIds = []) {
 
   applySeed();
   repairTuneIns();
+  repairMountCollisions();
   // Must run BEFORE prune(): compaction destroys the raw samples this reads.
   backfillAudience();
   prune();
@@ -206,6 +207,101 @@ function repairTuneIns() {
       `[Store] Cleared ${cleared} tune-in figure(s) recorded before 2026-08-31 — ` +
       'they were listener-minutes, not arrivals, and cannot be recomputed. ' +
       'Those hours now report as unrecorded rather than wrong.',
+    );
+  }
+}
+
+/* ── Mount-collision repair ─────────────────────────────────────────────────
+   Windows in which a channel's stored listener counts belong to ANOTHER
+   SERVER'S mount of the same name.
+
+   Until 2026-08-29T17:09Z the host inventory was keyed by mount path alone.
+   Three paths exist on more than one monitored host — /wpfw_128, /kpfa and
+   /padma — so for a channel on the losing host, every `listeners` reading was
+   the other server's audience. WBAI's /wpfw_128 relay, which really carries
+   about 2 listeners, was recorded holding ~780: Pacifica's WPFW audience,
+   counted a second time under WBAI's name. It inflated the all-station peak
+   from 1,335 to 1,951.
+
+   fetchHostSnapshots() now keys by host+path, so the fault cannot recur. This
+   only erases what it already wrote. `to` is the first cycle after the fixed
+   build restarted; the channel's own samples show the step, 763 -> 2, across
+   exactly that boundary.
+
+   THE TRUE VALUES ARE UNRECOVERABLE. We never read WBAI's own mount during the
+   window — nothing was mismeasured, the wrong mount was read — so there is no
+   figure to restore and none may be invented. Only `listeners` and its
+   per-mount breakdown are wrong: the probe itself connected to the right URL,
+   so `status`, `responseTime` and silence detection are sound and stay. Nulling
+   the count rather than dropping the sample keeps that uptime record intact,
+   and `listeners: null` already means "not recorded" to every reader here —
+   concurrentBetween, tuneInsFromSamples, getListenerSeries and prune all skip
+   it, so those minutes go uncounted instead of counted wrongly.
+
+   Any future collision needs its own entry: the contaminated channel cannot be
+   derived after the fact, only the winning host's value survives, and a rule
+   broad enough to guess would erase the correct history of whichever channel
+   won.
+   ─────────────────────────────────────────────────────────────────────────── */
+const MOUNT_COLLISION_WINDOWS = [
+  { streamId: 'wbai-wpfw', mount: '/wpfw_128', to: '2026-08-29T17:11:00.000Z' },
+];
+
+/**
+ * Erases listener counts recorded from another server's mount of the same name.
+ *
+ * Runs once, guarded by a marker, so it cannot erase correct counts recorded
+ * after the fix. Repairs rollups as well as raw samples because the two hold
+ * the same contaminated minutes at different ages: raw samples compact after
+ * SAMPLE_RETENTION_DAYS, so whether this deploy finds the poison in samples or
+ * in an hourly average depends only on how long it sat unreleased.
+ */
+function repairMountCollisions() {
+  if (getMeta('mountCollisionRepaired')) return;
+
+  let cleared = 0;
+  let hoursCleared = 0;
+
+  for (const w of MOUNT_COLLISION_WINDOWS) {
+    const cutoff = new Date(w.to).getTime();
+
+    for (const s of samples[w.streamId] || []) {
+      const t = new Date(s.timestamp).getTime();
+      if (!isFinite(t) || t >= cutoff) continue;
+      if (s.listeners == null && !s.mountListeners) continue;
+      s.listeners = null;
+      delete s.mountListeners;
+      cleared++;
+    }
+
+    // An hour that merely TOUCHES the window is cleared whole. Its average was
+    // taken over contaminated and clean readings together — 9 poisoned minutes
+    // and 51 good ones averaged to 142 on a relay holding 2 — and the parts
+    // cannot be separated once compacted.
+    for (const r of rollups[w.streamId] || []) {
+      const t = new Date(r.hour).getTime();
+      if (!isFinite(t) || t >= cutoff) continue;
+      if (r.avgListeners == null && r.peakListeners == null && r.tuneIns == null) continue;
+      r.avgListeners = null;
+      r.peakListeners = null;
+      r.listenerCount = 0;
+      // Tune-ins were derived from the same wrong counts. `null` is the shape
+      // getTuneIns() already reports as hoursMissing rather than as zero.
+      delete r.tuneIns;
+      hoursCleared++;
+    }
+  }
+
+  setMeta('mountCollisionRepaired', new Date().toISOString());
+  dirtySamples = true;
+  dirtyEvents = true;
+
+  if (cleared || hoursCleared) {
+    console.warn(
+      `[Store] Cleared ${cleared} listener reading(s) and ${hoursCleared} hourly average(s) ` +
+      'recorded from another server\'s mount of the same name, before mounts were keyed ' +
+      'by host. The true counts were never read and cannot be recovered; those minutes ' +
+      'now report as unrecorded rather than as another station\'s audience.',
     );
   }
 }
@@ -1634,6 +1730,20 @@ function periodBounds(timeZone, now = Date.now()) {
 }
 
 /**
+ * Start of the previous equivalent period, on one station's clock.
+ *
+ * Calendar arithmetic, not subtraction: a month is not 30 days and a DST week
+ * is not 168 hours, so "one period earlier" has to be asked of the calendar.
+ */
+function prevPeriodStart(period, timeZone, bounds, now) {
+  if (period === 'today') {
+    return zonedMidnightMs(addCalendarDay(zonedDayKey(now, timeZone), -1), timeZone);
+  }
+  if (period === 'week') return bounds.week - 7 * 24 * 60 * 60 * 1000;
+  return monthStartMs(timeZone, bounds.month - 1);
+}
+
+/**
  * Headline listener counts for today, this week and this month — each against
  * the equivalent previous period.
  *
@@ -1643,24 +1753,67 @@ function periodBounds(timeZone, now = Date.now()) {
  * elapsed part of last week, this month against the same elapsed part of last
  * month. Comparing nine days of this month against all thirty-one of last month
  * would report a collapse every single month.
+ *
+ * EVERY STATION KEEPS ITS OWN CALENDAR, and `groups` is why this takes a list.
+ *
+ * A network spans timezones, and "this month" is a question about a calendar,
+ * so it has a different answer per station: at 00:38 UTC on the 1st, Houston is
+ * three weeks into its month and UTC is thirty-eight minutes into its own.
+ * Computing the aggregate on one shared clock therefore did not aggregate
+ * anything — it measured every station over a window that belonged to none of
+ * them. Rolled up under UTC, "All stations · This month" read 805 while KPFT
+ * alone read 10,560: thirty-eight minutes of the network presented as a month,
+ * next to a real one.
+ *
+ * THE INVARIANT THAT BROKE: a total may never be smaller than one of its parts.
+ * Each station's period is now bounded on its own clock and the reach totals
+ * summed, which is additive by construction and so cannot fall below any member.
  */
-function getListenerCounts(streamIds, timeZone = 'UTC', now = Date.now()) {
-  const b = periodBounds(timeZone, now);
+function getListenerCountsAcross(groups, now = Date.now()) {
+  const list = (groups || []).filter((g) => g && (g.streamIds || []).length);
+  const allIds = list.flatMap((g) => g.streamIds);
+  const zones = [...new Set(list.map((g) => g.timeZone || 'UTC'))];
 
   const pct = (a, bb) => (bb > 0 && a != null && bb != null
     ? Math.round(((a - bb) / bb) * 1000) / 10
     : null);
 
-  const build = (startMs, prevStartMs) => {
-    const elapsed = now - startMs;
-    const current = concurrentBetween(streamIds, startMs, now);
-    // Same elapsed span, one period earlier — not the whole previous period.
-    const previous = concurrentBetween(streamIds, prevStartMs, prevStartMs + elapsed);
+  const build = (period) => {
+    const spans = list.map((g) => {
+      const tz = g.timeZone || 'UTC';
+      const bounds = periodBounds(tz, now);
+      const startMs = bounds[period];
+      return {
+        streamIds: g.streamIds,
+        startMs,
+        prevStartMs: prevPeriodStart(period, tz, bounds, now),
+        elapsed: now - startMs,
+      };
+    });
 
-    // THE headline. How many people listened at all, versus how many were
-    // listening at once — on this record they differ by six to nine times.
-    const tuneIns = getTuneIns(streamIds, startMs, now);
-    const prevTuneIns = getTuneIns(streamIds, prevStartMs, prevStartMs + elapsed);
+    // REACH SUMS, because a tune-in is an event and events from different
+    // clocks add up. Each station contributes its own calendar period.
+    const tuneIns = { total: 0, gaps: 0, hoursFromRollup: 0, hoursMissing: 0, estimated: true, floor: true };
+    const prevTuneIns = { total: 0, gaps: 0, hoursFromRollup: 0, hoursMissing: 0, estimated: true, floor: true };
+    for (const s of spans) {
+      const cur = getTuneIns(s.streamIds, s.startMs, now);
+      const prv = getTuneIns(s.streamIds, s.prevStartMs, s.prevStartMs + s.elapsed);
+      for (const k of ['total', 'gaps', 'hoursFromRollup', 'hoursMissing']) {
+        tuneIns[k] += cur[k];
+        prevTuneIns[k] += prv[k];
+      }
+    }
+
+    // CONCURRENCY DOES NOT SUM. "At once" is a claim about one instant, and two
+    // stations' separate busiest moments were not the same moment — adding them
+    // reports a figure the network never reached. So it is measured across every
+    // channel at once, over the window that covers all of their periods.
+    const startMs = Math.min(...spans.map((s) => s.startMs));
+    const prevStartMs = Math.min(...spans.map((s) => s.prevStartMs));
+    const elapsed = now - startMs;
+    const current = concurrentBetween(allIds, startMs, now);
+    // Same elapsed span, one period earlier — not the whole previous period.
+    const previous = concurrentBetween(allIds, prevStartMs, prevStartMs + elapsed);
 
     // A comparison is only honest if BOTH windows were fully counted.
     //
@@ -1676,6 +1829,11 @@ function getListenerCounts(streamIds, timeZone = 'UTC', now = Date.now()) {
     return {
       start: new Date(startMs).toISOString(),
       elapsedMs: elapsed,
+      // The distinct local starts behind this card, so a caller can say the
+      // window is per-station rather than implying one shared midnight.
+      starts: spans.length > 1
+        ? [...new Set(spans.map((s) => new Date(s.startMs).toISOString()))].sort()
+        : undefined,
       ...current,
       totalListeners: tuneIns.total || null,
       totalListenersMeta: tuneIns,
@@ -1695,15 +1853,15 @@ function getListenerCounts(streamIds, timeZone = 'UTC', now = Date.now()) {
     };
   };
 
-  const dayMs = 24 * 60 * 60 * 1000;
-  const todayKey = zonedDayKey(now, timeZone);
-  const monthPrevStart = monthStartMs(timeZone, b.month - 1);
-
   return {
-    timeZone,
-    today: build(b.today, zonedMidnightMs(addCalendarDay(todayKey, -1), timeZone)),
-    week: build(b.week, b.week - 7 * dayMs),
-    month: build(b.month, monthPrevStart),
+    // One zone when the scope shares one; otherwise the honest answer is that
+    // there is no single clock, and the UI must say so rather than name one
+    // station's midnight as though every station kept it.
+    timeZone: zones.length === 1 ? zones[0] : null,
+    timeZones: zones,
+    today: build('today'),
+    week: build('week'),
+    month: build('month'),
     // THREE different questions, and only the first is answerable from a
     // connection count. Carried in the payload as explicit nulls with reasons so
     // the UI has something honest to render and nobody can later fill one in
@@ -1722,6 +1880,11 @@ function getListenerCounts(streamIds, timeZone = 'UTC', now = Date.now()) {
       },
     },
   };
+}
+
+/** One scope on one clock — the single-station case of getListenerCountsAcross. */
+function getListenerCounts(streamIds, timeZone = 'UTC', now = Date.now()) {
+  return getListenerCountsAcross([{ streamIds, timeZone }], now);
 }
 
 /* ── Aggregate Tuning Hours ─────────────────────────────────────────────────
@@ -2427,7 +2590,7 @@ module.exports = {
   getAudienceContext, getHourOfDayProfile, buildAudienceImpact, deriveListenerImpact,
   getListenerSeries, getAudienceSummary, chooseBucketMs,
   getListeningDelivered, getAth, getMonthToDateAth, ATH_MONTHLY_ALLOWANCE,
-  getListenerCounts, concurrentBetween, periodBounds,
+  getListenerCounts, getListenerCountsAcross, concurrentBetween, periodBounds,
   getTuneIns, tuneInsFromSamples,
   SAMPLE_RETENTION_DAYS,
   MAX_EVENTS,
