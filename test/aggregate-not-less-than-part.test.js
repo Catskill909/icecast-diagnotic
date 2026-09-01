@@ -2,24 +2,24 @@
    An aggregate is never smaller than one of its parts
 
    "All stations · This month: 805" sat on screen beside "KPFT Houston · This
-   month: 10,560". One station reported thirteen times the network it belongs
-   to.
+   month: 10,560". One station reported thirteen times the network it belongs to.
 
    Neither number was miscomputed. Each was measured over a DIFFERENT CALENDAR.
-   The per-station page uses the station's own timezone; the all-stations page
-   fell back to UTC whenever the scope spanned more than one. At 00:38 UTC on
-   the 1st, Houston was three weeks into its month and UTC was thirty-eight
-   minutes into its own — so "this month" for the network meant thirty-eight
-   minutes, presented next to a real month.
+   The per-station page used the station's own timezone; the all-stations page
+   fell back to UTC whenever the scope spanned more than one. At 00:38 UTC on the
+   1st, Houston was three weeks into its month and UTC was thirty-eight minutes
+   into its own — so "this month" for the network meant thirty-eight minutes,
+   presented next to a real month.
 
-   THE INVARIANT: for every period, the aggregate's reach must be at least the
-   reach of any station inside it. That is what "total" means, and it holds only
-   if each station's window is bounded on its own clock and the totals summed.
+   THE CAUSE IS NOW GONE RATHER THAN CORRECTED. These windows are rolling: they
+   end at `now` and count backwards, so the last 30 days is the same 30 days in
+   Houston, New York and Los Angeles. There is no longer a per-station boundary
+   for two scopes to disagree about, and the invariant holds by construction.
 
-   The cases below place `now` at a moment where the calendars genuinely
-   disagree — just past UTC midnight on the 1st — because that is the only time
-   the bug is visible. At 3pm Houston time every clock agrees and a test proves
-   nothing.
+   These cases keep it that way. They still place `now` just past UTC midnight on
+   the 1st — the moment the calendars disagreed most and the only moment the old
+   bug was visible — because a fixture at 3pm Houston time would prove nothing
+   about the thing that actually broke.
    ═══════════════════════════════════════════════════════════════════════════ */
 
 const test = require('node:test');
@@ -35,8 +35,9 @@ process.env.SAMPLE_RETENTION_DAYS = '30';
 const store = require('../store');
 
 const MIN = 60e3;
-// 00:38 UTC on 1 September — still 19:38 on 31 August in Houston. The UTC month
-// is 38 minutes old; the Houston month is three weeks old.
+// 00:38 UTC on 1 September — still 19:38 on 31 August in Houston. Under the old
+// calendar windows the UTC month was 38 minutes old and the Houston month was
+// three weeks old. Under rolling windows both are the same 30 days.
 const NOW = Date.parse('2026-09-01T00:38:00.000Z');
 
 let n = 0;
@@ -71,9 +72,8 @@ function audience(id, low, peak, minutes) {
 const bigChannel = () => audience(freshId(), 20, 60, 21 * 24 * 60);
 const smallChannel = () => audience(freshId(), 5, 15, 21 * 24 * 60);
 
-test('the network total is never below a member station, on any period', () => {
-  // Three weeks of audience, so the Houston month is substantial and the UTC
-  // month is a rounding error.
+test('the network total is never below a member station, on any window', () => {
+  // Three weeks of audience, spanning the moment the calendars used to disagree.
   const houston = bigChannel();
   const newYork = smallChannel();
 
@@ -86,24 +86,24 @@ test('the network total is never below a member station, on any period', () => {
   const kpft = store.getListenerCounts([houston], 'America/Chicago', NOW);
   const wpfw = store.getListenerCounts([newYork], 'America/New_York', NOW);
 
-  for (const period of ['today', 'week', 'month']) {
+  for (const window of ['day', 'week', 'month']) {
     for (const [name, part] of [['Houston', kpft], ['New York', wpfw]]) {
       assert.ok(
-        all[period].totalListeners >= part[period].totalListeners,
-        `${period}: network total ${all[period].totalListeners} is below ${name}'s `
-        + `${part[period].totalListeners} — a total cannot be less than a part`,
+        all[window].totalListeners >= part[window].totalListeners,
+        `${window}: network total ${all[window].totalListeners} is below ${name}'s `
+        + `${part[window].totalListeners} — a total cannot be less than a part`,
       );
       // "At once" is a claim about one instant, so it does not sum — but the
       // network's busiest moment still cannot be quieter than one member's.
       assert.ok(
-        all[period].peak >= part[period].peak,
-        `${period}: network peak ${all[period].peak} is below ${name}'s ${part[period].peak}`,
+        all[window].peak >= part[window].peak,
+        `${window}: network peak ${all[window].peak} is below ${name}'s ${part[window].peak}`,
       );
     }
   }
 });
 
-test('reach adds up across clocks rather than being measured on one', () => {
+test('reach adds up across stations rather than being measured on one clock', () => {
   const houston = bigChannel();
   const newYork = smallChannel();
 
@@ -118,31 +118,46 @@ test('reach adds up across clocks rather than being measured on one', () => {
   assert.equal(
     all.month.totalListeners,
     kpft.month.totalListeners + wpfw.month.totalListeners,
-    'each station contributes its OWN calendar month, and those sum',
+    'every station is measured over the same 30 days, and arrivals sum',
   );
 });
 
-test('the old UTC rollup is what this replaces, and it really was smaller', () => {
+test('the window no longer depends on which clock is named', () => {
+  // What the old bug REQUIRED in order to exist: a period that starts at a
+  // different instant in every timezone. Remove that and it cannot come back —
+  // so this asserts the absence of the boundary rather than a correction to it.
   const houston = bigChannel();
   const newYork = smallChannel();
 
-  // The previous behaviour, reproduced exactly: both stations forced onto UTC.
-  const onOneClock = store.getListenerCounts([houston, newYork], 'UTC', NOW);
+  const asUtc = store.getListenerCounts([houston, newYork], 'UTC', NOW);
+  const asChicago = store.getListenerCounts([houston, newYork], 'America/Chicago', NOW);
   const kpft = store.getListenerCounts([houston], 'America/Chicago', NOW);
 
+  assert.equal(
+    asUtc.month.totalListeners,
+    asChicago.month.totalListeners,
+    'the same streams over the same span, whatever zone is named',
+  );
+  // The old single-clock rollup returned LESS than one of its own members here.
   assert.ok(
-    onOneClock.month.totalListeners < kpft.month.totalListeners,
-    'the bug should reproduce under the old single-clock rollup',
+    asUtc.month.totalListeners >= kpft.month.totalListeners,
+    'and the pair is never below one of its members',
   );
 
-  const fixed = store.getListenerCountsAcross([
+  const across = store.getListenerCountsAcross([
     { streamIds: [houston], timeZone: 'America/Chicago' },
     { streamIds: [newYork], timeZone: 'America/New_York' },
   ], NOW);
-  assert.ok(fixed.month.totalListeners > onOneClock.month.totalListeners);
+  assert.equal(
+    across.month.totalListeners,
+    asUtc.month.totalListeners,
+    'and grouping the same streams by station changes nothing either',
+  );
 });
 
 test('a scope on one clock still names it; a mixed scope refuses to', () => {
+  // The zone no longer bounds these windows, but it still names the clock the
+  // chart below them is drawn on, so the same honesty rule applies.
   const a = audience(freshId(), 5, 15, 120);
   const b = audience(freshId(), 5, 15, 120);
 
@@ -156,7 +171,6 @@ test('a scope on one clock still names it; a mixed scope refuses to', () => {
     { streamIds: [a], timeZone: 'America/Chicago' },
     { streamIds: [b], timeZone: 'America/New_York' },
   ], NOW);
-  // Naming one station's midnight would misdescribe every other station's day.
   assert.equal(mixed.timeZone, null, 'no single clock may be claimed');
   assert.deepEqual(mixed.timeZones.sort(), ['America/Chicago', 'America/New_York']);
 });

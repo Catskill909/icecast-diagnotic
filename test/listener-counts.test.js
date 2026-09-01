@@ -5,14 +5,28 @@
    question a station actually asks first, and it is a different question from
    "how much listening was delivered".
 
-   Two things here are easy to get wrong and impossible to spot by looking:
+   ROLLING WINDOWS, NOT CALENDAR PERIODS. The cards cover the last 24 hours, the
+   last 7 days and the last 30 days, each compared against the window of equal
+   length immediately before it.
+
+   This replaced month-to-date / week-to-date / day-to-date, which spent most of
+   their lives partly elapsed. On 1 Sep 2026 the dashboard read 415 for "This
+   month" beside 1,809 for "This week" — the month card was nine hours old and
+   the week card was thirty-three. Correct to the hour, and read by everyone who
+   saw it as data loss.
+
+   Three things here are easy to get wrong and impossible to spot by looking:
 
      · A station-wide peak must be the channels summed at each MOMENT. Adding
        each channel's own maximum reports a total that never happened.
 
-     · A period must be compared against the SAME ELAPSED SPAN of the period
-       before. Nine days of this month against all thirty-one of last month
-       reports a collapse every single month, for ever.
+     · The windows must NEST. 30 days ⊇ 7 days ⊇ 24 hours, so no card may ever
+       report less than the card inside it — that is the whole reason the
+       calendar version was replaced.
+
+     · A window can reach back further than the recording behind it, and the two
+       figures on a card began on DIFFERENT days. Each must be dated from when
+       it started being true.
    ═══════════════════════════════════════════════════════════════════════════ */
 
 const test = require('node:test');
@@ -27,16 +41,17 @@ process.env.SEED_FILE = '/nonexistent';
 const store = require('../store');
 
 const TZ = 'America/Chicago';
-// 07:00 in Chicago on 28 Aug — seven hours into the local day.
 const NOW = Date.parse('2026-08-28T12:00:00.000Z');
-const HOUR = 60 * 60 * 1000;
+const MIN = 60 * 1000;
+const HOUR = 60 * MIN;
+const DAY = 24 * HOUR;
 
 /** Samples every 5 minutes across a span, at a fixed listener count. */
 function fill(id, fromIso, toIso, listeners, status = 'up') {
   store.ensureStreams([id]);
   const from = Date.parse(fromIso);
   const to = Date.parse(toIso);
-  for (let t = from; t < to; t += 5 * 60 * 1000) {
+  for (let t = from; t < to; t += 5 * MIN) {
     store.addSample(id, {
       timestamp: new Date(t).toISOString(),
       status,
@@ -46,27 +61,81 @@ function fill(id, fromIso, toIso, listeners, status = 'up') {
   }
 }
 
-// Yesterday: 100 listeners through the morning, then only 20 for the rest of
-// the day. Today: 80 through the same morning hours.
-fill('a', '2026-08-27T05:00:00.000Z', '2026-08-27T12:00:00.000Z', 100);
-fill('a', '2026-08-27T12:00:00.000Z', '2026-08-28T05:00:00.000Z', 20);
-fill('a', '2026-08-28T05:00:00.000Z', '2026-08-28T12:00:00.000Z', 80);
+/**
+ * A channel whose audience TURNS OVER for `minutes` before `endMs`.
+ *
+ * The churn is the point wherever nesting is under test. A steady audience
+ * yields the same reach over a day as over a month — everyone connected when the
+ * window opened counts once and nobody else arrives — so a flat fixture would
+ * hide exactly the property being asserted. Sampled every four minutes because
+ * getTuneIns() discards a rise across a gap wider than five and would read
+ * anything sparser as monitoring downtime rather than as arrivals.
+ */
+function churn(id, minutes, endMs = NOW, low = 20, peak = 60) {
+  store.ensureStreams([id]);
+  for (let i = Math.floor(minutes / 4); i >= 1; i--) {
+    store.addSample(id, {
+      timestamp: new Date(endMs - i * 4 * MIN).toISOString(),
+      status: 'up',
+      responseTime: 10,
+      listeners: i % 2 === 0 ? low : peak,
+    });
+  }
+}
 
-test('today is compared against the same hours of yesterday, not all of it', () => {
-  // The whole point. Against the same seven morning hours, today is down 20%.
-  // Against the WHOLE of yesterday — whose quiet evening drags the average to
-  // about 43 — today would look like a 86% improvement. Same data, opposite
-  // story, and only one of them is true.
+// The 24 hours before last: 100 listeners throughout. The last 24 hours: 80.
+fill('a', '2026-08-26T12:00:00.000Z', '2026-08-27T12:00:00.000Z', 100);
+fill('a', '2026-08-27T12:00:00.000Z', '2026-08-28T12:00:00.000Z', 80);
+
+test('the last 24 hours is compared against the 24 hours before it', () => {
   const c = store.getListenerCounts(['a'], TZ, NOW);
-  assert.equal(c.today.avg, 80);
-  assert.equal(c.today.previous.avg, 100, 'the matching span of yesterday only');
-  assert.equal(c.today.changePct.avg, -20);
+  assert.equal(c.day.avg, 80);
+  assert.equal(c.day.previous.avg, 100, 'the equal window immediately before');
+  assert.equal(c.day.changePct.avg, -20);
 });
 
-test('the elapsed span drives the comparison window', () => {
-  const c = store.getListenerCounts(['a'], TZ, NOW);
-  assert.equal(c.today.elapsedMs, 7 * HOUR, 'seven hours into the station\'s day');
-  assert.equal(c.today.start, '2026-08-28T05:00:00.000Z', 'Chicago midnight');
+test('a window is always its full length, whatever the hour or the date', () => {
+  // The calendar version could not say this: month-to-date on the 1st was hours
+  // old, and week-to-date on a Tuesday was shorter than the day card would be by
+  // Friday. A rolling window has one length, always.
+  for (const when of [
+    Date.parse('2026-09-01T00:05:00.000Z'),  // five minutes into a new month
+    Date.parse('2026-08-31T05:00:00.000Z'),  // a Monday, five minutes into a week
+    Date.parse('2026-09-15T23:59:00.000Z'),  // mid-month, end of a day
+  ]) {
+    const c = store.getListenerCounts(['a'], TZ, when);
+    assert.equal(c.day.windowMs, DAY, 'the day window is 24 hours');
+    assert.equal(c.week.windowMs, 7 * DAY, 'the week window is 7 days');
+    assert.equal(c.month.windowMs, 30 * DAY, 'the month window is 30 days');
+    assert.equal(c.day.elapsedMs, DAY, 'and it is never partly elapsed');
+  }
+});
+
+test('the windows nest, so a longer one can never report less than a shorter', () => {
+  // THE regression. "This month 415" sat beside "This week 1,809" — a month
+  // smaller than the week inside it. Under rolling windows that is arithmetically
+  // impossible, and this is the assertion that keeps it so.
+  churn('nest', 30 * 24 * 60);
+  const c = store.getListenerCounts(['nest'], TZ, NOW);
+
+  assert.ok(c.week.totalListeners > c.day.totalListeners,
+    `7 days (${c.week.totalListeners}) must exceed 24 hours (${c.day.totalListeners})`);
+  assert.ok(c.month.totalListeners > c.week.totalListeners,
+    `30 days (${c.month.totalListeners}) must exceed 7 days (${c.week.totalListeners})`);
+  assert.ok(c.week.peak >= c.day.peak, 'a longer window contains the shorter one\'s peak');
+  assert.ok(c.month.peak >= c.week.peak);
+});
+
+test('on the first of the month the month card still covers thirty days', () => {
+  // The exact moment the bug was reported: 1 Sep 2026, nine hours into September.
+  const firstOfMonth = Date.parse('2026-09-01T13:00:00.000Z');
+  churn('sep', 40 * 24 * 60, firstOfMonth);
+  const c = store.getListenerCounts(['sep'], TZ, firstOfMonth);
+
+  assert.equal(c.month.windowMs, 30 * DAY, 'not "September so far"');
+  assert.ok(c.month.totalListeners > c.week.totalListeners,
+    'the month is not a few hours old on the 1st');
+  assert.ok(c.week.totalListeners > c.day.totalListeners);
 });
 
 test('a station-wide peak is the channels summed at one moment', () => {
@@ -78,8 +147,8 @@ test('a station-wide peak is the channels summed at one moment', () => {
   fill('p2', '2026-08-28T07:00:00.000Z', '2026-08-28T08:00:00.000Z', 60);
 
   const c = store.getListenerCounts(['p1', 'p2'], TZ, NOW);
-  assert.equal(c.today.peak, 110, '90 + 20 in the first hour');
-  assert.notEqual(c.today.peak, 150, 'peaks an hour apart are not one moment');
+  assert.equal(c.day.peak, 110, '90 + 20 in the first hour');
+  assert.notEqual(c.day.peak, 150, 'peaks an hour apart are not one moment');
 });
 
 test('an off-air channel reports no listeners, not zero listeners', () => {
@@ -90,29 +159,50 @@ test('an off-air channel reports no listeners, not zero listeners', () => {
   fill('d', '2026-08-28T06:00:00.000Z', '2026-08-28T08:00:00.000Z', 100);
   fill('d', '2026-08-28T08:00:00.000Z', '2026-08-28T10:00:00.000Z', 0, 'down');
   const c = store.getListenerCounts(['d'], TZ, NOW);
-  assert.equal(c.today.avg, 100, 'the down stretch is absent, not counted as an audience of nobody');
-});
-
-test('the week runs Monday to Sunday', () => {
-  // A week that splits the weekend compares two halves of different things —
-  // and a community station's weekend is its own schedule.
-  const b = store.periodBounds(TZ, NOW);   // 28 Aug 2026 is a Friday
-  assert.equal(new Date(b.week).toISOString(), '2026-08-24T05:00:00.000Z', 'the Monday');
-});
-
-test('the month starts on the station clock', () => {
-  const c = store.getListenerCounts(['a'], TZ, NOW);
-  assert.equal(c.month.start, '2026-08-01T05:00:00.000Z');
-  assert.equal(c.timeZone, TZ);
+  assert.equal(c.day.avg, 100, 'the down stretch is absent, not counted as an audience of nobody');
 });
 
 test('a missing comparison is withheld, never reported as no change', () => {
   // "0%" reads as "steady". It would mean "we have nothing to compare with",
   // which is a different thing to tell a station.
   const c = store.getListenerCounts(['nothing-here'], TZ, NOW);
-  assert.equal(c.today.peak, null);
-  assert.equal(c.today.changePct.avg, null);
-  assert.notEqual(c.today.changePct.avg, 0);
+  assert.equal(c.day.peak, null);
+  assert.equal(c.day.changePct.avg, null);
+  assert.notEqual(c.day.changePct.avg, 0);
+});
+
+test('each figure is dated from when IT began being recorded', () => {
+  // Arrivals and audience levels do not share a start date: the early tune-in
+  // figures were listener-minutes rather than arrivals and were cleared, so
+  // reach begins later than levels do. Unexplained, that is why one row on a
+  // card carries a comparison while the row beneath it says there is not enough
+  // history — which reads as a fault instead of as a start date.
+  const id = 'ages';
+  store.ensureStreams([id]);
+  // Levels from ten days back, as rollups carrying no tune-in figure.
+  for (let h = 10 * 24; h > 2 * 24; h--) {
+    store.getRollups(id).push({
+      hour: new Date(NOW - h * HOUR).toISOString(),
+      checks: 60, up: 60, down: 0, silent: 0,
+      listenerCount: 60, avgListeners: 40, listenerPeak: 55,
+    });
+  }
+  // Arrivals only from the raw samples of the last two days.
+  churn(id, 2 * 24 * 60);
+
+  const c = store.getListenerCounts([id], TZ, NOW);
+
+  // A 30-day window reaches past both start dates, so both are declared.
+  assert.ok(c.month.recordedFrom.levels, 'the levels start date is carried');
+  assert.ok(c.month.recordedFrom.arrivals, 'the arrivals start date is carried');
+  assert.ok(
+    Date.parse(c.month.recordedFrom.arrivals) > Date.parse(c.month.recordedFrom.levels),
+    'arrivals began later than levels, and the card must be able to say so',
+  );
+
+  // A 24-hour window sits inside both recordings, so there is nothing to declare.
+  assert.equal(c.day.recordedFrom.levels, null, 'no caveat when the window is fully covered');
+  assert.equal(c.day.recordedFrom.arrivals, null);
 });
 
 test('total listeners counts tune-ins, not the concurrent figure', () => {
@@ -127,7 +217,7 @@ test('total listeners counts tune-ins, not the concurrent figure', () => {
   const base = Date.parse('2026-08-28T06:00:00.000Z');
   [10, 15, 12, 16].forEach((n, i) => {
     store.addSample(id, {
-      timestamp: new Date(base + i * 60 * 1000).toISOString(),
+      timestamp: new Date(base + i * MIN).toISOString(),
       status: 'up', responseTime: 10, listeners: n,
     });
   });
@@ -148,7 +238,7 @@ test('a monitoring gap is not a surge of listeners', () => {
   const base = Date.parse('2026-08-28T06:00:00.000Z');
   store.addSample(id, { timestamp: new Date(base).toISOString(), status: 'up', responseTime: 10, listeners: 50 });
   // An hour of silence, then the audience reappears at 90.
-  store.addSample(id, { timestamp: new Date(base + 60 * 60 * 1000).toISOString(), status: 'up', responseTime: 10, listeners: 90 });
+  store.addSample(id, { timestamp: new Date(base + HOUR).toISOString(), status: 'up', responseTime: 10, listeners: 90 });
 
   const t = store.getTuneIns([id], base - 1000, NOW);
   assert.equal(t.total, 50, 'the 40 that appeared across the gap are not counted as arrivals');
@@ -162,18 +252,18 @@ test('someone leaving does not subtract from total listeners', () => {
   const base = Date.parse('2026-08-28T06:00:00.000Z');
   [100, 40, 10].forEach((n, i) => {
     store.addSample(id, {
-      timestamp: new Date(base + i * 60 * 1000).toISOString(),
+      timestamp: new Date(base + i * MIN).toISOString(),
       status: 'up', responseTime: 10, listeners: n,
     });
   });
   assert.equal(store.getTuneIns([id], base - 1000, NOW).total, 100);
 });
 
-test('total listeners is carried per period with its own comparison', () => {
+test('total listeners is carried per window with its own comparison', () => {
   const c = store.getListenerCounts(['a'], TZ, NOW);
-  assert.ok(c.today.totalListeners > 0, 'today has a reach figure');
-  assert.ok('totalListeners' in c.today.changePct, 'compared like the others');
-  assert.equal(c.today.totalListenersMeta.floor, true);
+  assert.ok(c.day.totalListeners > 0, 'the last 24 hours has a reach figure');
+  assert.ok('totalListeners' in c.day.changePct, 'compared like the others');
+  assert.equal(c.day.totalListenersMeta.floor, true);
 });
 
 test('individual listeners stay a declared headline, not a fabricated one', () => {
@@ -187,26 +277,26 @@ test('individual listeners stay a declared headline, not a fabricated one', () =
   assert.match(u.reason, /admin/i);
   assert.notEqual(u.label, undefined);
   // It must never be conflated with the tune-in count sitting beside it.
-  assert.notEqual(u.value, c.today.totalListeners);
+  assert.notEqual(u.value, c.day.totalListeners);
 });
 
 test('a reach comparison is withheld when the earlier window is under-recorded', () => {
-  // Caught in the live audit on the day this shipped: last week fell outside raw
-  // retention and its rollups predated tune-in recording, so it came back 1,339
-  // against this week's 5,813 and the page announced "+376%". Entirely an
-  // artefact of the older window being half-recorded — the kind of number a
-  // station would repeat in a board meeting.
+  // Caught in the live audit on the day this shipped: the comparison window fell
+  // outside raw retention and its rollups predated tune-in recording, so it came
+  // back 1,339 against 5,813 and the page announced "+376%". Entirely an artefact
+  // of the older window being half-recorded — the kind of number a station would
+  // repeat in a board meeting.
   const id = 'partial';
   store.ensureStreams([id]);
   const base = Date.parse('2026-08-28T06:00:00.000Z');
   [10, 20].forEach((n, i) => {
     store.addSample(id, {
-      timestamp: new Date(base + i * 60 * 1000).toISOString(),
+      timestamp: new Date(base + i * MIN).toISOString(),
       status: 'up', responseTime: 10, listeners: n,
     });
   });
-  // An hour in the comparison window that was rolled up before tune-ins existed:
-  // present, but carrying no tuneIns figure.
+  // An hour inside the comparison window that was rolled up before tune-ins
+  // existed: present, but carrying no tuneIns figure.
   store.getRollups(id).push({
     hour: '2026-08-27T06:00:00.000Z',
     checks: 60, up: 60, down: 0, silent: 0,
@@ -217,6 +307,6 @@ test('a reach comparison is withheld when the earlier window is under-recorded',
   assert.ok(t.hoursMissing > 0, 'the gap in recording is detected');
 
   const c = store.getListenerCounts([id], TZ, NOW);
-  assert.equal(c.today.totalListenersComparable, false, 'so the comparison is refused');
-  assert.equal(c.today.changePct.totalListeners, null, 'rather than dividing by a partial total');
+  assert.equal(c.day.totalListenersComparable, false, 'so the comparison is refused');
+  assert.equal(c.day.changePct.totalListeners, null, 'rather than dividing by a partial total');
 });

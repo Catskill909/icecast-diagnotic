@@ -509,6 +509,17 @@
   color: var(--text-tertiary);
 }
 
+/* What the percentage beside it was actually measured against. Full width so it
+   drops below the delta chip rather than fighting it for the row. */
+.cc-basis {
+  flex-basis: 100%;
+  margin-top: 4px;
+  font-size: 10px;
+  line-height: 1.35;
+  color: var(--text-tertiary);
+  text-align: right;
+}
+
 /* Peak and average kept, deliberately smaller — nothing is removed, only
    ranked. */
 .cc-secondary {

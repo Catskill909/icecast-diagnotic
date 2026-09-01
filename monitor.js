@@ -2452,16 +2452,22 @@ function getListeners(windowMs, bucketMs, stationId) {
     })),
     series,
     outages,
-    // HEADCOUNTS for today / this week / this month, each against the same
-    // elapsed span of the previous period.
+    // HEADCOUNTS for the last 24 hours / 7 days / 30 days, each against the
+    // window of equal length immediately before it.
     //
-    // ONE GROUP PER STATION, each on its own clock. This used to fall back to
-    // UTC whenever the scope spanned more than one timezone, which measured
-    // every station over a window none of them keeps: at 00:38 UTC on the 1st,
-    // "All stations · This month" was thirty-eight minutes long and read 805
-    // while KPFT's own month read 10,560. A total below one of its parts is not
-    // a rounding disagreement, it is wrong. Each station's period is now bounded
-    // on its own calendar and the reach summed, which cannot fall below a member.
+    // ROLLING, NOT CALENDAR. Month-to-date on the 1st was a few hours old and
+    // sat beside a week-to-date card thirty-three hours old, so the dashboard
+    // showed a month smaller than the week inside it and read as data loss.
+    // Rolling windows always cover their full length and always nest.
+    //
+    // It also retired a whole class of timezone bug: a calendar month begins at
+    // a different instant in every zone, which once measured the network over a
+    // window none of its stations kept — "All stations · This month" read 805
+    // while KPFT's own month read 10,560. The last 30 days is the same 30 days
+    // everywhere, so a total can no longer fall below one of its parts.
+    //
+    // The per-station grouping stays because the payload still reports which
+    // clock the CHART is drawn on, and that is genuinely per station.
     counts: store.getListenerCountsAcross(
       [...new Map(scoped.map((x) => [x.stationId, x.stationTimezone || 'UTC'])).entries()]
         .map(([stationId, timeZone]) => ({

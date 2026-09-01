@@ -28,6 +28,7 @@ const SEED_FILE = process.env.SEED_FILE || path.join(__dirname, 'seed', 'histori
 const SAMPLE_RETENTION_DAYS = parseInt(process.env.SAMPLE_RETENTION_DAYS, 10) || 7;
 const SAMPLE_RETENTION_MS = SAMPLE_RETENTION_DAYS * 24 * 60 * 60 * 1000;
 const HOUR_MS = 60 * 60 * 1000;
+const DAY_MS = 24 * HOUR_MS;
 
 // Safety ceiling. Events are never pruned by age, but an unbounded array would
 // eventually be a memory problem — at ~35 events/day this is roughly 8 years.
@@ -1655,8 +1656,19 @@ function getTuneIns(streamIds, startMs, endMs) {
  * compact the finest truth available is the hourly rollup. `resolution` says
  * which, because a peak drawn from hourly averages is a peak HOUR, not a peak
  * minute, and quoting the two as though they were the same figure is wrong.
+ *
+ * `forceResolution: 'hour'` deliberately throws the per-minute detail away,
+ * averaging raw samples into their hour before anything is measured. That is
+ * how a window still held at full resolution is compared against one that has
+ * already compacted: coarsening the finer side is the only way to put both on
+ * the same footing. Never use it for a headline figure — it understates the
+ * real peak by construction, which is precisely the distortion it exists to
+ * cancel out on BOTH sides of a comparison.
+ *
+ * `hoursCovered` counts the hours that actually carried a reading, so a caller
+ * can tell a fully-measured window from one the monitor only saw the end of.
  */
-function concurrentBetween(streamIds, startMs, endMs) {
+function concurrentBetween(streamIds, startMs, endMs, forceResolution) {
   const byMinute = new Map();
   const byHour = new Map();
 
@@ -1682,7 +1694,25 @@ function concurrentBetween(streamIds, startMs, endMs) {
   // Prefer raw where it exists; fall back to rollups for older stretches. An
   // hour holding both would be double counted, so raw wins for its own hour.
   const rawHours = new Set([...byMinute.keys()].map((t) => Math.floor(t / HOUR_MS) * HOUR_MS));
-  const points = [...byMinute.values()];
+
+  // Coarsening happens BEFORE any maximum is taken. Averaging each hour of raw
+  // samples reproduces exactly what a rollup holds for that hour, so the two
+  // sides of a comparison become the same kind of measurement.
+  let points;
+  if (forceResolution === 'hour') {
+    const hourSums = new Map();
+    for (const [t, v] of byMinute) {
+      const h = Math.floor(t / HOUR_MS) * HOUR_MS;
+      const acc = hourSums.get(h) || { sum: 0, n: 0 };
+      acc.sum += v;
+      acc.n += 1;
+      hourSums.set(h, acc);
+    }
+    points = [...hourSums.values()].map((a) => a.sum / a.n);
+  } else {
+    points = [...byMinute.values()];
+  }
+
   let usedRollup = false;
   for (const [t, v] of byHour) {
     if (rawHours.has(Math.floor(t / HOUR_MS) * HOUR_MS)) continue;
@@ -1690,7 +1720,16 @@ function concurrentBetween(streamIds, startMs, endMs) {
     usedRollup = true;
   }
 
-  if (!points.length) return { peak: null, avg: null, low: null, readings: 0, resolution: null };
+  const hoursCovered = new Set([
+    ...rawHours,
+    ...[...byHour.keys()]
+      .map((t) => Math.floor(t / HOUR_MS) * HOUR_MS)
+      .filter((h) => !rawHours.has(h)),
+  ]).size;
+
+  if (!points.length) {
+    return { peak: null, avg: null, low: null, readings: 0, resolution: null, hoursCovered: 0 };
+  }
 
   let peak = -Infinity;
   let low = Infinity;
@@ -1706,26 +1745,12 @@ function concurrentBetween(streamIds, startMs, endMs) {
     avg: Math.round((sum / points.length) * 10) / 10,
     low: Math.round(low),
     readings: points.length,
-    resolution: byMinute.size && !usedRollup ? 'minute' : byMinute.size ? 'mixed' : 'hour',
-  };
-}
-
-/** Start of today, this week (Monday) and this month, on the station clock. */
-function periodBounds(timeZone, now = Date.now()) {
-  const today = zonedDayKey(now, timeZone);
-  const todayStart = zonedMidnightMs(today, timeZone);
-
-  // Week starts Monday: a community station's schedule runs Monday to Sunday,
-  // and a week that splits the weekend down the middle compares two halves of
-  // different things.
-  const dow = new Date(todayStart).getUTCDay();
-  const backToMonday = (dow + 6) % 7;
-  const weekStart = zonedMidnightMs(addCalendarDay(today, -backToMonday), timeZone);
-
-  return {
-    today: todayStart,
-    week: weekStart,
-    month: monthStartMs(timeZone, now),
+    // Coarsened data IS hour data — saying 'mixed' here would hide the very
+    // downgrade that makes the comparison fair.
+    resolution: forceResolution === 'hour'
+      ? 'hour'
+      : byMinute.size && !usedRollup ? 'minute' : byMinute.size ? 'mixed' : 'hour',
+    hoursCovered,
   };
 }
 
@@ -1735,39 +1760,65 @@ function periodBounds(timeZone, now = Date.now()) {
  * Calendar arithmetic, not subtraction: a month is not 30 days and a DST week
  * is not 168 hours, so "one period earlier" has to be asked of the calendar.
  */
-function prevPeriodStart(period, timeZone, bounds, now) {
-  if (period === 'today') {
-    return zonedMidnightMs(addCalendarDay(zonedDayKey(now, timeZone), -1), timeZone);
+/**
+ * Earliest moment an ARRIVAL could have been counted, across these streams.
+ *
+ * Not the same as getCoverageStart(). Audience LEVELS reach back to the first
+ * sample ever taken; arrivals reach back only as far as tune-in recording, which
+ * began later and whose earlier figures were cleared for being listener-minutes
+ * rather than arrivals. Two figures on one card with two different ages, so the
+ * UI needs both dates to say which is which.
+ */
+function getTuneInRecordingStart(streamIds) {
+  let earliest = null;
+  const take = (t) => {
+    if (isFinite(t) && (earliest === null || t < earliest)) earliest = t;
+  };
+  for (const id of streamIds) {
+    // Raw samples always carry the churn a tune-in is derived from.
+    const s = samples[id] || [];
+    if (s.length) take(new Date(s[0].timestamp).getTime());
+    // Compacted hours only carry it if they were rolled up after it existed.
+    for (const r of rollups[id] || []) {
+      if (r.tuneIns == null) continue;
+      take(new Date(r.hour).getTime());
+      break;
+    }
   }
-  if (period === 'week') return bounds.week - 7 * 24 * 60 * 60 * 1000;
-  return monthStartMs(timeZone, bounds.month - 1);
+  return earliest === null ? null : new Date(earliest).toISOString();
 }
 
 /**
- * Headline listener counts for today, this week and this month — each against
- * the equivalent previous period.
+ * Headline listener counts over the last 24 hours, 7 days and 30 days — each
+ * against the window of equal length immediately before it.
  *
- * "Down 10% on last month" is the sentence a station wants, and it is only
- * honest if the two periods are comparable. So the comparison is like-for-like:
- * today against the same elapsed hours of yesterday, this week against the same
- * elapsed part of last week, this month against the same elapsed part of last
- * month. Comparing nine days of this month against all thirty-one of last month
- * would report a collapse every single month.
+ * ROLLING WINDOWS, NOT CALENDAR PERIODS, and the reason is that a calendar
+ * period spends most of its life partly elapsed.
  *
- * EVERY STATION KEEPS ITS OWN CALENDAR, and `groups` is why this takes a list.
+ * Month-to-date on the 1st is a few hours old. Week-to-date on a Tuesday is
+ * shorter than a day-to-date window will be by Friday. Shipped as "This month"
+ * beside "This week", that produced a dashboard on 1 Sep 2026 reading 415 for
+ * the month and 1,809 for the week — a month smaller than the week inside it,
+ * correct to the hour and read by everyone who saw it as data loss.
  *
- * A network spans timezones, and "this month" is a question about a calendar,
- * so it has a different answer per station: at 00:38 UTC on the 1st, Houston is
- * three weeks into its month and UTC is thirty-eight minutes into its own.
- * Computing the aggregate on one shared clock therefore did not aggregate
- * anything — it measured every station over a window that belonged to none of
- * them. Rolled up under UTC, "All stations · This month" read 805 while KPFT
- * alone read 10,560: thirty-eight minutes of the network presented as a month,
- * next to a real one.
+ * A rolling window cannot do that. 30 days ⊇ 7 days ⊇ 24 hours always, so the
+ * figures are monotonic by construction; each window is always its full length,
+ * so nothing collapses at a midnight or a month boundary; and the comparison
+ * window is the same length as the current one without any elapsed-span
+ * arithmetic to get wrong.
  *
- * THE INVARIANT THAT BROKE: a total may never be smaller than one of its parts.
- * Each station's period is now bounded on its own clock and the reach totals
- * summed, which is additive by construction and so cannot fall below any member.
+ * IT ALSO REMOVES THE TIMEZONE PROBLEM ENTIRELY. A calendar month starts at a
+ * different instant in every zone, which is why this once measured the network
+ * over a window belonging to no station and reported "All stations · This month"
+ * as 805 against KPFT's own 10,560 — a total smaller than its part. The last 24
+ * hours is the same 24 hours in Houston, New York and Los Angeles, so one window
+ * serves every station and the invariant holds trivially. `groups` is still the
+ * argument shape because callers pass station scopes, and `timeZones` is still
+ * reported so the UI can name the clock the CHART is drawn on.
+ *
+ * Calendar months have not gone away — they are the right frame for "what were
+ * our September numbers", and they live in the history page and the roundup
+ * email, where the period being named is the whole point.
  */
 function getListenerCountsAcross(groups, now = Date.now()) {
   const list = (groups || []).filter((g) => g && (g.streamIds || []).length);
@@ -1778,42 +1829,55 @@ function getListenerCountsAcross(groups, now = Date.now()) {
     ? Math.round(((a - bb) / bb) * 1000) / 10
     : null);
 
-  const build = (period) => {
-    const spans = list.map((g) => {
-      const tz = g.timeZone || 'UTC';
-      const bounds = periodBounds(tz, now);
-      const startMs = bounds[period];
-      return {
-        streamIds: g.streamIds,
-        startMs,
-        prevStartMs: prevPeriodStart(period, tz, bounds, now),
-        elapsed: now - startMs,
-      };
-    });
+  // Two different ages on one card, resolved once rather than per window.
+  const levelsFrom = getCoverageStart(allIds);
+  const arrivalsFrom = getTuneInRecordingStart(allIds);
 
-    // REACH SUMS, because a tune-in is an event and events from different
-    // clocks add up. Each station contributes its own calendar period.
-    const tuneIns = { total: 0, gaps: 0, hoursFromRollup: 0, hoursMissing: 0, estimated: true, floor: true };
-    const prevTuneIns = { total: 0, gaps: 0, hoursFromRollup: 0, hoursMissing: 0, estimated: true, floor: true };
-    for (const s of spans) {
-      const cur = getTuneIns(s.streamIds, s.startMs, now);
-      const prv = getTuneIns(s.streamIds, s.prevStartMs, s.prevStartMs + s.elapsed);
-      for (const k of ['total', 'gaps', 'hoursFromRollup', 'hoursMissing']) {
-        tuneIns[k] += cur[k];
-        prevTuneIns[k] += prv[k];
-      }
-    }
+  const build = (windowMs) => {
+    // One window for every station: a rolling span is the same instant-to-instant
+    // range in every timezone, so there is nothing to reconcile between clocks.
+    const startMs = now - windowMs;
+    const prevStartMs = startMs - windowMs;
+    const elapsed = windowMs;
+
+    const tuneIns = getTuneIns(allIds, startMs, now);
+    const prevTuneIns = getTuneIns(allIds, prevStartMs, startMs);
 
     // CONCURRENCY DOES NOT SUM. "At once" is a claim about one instant, and two
     // stations' separate busiest moments were not the same moment — adding them
     // reports a figure the network never reached. So it is measured across every
-    // channel at once, over the window that covers all of their periods.
-    const startMs = Math.min(...spans.map((s) => s.startMs));
-    const prevStartMs = Math.min(...spans.map((s) => s.prevStartMs));
-    const elapsed = now - startMs;
+    // channel at once, over the one window.
     const current = concurrentBetween(allIds, startMs, now);
-    // Same elapsed span, one period earlier — not the whole previous period.
-    const previous = concurrentBetween(allIds, prevStartMs, prevStartMs + elapsed);
+    // The window of equal length immediately before this one.
+    const previous = concurrentBetween(allIds, prevStartMs, startMs);
+
+    // PEAK AND AVERAGE NEED THE SAME GUARD THE REACH TOTAL HAS, and they need
+    // it for a second reason of their own.
+    //
+    // Raw samples are kept for SAMPLE_RETENTION_DAYS and compact into hourly
+    // rollups after that, so any period longer than the retention window
+    // compares a per-minute present against an hourly past. Hourly averaging
+    // flattens the spikes, so last week's "peak" is a peak HOUR while this
+    // week's is a peak MINUTE — measured on production on 1 Sep, that pairing
+    // reported the week up 887% on peak and 989% on average, against a previous
+    // window holding 33 readings to the current window's 1,969.
+    //
+    // Withholding the figure would hide it for ever, because a week will always
+    // outlive the raw window. So the fix is to compare like with like: coarsen
+    // the finer side and measure both hourly. The headline peak stays at full
+    // resolution — only the percentage is computed from the levelled pair.
+    const prevSpanHours = Math.floor((prevStartMs + elapsed - 1) / HOUR_MS)
+      - Math.floor(prevStartMs / HOUR_MS) + 1;
+    // Data for only the tail of a window is not a measurement of that window.
+    const prevFullyMeasured = previous.readings > 0 && previous.hoursCovered >= prevSpanHours;
+    const levelled = prevFullyMeasured && previous.resolution !== current.resolution
+      ? {
+        current: concurrentBetween(allIds, startMs, now, 'hour'),
+        previous: concurrentBetween(allIds, prevStartMs, startMs, 'hour'),
+      }
+      : { current, previous };
+    const concurrencyComparable = prevFullyMeasured
+      && levelled.previous.resolution === levelled.current.resolution;
 
     // A comparison is only honest if BOTH windows were fully counted.
     //
@@ -1826,14 +1890,27 @@ function getListenerCountsAcross(groups, now = Date.now()) {
     // half-recorded. Withheld, exactly as the ATH trend is.
     const comparable = prevTuneIns.hoursMissing === 0 && prevTuneIns.total > 0;
 
+    // WHERE EACH FIGURE ACTUALLY STARTS BEING TRUE. Only set when recording began
+    // INSIDE this window — that is exactly when the window is longer than the
+    // history behind it and the number is a floor rather than a count. Arrivals
+    // and levels are dated separately because they began on different days, which
+    // is why one row on a card can carry a comparison while the row under it
+    // cannot, and why that difference must be visible rather than inferred.
+    const partialFrom = (iso) => {
+      if (!iso) return null;
+      const t = Date.parse(iso);
+      return isFinite(t) && t > startMs ? new Date(t).toISOString() : null;
+    };
+
     return {
       start: new Date(startMs).toISOString(),
+      end: new Date(now).toISOString(),
       elapsedMs: elapsed,
-      // The distinct local starts behind this card, so a caller can say the
-      // window is per-station rather than implying one shared midnight.
-      starts: spans.length > 1
-        ? [...new Set(spans.map((s) => new Date(s.startMs).toISOString()))].sort()
-        : undefined,
+      windowMs,
+      recordedFrom: {
+        arrivals: partialFrom(arrivalsFrom),
+        levels: partialFrom(levelsFrom),
+      },
       ...current,
       totalListeners: tuneIns.total || null,
       totalListenersMeta: tuneIns,
@@ -1843,25 +1920,33 @@ function getListenerCountsAcross(groups, now = Date.now()) {
         totalListenersMeta: prevTuneIns,
       },
       changePct: {
-        peak: pct(current.peak, previous.peak),
-        avg: pct(current.avg, previous.avg),
+        // From the levelled pair, never the headline pair — see above.
+        peak: concurrencyComparable ? pct(levelled.current.peak, levelled.previous.peak) : null,
+        avg: concurrencyComparable ? pct(levelled.current.avg, levelled.previous.avg) : null,
         totalListeners: comparable ? pct(tuneIns.total, prevTuneIns.total) : null,
       },
       // Why the reach comparison is absent, when it is. The UI says "not enough
       // history yet" rather than leaving a bare dash that reads as a fault.
       totalListenersComparable: comparable,
+      // Same, for peak and average. Separate flag because they are withheld for
+      // a different reason and can be present when the reach total is not.
+      concurrencyComparable,
+      // Which resolution the percentage was actually computed at, so the UI can
+      // say "compared by hour" rather than implying minute-level precision.
+      comparisonResolution: concurrencyComparable ? levelled.current.resolution : null,
     };
   };
 
   return {
-    // One zone when the scope shares one; otherwise the honest answer is that
-    // there is no single clock, and the UI must say so rather than name one
-    // station's midnight as though every station kept it.
+    // Still reported, but it no longer bounds these three windows — a rolling
+    // span is clock-independent. It names the zone the CHART below is drawn on.
     timeZone: zones.length === 1 ? zones[0] : null,
     timeZones: zones,
-    today: build('today'),
-    week: build('week'),
-    month: build('month'),
+    // Rolling, and named for exactly what they cover. Nesting is guaranteed:
+    // day ⊆ week ⊆ month, so no card can ever report less than the one inside it.
+    day: build(DAY_MS),
+    week: build(7 * DAY_MS),
+    month: build(30 * DAY_MS),
     // THREE different questions, and only the first is answerable from a
     // connection count. Carried in the payload as explicit nulls with reasons so
     // the UI has something honest to render and nobody can later fill one in
@@ -2589,7 +2674,8 @@ module.exports = {
   getAudienceContext, getHourOfDayProfile, buildAudienceImpact, deriveListenerImpact,
   getListenerSeries, getAudienceSummary, chooseBucketMs,
   getListeningDelivered, getAth, getMonthToDateAth, ATH_MONTHLY_ALLOWANCE,
-  getListenerCounts, getListenerCountsAcross, concurrentBetween, periodBounds,
+  getListenerCounts, getListenerCountsAcross, concurrentBetween,
+  getTuneInRecordingStart,
   getTuneIns, tuneInsFromSamples,
   SAMPLE_RETENTION_DAYS,
   MAX_EVENTS,

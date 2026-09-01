@@ -171,10 +171,15 @@
     const c = (data && data.counts) || null;
     if (!c) { $('#count-cards').innerHTML = ''; return; }
 
+    // ROLLING WINDOWS, and the labels say so literally. "This month" meant
+    // month-to-date, which on the 1st is a few hours — shown beside a
+    // week-to-date card that was 33 hours old, it read 415 against 1,809 and
+    // looked to every reader like the month's data had been lost. A window named
+    // for its own length cannot mislead that way, and the three always nest.
     const PERIODS = [
-      { key: 'today', label: 'Today', vs: 'yesterday' },
-      { key: 'week', label: 'This week', vs: 'last week' },
-      { key: 'month', label: 'This month', vs: 'last month' },
+      { key: 'day', label: 'Last 24 hours', vs: 'the 24 hours before' },
+      { key: 'week', label: 'Last 7 days', vs: 'the 7 days before' },
+      { key: 'month', label: 'Last 30 days', vs: 'the 30 days before' },
     ];
 
     const delta = (pct, vs, cls) => {
@@ -184,9 +189,36 @@
       return `<span class="cc-delta ${dir} ${cls || ''}">${arrow} ${esc(Math.abs(pct))}% vs ${esc(vs)}</span>`;
     };
 
+    // Peak and average carry their own gate, separate from the reach total's.
+    // A period longer than the raw-sample window compares a per-minute present
+    // against an hourly past, and hourly averaging flattens every spike — so the
+    // server levels both sides to hours before dividing. Saying so matters: a
+    // reader who is not told will take "at the busiest moment" and the
+    // percentage under it as the same kind of number, and they are not.
+    const cDelta = (d, key, p) => {
+      if (d.concurrencyComparable === false) {
+        return `<span class="cc-delta none">not enough comparable history to measure against ${esc(p.vs)}</span>`;
+      }
+      const out = delta(d.changePct && d.changePct[key], p.vs);
+      return d.comparisonResolution === 'hour'
+        ? `${out}<span class="cc-basis">compared hour by hour — ${esc(p.vs)} is past the minute-by-minute window</span>`
+        : out;
+    };
+
+    // A window can reach back further than the recording behind it, and the two
+    // figures on a card began on DIFFERENT days — arrivals later than levels,
+    // because the early tune-in figures were wrong and were cleared. Unexplained,
+    // that is why one row compares and the row beneath it says there is not
+    // enough history, which reads as a fault rather than as a start date.
+    const since = (iso) => new Date(iso).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+    const recordedNote = (iso, what) => (iso
+      ? `<div class="cc-partial">Counted from ${esc(since(iso))} — ${esc(what)} before then were not recorded, so this is a floor, not a total.</div>`
+      : '');
+
     const cards = PERIODS.map((p) => {
       const d = c[p.key] || {};
       const meta = d.totalListenersMeta || {};
+      const from = d.recordedFrom || {};
 
       if (d.totalListeners == null && d.peak == null) {
         return `<div class="count-card">
@@ -207,17 +239,19 @@
         ${d.totalListenersComparable === false
           ? `<span class="cc-delta none">not enough recorded history to compare with ${esc(p.vs)}</span>`
           : delta(d.changePct && d.changePct.totalListeners, p.vs, 'strong')}
-        ${meta.hoursMissing ? `<div class="cc-partial">A floor for this period: ${esc(Number(meta.hoursMissing).toLocaleString())} channel-hour(s) predate tune-in recording and are not counted at all.</div>` : ''}
+        ${recordedNote(from.arrivals, 'arrivals')}
+        ${!from.arrivals && meta.hoursMissing ? `<div class="cc-partial">A floor for this period: ${esc(Number(meta.hoursMissing).toLocaleString())} channel-hour(s) predate tune-in recording and are not counted at all.</div>` : ''}
         <div class="cc-secondary">
+          ${recordedNote(from.levels, 'audience levels')}
           <div class="cc-sec">
             <span class="cc-sec-v">${d.peak == null ? '—' : esc(d.peak.toLocaleString())}</span>
             <span class="cc-sec-l">at once, at the busiest moment</span>
-            ${delta(d.changePct && d.changePct.peak, p.vs)}
+            ${cDelta(d, 'peak', p)}
           </div>
           <div class="cc-sec">
             <span class="cc-sec-v">${esc(fmt(d.avg))}</span>
             <span class="cc-sec-l">typically listening</span>
-            ${delta(d.changePct && d.changePct.avg, p.vs)}
+            ${cDelta(d, 'avg', p)}
           </div>
         </div>
       </div>`;
@@ -238,14 +272,14 @@
 
     $('#count-cards').innerHTML = cards + gated;
 
-    const m = (c.today && c.today.totalListenersMeta) || {};
-    // With several timezones in scope there is no single midnight to name, and
-    // printing one station's would misdescribe every other station's day.
-    const clock = c.timeZone
-      || `each station's own clock · ${(c.timeZones || []).length} timezones`;
+    const m = (c.day && c.day.totalListenersMeta) || {};
+    // No timezone is named here any more, and that is the point: these windows
+    // end now and count backwards, so they are the same span in every zone.
+    // Naming a clock would imply a midnight boundary that no longer exists.
+    const basis = 'counted back from now — not calendar days, weeks or months';
     $('#counts-hint').textContent = m.floor
-      ? `${clock} · a floor — brief overlaps are invisible between checks`
-      : clock;
+      ? `${basis} · a floor — brief overlaps are invisible between checks`
+      : basis;
   }
 
   /**
