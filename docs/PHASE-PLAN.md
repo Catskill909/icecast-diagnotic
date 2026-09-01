@@ -14,7 +14,7 @@
 
 ## Where the project actually is
 
-**Live and healthy.** 5 stations, 10 channels, 3 Icecast hosts, 355 tests,
+**Live and healthy.** 5 stations, 10 channels, 3 Icecast hosts, 390 tests,
 99.99% audio uptime over 7 days, data volume intact since 2026-08-04.
 
 Build-order items 1–8 of `HANDOFF.md` §6 are shipped. Per-station alert
@@ -32,11 +32,20 @@ forgotten if they are not written down.
 
 | | Item | State |
 |---|---|---|
-| 0.1 | **Deploy the uncommitted docs** | 4 planning documents, no code |
-| 0.2 | **"Could not save." is not root-caused** | Intermittent; reproduced never, across production config, deployed-instance conditions and a production-sized store. Diagnostics shipped so the next occurrence names itself. **Not a fix** |
-| 0.3 | **The alert dispatch has not fired in production since it was rewritten** | The roundup and a test message prove SMTP and scoping; no real outage has hit a station with recipients since deploy |
-| 0.4 | **Decide WPFW and KPFK recipients** | Both have none and email nobody. WBAI has one. Deliberate or unfinished? |
-| 0.5 | **KPFA is on the shared host and unmonitored** | Found in the live mount inventory: `/kpfa`, `/kpfa_16`, `/kpfa_64`. The fifth sister station, one paste away |
+| 0.1 | **Deploy the uncommitted docs** | ✅ Done |
+| 0.2 | **"Could not save." is not root-caused** | **Still open.** Intermittent; reproduced never, across production config, deployed-instance conditions and a production-sized store. Diagnostics shipped so the next occurrence names itself. **Not a fix** |
+| 0.3 | **The alert dispatch has not fired in production since it was rewritten** | **Unverified as of 2026-09-01.** The roundup and a test message prove SMTP and scoping; whether a real outage has since reached a station with recipients has not been checked |
+| 0.4 | **Decide WPFW and KPFK recipients** | **Unverified as of 2026-09-01** — recipients are redacted from public responses, so this needs the admin panel to answer. If still empty, both stations are watched and can tell nobody |
+| 0.5 | **KPFA is on the shared host and unmonitored** | ✅ Done. Live with 2 channels across two Icecast hosts (§5d) |
+
+### Added 2026-09-01, from the rolling-windows session
+
+| | Item | State |
+|---|---|---|
+| 0.6 | **Is the 7-day rise real audience, or a channel appearing?** | The week card reads **peak +79.2%, average +71.1%** against the previous 7 days. KPFT HD3 (`/classic_country`) has a `streamStart` of 2026-08-29, inside the current window and absent from the comparison window — so some of that rise may be a channel being added rather than listeners arriving. **A station-wide total that grows because the station grew is not wrong, but it must not be reported to a funder as audience growth.** Check before anyone quotes it |
+| 0.7 | **`COMPARISON_COVERAGE_FLOOR` is a chosen line, not a derived one** | 0.9 — the earlier window must have ≥90% of its whole hours measured before a percentage is divided out of it. Demanding 100% withheld the week comparison over a single missed hour (24 Aug 01:00); a low floor reinstates the artefact it exists to stop. Documented at the constant in `store.js`. Revisit if real gaps cluster differently |
+| 0.8 | **Reach history is 20 days shorter than level history** | Arrivals were first recorded 2026-08-24; audience levels go back to 2026-08-04. So the 30-day card reports reach as a **floor** and says so on the card. Self-resolves ~2026-09-23, when the 30-day window no longer reaches before tune-in recording |
+| 0.9 | **The 30-day comparison is unavailable until ~2026-10-03** | It needs 60 days; recording began 2026-08-04. Expected, stated on the card, no action — listed so it is not re-diagnosed as a fault |
 
 ---
 
@@ -71,6 +80,24 @@ Detail: [`DEEP-ANALYTICS-PLAN.md`](DEEP-ANALYTICS-PLAN.md) §2, §7.
 | 2.3 | Day-of-week × hour heatmap | Outstanding Phase 1 item from the audience roadmap |
 | 2.4 | Per-mount trend over time | Same |
 | 2.5 | Migrate existing flags onto the envelope | Retires the four ad-hoc shapes |
+| 2.6 | **Month-to-month by name — "October vs September"** | **Date-gated, not effort-gated. See below** |
+
+**2.6 is the only item in this plan with a calendar entry condition.** The
+audience cards became ROLLING windows on 2026-09-01 — last 24 hours / 7 days /
+30 days — because calendar periods spend most of their lives partly elapsed and
+produced a "This month" smaller than the week inside it. That was the right fix
+for a live dashboard and it deliberately gives up something a GM needs: a named
+month, for a board report, a pledge drive or a funder update.
+
+Recording began 2026-08-04, so **August is a partial month and can never be an
+honest term in a comparison.** September is the first complete month, October the
+second, which puts the first truthful comparison — **October vs September — at
+2026-11-01.** Build whenever; do not ship a comparison whose earlier term is
+partial, because that is exactly the `+376%` artefact with a new label. Rules it
+inherits are in [`AUDIENCE-ROADMAP.md`](AUDIENCE-ROADMAP.md) §4 item 6.
+
+The data is already safe: hourly rollups are never pruned, so every past month
+stays readable indefinitely. Nothing needs to be collected between now and then.
 
 **2.1 carries a rule worth stating on its own:** a comparison inherits the
 weakest confidence of its two periods. `measured` against `partial` is exactly

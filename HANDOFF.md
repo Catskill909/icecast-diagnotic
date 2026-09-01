@@ -2,7 +2,7 @@
 
 > **Purpose.** Everything a new session, a new developer, or another model needs
 > to pick this up without reading the conversation it came from. Written
-> 2026-08-27, current as of commit `07aec1b`.
+> 2026-08-27, current as of commit `679eef1` (2026-09-01).
 >
 > Read this first, then [`README.md`](README.md) for behaviour,
 > [`docs/DIAGNOSTICS.md`](docs/DIAGNOSTICS.md) for the classifier, and
@@ -18,7 +18,7 @@ shortest path to being useful.
 **Orient yourself (2 minutes).**
 
 ```bash
-npm test                                   # 355 tests, all should pass
+npm test                                   # 390 tests, all should pass
 curl -s https://kpft-icecast.supersoul.top/api/stations | jq   # what it monitors
 curl -s https://kpft-icecast.supersoul.top/api/status   | jq   # how it is doing
 ```
@@ -37,6 +37,8 @@ read when you need it.
 | Adding a module without updating the Dockerfile | Container dies on startup. CI catches it |
 | Assuming a push deployed | Deploys are manual, always |
 | Thinking a station is a server | A card is a CHANNEL; a station only groups them. §5d, §8 |
+| Putting calendar periods back on the audience cards | A month-to-date card is a few hours old on the 1st and reads as data loss. §5e |
+| Dividing a per-minute window by an hourly one | Fabricates growth from nothing. Raw lasts 7 days, then compacts. §8 |
 
 **How work gets shipped.** Commit, push, then *tell the operator to deploy* — a
 human clicks deploy in Coolify and the build takes 1–5 minutes. Verify against
@@ -81,7 +83,15 @@ regression, however green the tests are.**
 
 - **Live and healthy.** 5 stations (KPFT Houston, WPFW Washington DC, KPFK Los
   Angeles, WBAI New York, KPFA Berkeley), 10 channels, **3 Icecast hosts**, 476
-  events retained since 2026-08-04. Verified against production 2026-08-31.
+  events retained since 2026-08-04. Station list and audience figures re-verified
+  against production 2026-09-01.
+- **The audience headline cards are ROLLING windows** — last 24 hours / 7 days /
+  30 days — as of 2026-09-01. They were calendar periods and that was reported as
+  data loss on the 1st of a month. §5e, and the traps in §8.
+- **Recording start dates differ per figure.** Audience LEVELS go back to
+  2026-08-04; ARRIVALS (tune-ins) only to 2026-08-24, because the earlier figures
+  were listener-minutes and were deliberately erased. A window reaching before
+  either is reported as a floor, on the card.
 - **One station now spans two hosts.** KPFA is carried on Pacifica's relay
   (`streams.pacifica.org:9000`) AND on its own Icecast (`streams.kpfa.org:8443`).
   That is ONE station with TWO channels: two dashboard cards, watched
@@ -91,7 +101,7 @@ regression, however green the tests are.**
   so the host-as-shared-pool design (§3.6) is now carrying real traffic rather
   than being argued for. One snapshot fetch per host per cycle serves every
   station on it.
-- **355 tests**, `npm test`, Node's built-in runner, no test framework dependency.
+- **390 tests**, `npm test`, Node's built-in runner, no test framework dependency.
 - **Dependencies: express, nodemailer 9, dotenv.** That is the whole list, and it
   is deliberate. Crypto, testing and HTTP are all Node built-ins. Adding a
   dependency should require an argument.
@@ -174,19 +184,19 @@ silently alters what lands in someone's inbox.
 
 | File | Lines | What it owns |
 |---|---|---|
-| `store.js` | 2434 | Persistence, retention, audience model, rollups, **station config** |
-| `monitor.js` | 3039 | Check cycle, episode state, email composition, weekly roundup |
+| `store.js` | 2709 | Persistence, retention, audience model, rollups, **station config** |
+| `monitor.js` | 3094 | Check cycle, episode state, email composition, weekly roundup |
 | `diagnose.js` | 1255 | Probe, Icecast snapshot, **the classifier and the alert gate** |
-| `server.js` | 811 | HTTP API |
+| `server.js` | 815 | HTTP API |
 | `auth.js` | ~290 | Admin session gate: scrypt, signed cookie, rate limiting |
 | `redact.js` | ~130 | **Public projections.** What anonymous callers may see |
 | `safe-url.js` | ~150 | **SSRF guard** for fetching user-supplied URLs |
-| `discover.js` | 800 | Station discovery: mount → channel grouping, validation |
-| `public/app.js` | 694 | Dashboard |
-| `public/history.js` | 1530 | History page, station picker, charts |
-| `public/listeners.js` | ~420 | **Audience page**: rendering only — ATH, charts, tables, CSV export |
-| `public/audience-stats.js` | ~190 | **Audience arithmetic**, deliberately separate so Node can test it. Loads as `window.AudienceStats` in the browser and `require()`s in tests |
-| `public/admin.js` | 1385 | Admin panel: add, edit, remove stations |
+| `discover.js` | 822 | Station discovery: mount → channel grouping, validation |
+| `public/app.js` | 863 | Dashboard |
+| `public/history.js` | 1537 | History page, station picker, charts |
+| `public/listeners.js` | 694 | **Audience page**: rendering only — ATH, charts, tables, CSV export |
+| `public/audience-stats.js` | 231 | **Audience arithmetic**, deliberately separate so Node can test it. Loads as `window.AudienceStats` in the browser and `require()`s in tests |
+| `public/admin.js` | 1389 | Admin panel: add, edit, remove stations |
 | `public/guide.js` | 359 | In-app guide (content lives here as data) — 12 topics |
 | `public/login.js` | ~90 | Two-step sign-in |
 
@@ -263,7 +273,7 @@ rounding error: `/live_64` regularly carries a third of KPFT Main's audience
 | **TOTAL LISTENERS leads the page** | Reach, not concurrency. Every rise in the listener count is an arrival, so tune-ins are derivable with no credentials — 844 today against a concurrent peak of 178, and 1,269 against 193 on the busiest day. A listener-supported station quoting the concurrent figure understates itself four to nine fold to funders. Peak and average are kept, ranked below it |
 | Reach comparison withheld when the earlier period is under-recorded | Caught in the live audit the day tune-ins shipped: last week fell outside raw retention and its rollups predated tune-in recording, so it returned 1,339 against this week's 5,813 and the page announced **+376%** — entirely an artefact. Both windows must be fully recorded before a percentage is computed |
 | Tune-ins frozen onto rollups at compaction | An hourly average cannot show that forty listeners left as forty arrived. Miss the window when raw samples expire and the churn is unrecoverable |
-| **Listener NUMBERS lead the page** | The page had drifted to answering "how much listening was delivered" when the first question a station asks is "how many people". Headcounts for today / this week / this month now head it, each with peak and average against the same elapsed span of the previous period; listening hours moved to the bottom |
+| **Listener NUMBERS lead the page** | The page had drifted to answering "how much listening was delivered" when the first question a station asks is "how many people". Headcounts for today / this week / this month now head it, each with peak and average against the same elapsed span of the previous period; listening hours moved to the bottom. **The calendar periods here were SUPERSEDED 2026-09-01 by rolling windows — see §5e. Reach leading the page was not.** |
 | Distinct listeners shown as unavailable | Icecast reports how many connections exist, not who they are, so no polling rate yields "1,800 different people". The card states that rather than omitting it or quietly presenting a concurrent figure as a headcount |
 | **True concurrent peak** | The page reported the SUM of each channel's separate high-water mark — a total the station never reached at any one moment. Measured against production: it said 212 where the real simultaneous peak was 179, an 18% overstatement. Now computed from the channels summed per bucket, and carries the timestamp, because a peak with no "when" is trivia |
 | Listener figures the page lacked | Quietest moment (the floor the station holds), "now vs typical for this hour" from the hour profile, and a day-by-day table of average / peak / low / hours |
@@ -488,6 +498,64 @@ carried**: the id collision WAS the evidence that this is the same station.
 
 ---
 
+## 5e. What changed on 2026-09-01: rolling windows, and a comparison that lied
+
+**It began as a reported emergency that was not one.** The operator opened the
+audience page on the morning of 1 September and found "This month" reading 415
+where it had read thousands — over a week of KPFT data apparently wiped.
+
+Nothing was lost. Every sample since 2026-08-04 was intact: 504 hourly rollups
+(Aug 4 → Aug 25) joining seamlessly to 10,060 raw samples per channel (Aug 25 →
+Sep 1). The container had restarted ~11 hours earlier and the volume had carried
+everything through. **The page looked empty because it was the 1st of the month
+and the card had reset to nine hours old.**
+
+That is the finding worth inheriting: *a calendar period on a live dashboard
+spends most of its life partly elapsed, and looks broken while it does.*
+
+| Change | Why |
+|---|---|
+| **Peak and average gated like reach** | The `comparable` flag guarded `totalListeners` only. Its two neighbours were computed from the same pair of windows, ungated, and printed **+887% peak / +989% average** on production from a window holding 33 readings against 1,969 |
+| **Comparisons levelled to a shared resolution** | Withholding those figures would hide them for ever — a 7-day window always outlives 7-day raw retention, so the older side is always hourly. `concurrentBetween(..., 'hour')` coarsens the finer side; the headline peak stays a peak MINUTE and only the percentage uses the levelled pair |
+| **Calendar periods → rolling windows** | Last 24 hours / 7 days / 30 days. `30d ⊇ 7d ⊇ 24h` by construction, so no card can report less than the one inside it, and nothing collapses at a midnight or a 1st |
+| **`recordedFrom` per figure** | A window can reach back further than the recording behind it, and reach and levels began on DIFFERENT days (2026-08-24 vs 2026-08-04). That is why one row on a card compares and the row beneath it says there is not enough history — now stated on the card instead of guessed at |
+| `hoursCovered` counts **whole** hours | See the trap in §8. Counting partial edges withheld the 7-day and 30-day comparisons permanently |
+| `COMPARISON_COVERAGE_FLOOR = 0.9` | 100% coverage meant a single missed hour voided a whole week |
+| `periodBounds()` deleted | Dead once the cards stopped using calendars. `monthStartMs` / `zonedMidnightMs` still serve daily buckets and monthly ATH |
+
+### Corrections worth inheriting
+
+- **The reported bug was not a bug, and saying so quickly mattered more than
+  fixing anything.** The right first move was to prove the data existed — count
+  the samples and the rollups and show the range — not to start editing. Two real
+  bugs were then found *while checking*, which is a different thing from the one
+  reported.
+- **I shipped a bug in the fix, and it was invisible to the test suite.**
+  Requiring the previous window to cover every hour of its span looked correct and
+  passed every test, because the tests used hour-aligned fixtures. `now` is never
+  hour-aligned in production, so a rollup-backed window was always 1–2 hours short
+  and the 7-day and 30-day comparisons would have been withheld **for ever** —
+  the exact failure the levelling was written to avoid. Found only by asking "will
+  this actually start working as data accumulates?" and checking against live
+  data rather than reasoning about it. **`test/counts-comparability.test.js` now
+  uses a deliberately non-hour-aligned `now`.**
+- **A gate can do more damage than the artefact it guards against.** The first
+  coverage rule demanded 100% and one genuine monitoring gap — 24 Aug at 01:00 —
+  silently withheld a week of comparison. A guard that fires on ordinary
+  conditions is not conservative, it is broken.
+- **The 7-day rise is not yet known to be audience growth.** The card now reads
+  +79.2% peak / +71.1% average against the previous week. KPFT HD3
+  (`/classic_country`) has a `streamStart` of 2026-08-29 — inside the current
+  window, absent from the comparison one. A station-wide total that grew because
+  the station grew is not wrong, but it must not be quoted to a funder as
+  audience growth. Open as item 0.6 in the phase plan.
+- **Two flags, not one.** `totalListenersComparable` and `concurrencyComparable`
+  are separate because they fail for different reasons and either can be true
+  while the other is false. Collapsing them back into one flag reintroduces the
+  original bug.
+
+---
+
 ## 6. Where it is going
 
 > **Sequencing lives in [`docs/PHASE-PLAN.md`](docs/PHASE-PLAN.md)** — one
@@ -526,8 +594,19 @@ Build order, with the current position marked:
    with per-channel and per-mount breakdowns and CSV export
 9. 🔶 **Audience page phase 1** — [`docs/AUDIENCE-ROADMAP.md`](docs/AUDIENCE-ROADMAP.md)
    §4. ATH against the SoundExchange threshold ✅ and trend vs previous period ✅
-   shipped 2026-08-28. Still to do: day-of-week × hour heatmap, audience retained
-   through an outage, per-mount trend over time
+   shipped 2026-08-28; the headline cards were rebuilt as **rolling windows** ✅
+   2026-09-01 (§5e). Still to do: day-of-week × hour heatmap, audience retained
+   through an outage, per-mount trend over time, and **month-to-month by name**
+9b. **Month-to-month, by name — "October vs September".** The rolling cards
+    deliberately cannot answer this; a GM writing a board report or a funder
+    update asks about a NAMED month. **Date-gated, not effort-gated:** recording
+    began 2026-08-04, so August is partial and can never be an honest term.
+    September is the first complete month, October the second, so the first
+    truthful comparison is **available 2026-11-01**. The data is already safe —
+    hourly rollups are never pruned. Rules it inherits, and why shipping it early
+    reintroduces the `+376%` artefact, in
+    [`docs/AUDIENCE-ROADMAP.md`](docs/AUDIENCE-ROADMAP.md) §4 item 6 and
+    [`docs/PHASE-PLAN.md`](docs/PHASE-PLAN.md) item 2.6
 10. Fleet view
 10b. **Icecast admin access** — scoped 2026-08-31 in
     [`docs/ADMIN-ACCESS-SCOPE.md`](docs/ADMIN-ACCESS-SCOPE.md). Both production
@@ -651,18 +730,55 @@ Reviewed end to end on 2026-08-27; findings and reasoning in
   `VARIANT_PROBE_EVERY` cycles. Making the cycle "faster" by fetching the
   snapshot and probing in parallel again would corrupt every audience figure
   the system stores, permanently and invisibly.
-- **A period is compared against the SAME ELAPSED SPAN of the previous one.**
-  Nine days of this month measured against all thirty-one of last month reports a
-  collapse every single month, for ever. `getListenerCounts()` builds the
-  comparison window from `elapsedMs`; `test/listener-counts.test.js` has the
-  fixture where getting it wrong flips a real 20% drop into an 86% rise.
-- **Never compute a percentage against a partially-recorded period.** Tune-ins
+- **THE AUDIENCE CARDS ARE ROLLING WINDOWS, NOT CALENDAR PERIODS, and putting
+  calendar periods back is a regression.** They are the last 24 hours, 7 days and
+  30 days, each against the window of equal length immediately before it. A
+  calendar period spends most of its life partly elapsed: on 1 September the page
+  read **415 for "This month" beside 1,809 for "This week"** — a month smaller
+  than the week inside it — and it was reported as catastrophic data loss by the
+  operator, who was right that it made no sense and wrong that anything was lost.
+  `30d ⊇ 7d ⊇ 24h` is now true by construction. `test/listener-counts.test.js`
+  asserts the nesting and asserts every window is its full length on the 1st of a
+  month and five minutes into a Monday. **Calendar months are not gone** — they
+  belong where naming the period is the point (§6 item 2.6, due 2026-11-01).
+- **A ROLLING WINDOW IS THE SAME SPAN IN EVERY TIMEZONE, which retired a whole
+  class of bug rather than fixing it.** A calendar month starts at a different
+  instant in every zone, which once measured the network over a window no station
+  kept: "All stations · This month" read 805 beside KPFT's own 10,560. There is
+  no per-station boundary left to disagree about.
+  `test/aggregate-not-less-than-part.test.js` now asserts the result does not
+  depend on which zone is named. The `groups`/`timeZone` argument survives only
+  because the payload still reports which clock the CHART is drawn on.
+- **NEVER COMPUTE A PERCENTAGE ACROSS TWO DIFFERENT KINDS OF MEASUREMENT.** Raw
+  samples last `SAMPLE_RETENTION_DAYS` and then compact to hourly rollups, so any
+  window longer than that compares a per-minute present against an hourly past —
+  and hourly averaging flattens every spike, so one side's "peak" is a peak MINUTE
+  and the other's is a peak HOUR. Measured on production 2026-09-01: **+887% on
+  peak and +989% on average** from a previous window holding 33 readings against
+  1,969. Withholding it would hide it for ever, because a 7-day window will always
+  outlive raw retention — so `concurrentBetween(ids, from, to, 'hour')` coarsens
+  the finer side and the percentage comes from the levelled pair, while the
+  headline peak stays at full resolution. `comparisonResolution` says which basis
+  was used and the card prints it.
+- **Never compute a percentage against a partially-recorded window.** Tune-ins
   exist in raw samples for the retention window and on rollups only for hours
   compacted since the feature shipped. An older window returns a partial total,
   and dividing by it manufactures a number a station would repeat in a board
-  meeting. `getListenerCounts()` sets `totalListenersComparable: false` and
-  withholds the figure; the card says "not enough recorded history" rather than
-  showing a bare dash that reads as a fault.
+  meeting. `totalListenersComparable: false` withholds reach;
+  `concurrencyComparable: false` withholds peak and average. **Both flags exist
+  because they fail for different reasons and one can be true while the other is
+  false** — the original bug was that only reach was gated while its two
+  neighbours, built from the same pair of windows, were not.
+- **THE COVERAGE CHECK COUNTS WHOLE HOURS, AND THE EDGES ARE EXCLUDED ON PURPOSE.**
+  `now` is never on an hour boundary, so a window's first and last hours are
+  fractions, and an hourly rollup sits on an exact boundary and can never fill a
+  fraction. Counting the edges left every rollup-backed window permanently 1–2
+  hours short of its own span, which withheld the 7-day and 30-day comparisons
+  **for ever** — shipped, and caught only by asking why a comparison that should
+  have started working had not. `hoursCovered` counts buckets fully inside the
+  window; callers compare it against the hours the window fully contains.
+  `COMPARISON_COVERAGE_FLOOR` (0.9) then allows a real gap: demanding 100%
+  meant one missed hour (24 Aug 01:00) voided a whole week.
 - **Reach is the headline, not concurrency.** "How many listened" and "how many
   at once" differ by four to nine times on this record. The concurrent figure is
   about server load; reach is what a listener-supported station reports to
@@ -895,7 +1011,7 @@ Reviewed end to end on 2026-08-27; findings and reasoning in
 ## 9. Verifying a change
 
 ```bash
-npm test                                             # 355 tests
+npm test                                             # 390 tests
 node --check server.js monitor.js store.js diagnose.js auth.js
 
 # Against production
@@ -904,7 +1020,15 @@ curl -s .../api/stations   | jq     # what it thinks it monitors
 curl -s .../api/status     | jq     # per-channel state and variant counts
 curl -s .../api/diagnostics| jq     # the Icecast inventory it can see
 curl -s '.../api/stats?days=1' | jq .storage    # event count, oldest event
+
+# The audience cards. Station scoping is `stationId`, NOT `station` — a wrong
+# name is silently ignored and you get every station's figures instead.
+curl -s '.../api/listeners?days=7&stationId=kpft' | jq '.counts | {day,week,month}'
 ```
+
+**The audience invariant, checkable in one line:** `day ≤ week ≤ month` for
+`totalListeners`. If a longer window ever reports less than a shorter one,
+something has reintroduced calendar periods or broken the window arithmetic.
 
 **After any redeploy, confirm the volume survived** by checking `oldestEvent` is
 still `2026-08-04T17:52:53.123Z`. Comparing counts alone proves nothing when the
@@ -932,4 +1056,14 @@ count could be zero — zero survives everything.
    in [`docs/AUDIENCE-ROADMAP.md`](docs/AUDIENCE-ROADMAP.md) §4.1–4.2.
 5. **Did the retry actually reduce alert noise?** 32% of events were `unknown`
    before it. Re-measure after a week of production data — around 2026-09-03 —
-   rather than assuming.
+   rather than assuming. **Due in days, still unmeasured as of 2026-09-01.**
+6. **Is the 7-day audience rise real?** The week card reads +79.2% peak / +71.1%
+   average against the previous week. KPFT HD3 (`/classic_country`) started
+   2026-08-29 — inside the current window, absent from the comparison one — so
+   part of that may be a channel appearing rather than listeners arriving. Check
+   before anyone quotes it to a funder. Phase plan item 0.6.
+7. **Where does month-to-month belong on the page?** Item 9b is dated
+   (2026-11-01) but not designed. The rolling cards must stay the headline — they
+   answer "how are we doing right now" — so a named-month comparison is a second
+   surface, not a fourth card. Undecided whether it lives on the audience page,
+   the history page, or the roundup email.

@@ -200,15 +200,50 @@ real figure."
    real data — weekends average 69–78 against 43–47 on Monday and Tuesday. The
    full hour × weekday grid is still to do.
 3. ✅ **SHIPPED 2026-08-28. Listener NUMBERS, and trend against the previous
-   period.** Headcounts — peak and average concurrent — for today, this week and
-   this month, each against the same elapsed span of the period before. This is
-   the page's headline; listening hours sit below it. Note what is still *not*
-   answerable: a count of distinct people needs per-listener records, so the card
-   for it says "unavailable for this server" rather than showing a concurrent
-   figure under a name that would misdescribe it. Withheld — null,
-   not zero — unless we watched for the whole of the earlier window, because a
-   monitor running four days comparing week against week reports a collapse in
+   period.** This is the page's headline; listening hours sit below it. Note what
+   is still *not* answerable: a count of distinct people needs per-listener
+   records, so the card for it says "unavailable for this server" rather than
+   showing a concurrent figure under a name that would misdescribe it. Withheld —
+   null, not zero — unless we watched for the whole of the earlier window, because
+   a monitor running four days comparing week against week reports a collapse in
    listening that only happened to the recording.
+
+   **REWRITTEN 2026-09-01 to ROLLING WINDOWS.** It first shipped as calendar
+   periods — today, this week, this month — each against the same elapsed span of
+   the period before. A calendar period spends most of its life partly elapsed,
+   and on 1 September the page read **415 for "This month" beside 1,809 for "This
+   week"**: a month smaller than the week inside it, correct to the hour, and read
+   by the operator and everyone he showed it to as catastrophic data loss.
+
+   The cards are now **Last 24 hours / Last 7 days / Last 30 days**, each against
+   the window of equal length immediately before it. `30d ⊇ 7d ⊇ 24h` always, so
+   the figures are monotonic by construction and no card can report less than the
+   one inside it. It also retired the whole timezone class of bug — a rolling
+   window is the same span in every zone, so an all-stations total can no longer
+   fall below one of its members. Calendar months did not go away; they moved to
+   where naming the period is the point (item 6 below).
+
+6. **Month-to-month, by name — "September vs October".** ← NOT YET BUILT.
+   The rolling cards deliberately cannot answer this: "last 30 days" is a moving
+   window, and a GM preparing a board report, a pledge drive or a funder update
+   asks about a NAMED month. The data supports it already — hourly rollups are
+   never deleted, so any past month stays readable indefinitely — but nothing in
+   the app builds the comparison.
+
+   **Entry condition: two COMPLETE calendar months.** Recording began
+   2026-08-04, so August is partial and cannot be a term in an honest comparison.
+   September is the first complete month; October is the second. **The first
+   truthful month-vs-month comparison is October vs September, available
+   2026-11-01.** Building it earlier is fine; shipping a comparison whose earlier
+   term is a partial month is the `+376%` artefact wearing a different label.
+
+   Three rules it inherits, none of them optional:
+   - A month is bounded on the **station's own clock** (`monthStartMs`), not UTC.
+   - Both terms must be **fully recorded**, or the percentage is withheld —
+     the same gate the rolling cards use.
+   - A month older than `SAMPLE_RETENTION_DAYS` is hourly-rollup data, so a
+     month-vs-month peak is a peak HOUR on both sides. Compare like with like or
+     say which it is; do not put an hourly peak in a ratio with a minute peak.
 4. **Audience retained through an outage.** We hold the outage record and the
    audience curve in the same store; nobody else can join those two.
 5. **Per-mount trend over time**, not just the current split — does the
