@@ -40,6 +40,37 @@ with the same name and a split audience.
 relay on Pacifica's shared host (~12). Both are worth monitoring; they are
 separate stations in the app because they are separate servers.
 
+## WPFW is relayed on WBAI's server — and is currently filed under WBAI
+
+`streaming.wbai.org` carries three mounts, and one of them is not WBAI's:
+
+| Mount | Icecast name | Whose programme |
+|---|---|---|
+| `/wbai_verizon` | WBAI (Verizon) | WBAI |
+| `/wbai_spectrum` | WBAI (Spectrum) | WBAI |
+| `/wpfw_128` | **WPFW Washington** | **WPFW** — a relay, ~2 listeners |
+
+**In the live config that third mount is a channel of station `wbai`**, named
+"WPFW Eckington 1". So WBAI's audience totals include a couple of WPFW's
+listeners, and a failure on that mount would alert WBAI's recipients about
+WPFW's programme.
+
+**It should belong to station `wpfw`**, whose audience it is: WPFW's real total
+is its Pacifica origin plus this relay. Move it in the admin panel — edit the
+WBAI station, remove the "WPFW Eckington 1" channel, then paste
+`https://streaming.wbai.org/wpfw_128` and take the offer to add it to WPFW
+Washington DC. (The one argument the other way: the *server* that would fail is
+WBAI's, so WBAI's engineers may want the alert. Audience accounting and paging
+disagree here; the audience is the reason the app exists.)
+
+**How it got there, and why it cannot happen again.** Discovery classified it
+correctly — different call sign, so it was listed under "other channels on this
+server — other stations, most likely" — but the checkbox arrived *ticked*,
+because the panel decided pre-ticking from `sharedHost` ("more than three
+channels on this server") rather than from that classification. WBAI's host has
+exactly three. `discover.summarise()` now returns `proposed` per channel and the
+panel obeys it; see `test/discovery-proposal.test.js`.
+
 ## Icecast status endpoints — what the monitor reads
 
 | Host | Status URL |

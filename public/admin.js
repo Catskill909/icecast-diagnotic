@@ -269,9 +269,13 @@
     // stations' streams.
     const mine = all.filter((c) => c.matched || c.sameStation);
     const others = all.filter((c) => !c.matched && !c.sameStation);
+    // The server decides this, beside the classification that produces `mine`
+    // and `others` — see discover.js. Re-deriving it here from `sharedHost` is
+    // what pre-ticked another station's stream into WBAI.
+    const preTicked = (c) => (c.proposed !== undefined ? c.proposed : (c.matched || !d.sharedHost));
     const row = (c, i) => `
       <label class="ch${c.matched ? ' matched' : ''}">
-        <input type="checkbox" data-i="${i}" ${c.matched || !d.sharedHost ? 'checked' : ''}>
+        <input type="checkbox" data-i="${i}" ${preTicked(c) ? 'checked' : ''}>
         <span class="ch-body">
           <span class="ch-name">${esc(c.name)}${
             c.matched ? '<span class="tag">the URL you pasted</span>'

@@ -258,6 +258,28 @@ function summarise(snapshot, pastedPath, origin) {
     }
   }
 
+  // WHICH CHANNELS THE FORM ARRIVES WITH TICKED — decided here, beside the
+  // classification, rather than re-derived in the browser from a proxy for it.
+  //
+  // The admin panel used to tick everything whenever `sharedHost` was false,
+  // and `sharedHost` is merely "more than three channels on this server". On a
+  // smaller host that silently contradicted the judgement made directly above.
+  // streaming.wbai.org carries exactly three mounts, one of them named "WPFW
+  // Washington": the panel listed it under "other stations, most likely" AND
+  // pre-ticked it, so a WPFW relay was added to WBAI and reported its listeners
+  // as WBAI's audience.
+  //
+  // A channel positively identified as another station's is never proposed. The
+  // number of mounts on a server says nothing about who owns them.
+  const sharedHost = channels.length > 3;
+  const anyIdentified = channels.some((c) => c.matched || c.sameStation);
+  for (const c of channels) {
+    // With no call sign to reason from — a status URL was pasted, meaning "this
+    // whole server" — there is no classification to honour and size is the only
+    // signal left.
+    c.proposed = anyIdentified ? !!(c.matched || c.sameStation) : !sharedHost;
+  }
+
   return {
     matchedChannelId: matched ? matched.id : null,
     callSign: callSign || null,
@@ -267,7 +289,7 @@ function summarise(snapshot, pastedPath, origin) {
     mountCount: mounts.length,
     channelCount: channels.length,
     totalListeners: channels.reduce((s, c) => s + c.listeners, 0),
-    sharedHost: channels.length > 3,
+    sharedHost,
     channels,
   };
 }
