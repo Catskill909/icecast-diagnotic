@@ -233,7 +233,15 @@
   // data is in hand, so a round trip would be latency bought for nothing.
 
   let filterQuery = '';
-  let sortMode = 'default';
+  // Alphabetical, because it is the only order a reader can PREDICT.
+  //
+  // This used to open in "Default order", which was the order channels happened
+  // to be added to the config. It was offered as "the arrangement the operator
+  // chose", but nothing in the app lets an operator arrange anything — there is
+  // no reordering, and the config carries no order field. So it named itself by
+  // its position in the menu rather than by what it did, and what it did was
+  // unpredictable and changed whenever a station was added.
+  let sortMode = 'name';
 
   /**
    * Problems first.
@@ -269,9 +277,10 @@
 
   function sortStreams(list) {
     const out = [...list];
+    const byName = (a, b) => String(a.name || '')
+      .localeCompare(String(b.name || ''), undefined, { sensitivity: 'base' });
+
     switch (sortMode) {
-      case 'name':
-        return out.sort((a, b) => String(a.name || '').localeCompare(String(b.name || ''), undefined, { sensitivity: 'base' }));
       case 'listeners':
         // Null is "not measured", which is not the same as zero and must not
         // outrank a real count of none.
@@ -279,10 +288,12 @@
       case 'response':
         return out.sort((a, b) => (a.responseTime ?? Infinity) - (b.responseTime ?? Infinity));
       case 'status':
-        return out.sort((a, b) => statusRank(a) - statusRank(b) || String(a.name || '').localeCompare(String(b.name || '')));
+        return out.sort((a, b) => statusRank(a) - statusRank(b) || byName(a, b));
+      case 'name':
       default:
-        // Configuration order: the arrangement the operator chose.
-        return out;
+        // Alphabetical is also the fallback, so an unrecognised value can never
+        // leave the list in whatever order the payload happened to arrive in.
+        return out.sort(byName);
     }
   }
 
