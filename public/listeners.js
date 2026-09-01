@@ -211,6 +211,20 @@
     // that is why one row compares and the row beneath it says there is not
     // enough history, which reads as a fault rather than as a start date.
     const since = (iso) => new Date(iso).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+
+    // A HEADING THAT STATES A SPAN THE DATA DOES NOT COVER IS NOT FIXABLE BY A
+    // FOOTNOTE. "LAST 30 DAYS" over eight days of arrivals is the line that gets
+    // read, screenshotted and quoted; the correction under it is read second, if
+    // at all. So the heading carries the real span itself whenever recording
+    // began inside the window — the same treatment the history page's range pill
+    // already gives a monitor younger than its selected range.
+    const spanLabel = (p, d, from) => {
+      if (!from.arrivals || !d.end) return esc(p.label);
+      const days = (Date.parse(d.end) - Date.parse(from.arrivals)) / 86400000;
+      if (!isFinite(days) || days <= 0) return esc(p.label);
+      const n = days < 10 ? days.toFixed(1) : Math.round(days);
+      return `${esc(p.label)}<span class="cc-label-partial"> · only ${esc(n)} days recorded</span>`;
+    };
     const recordedNote = (iso, what) => (iso
       ? `<div class="cc-partial">Counted from ${esc(since(iso))} — ${esc(what)} before then were not recorded, so this is a floor, not a total.</div>`
       : '');
@@ -233,7 +247,7 @@
       // server load. They differ six to nine fold, so leading with the wrong one
       // understates the station by an order of magnitude.
       return `<div class="count-card headline">
-        <div class="cc-label">${esc(p.label)}</div>
+        <div class="cc-label">${spanLabel(p, d, from)}</div>
         <div class="cc-total">${d.totalListeners == null ? '—' : esc(d.totalListeners.toLocaleString())}</div>
         <div class="cc-total-l">total listeners — times someone tuned in</div>
         ${d.totalListenersComparable === false

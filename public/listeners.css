@@ -399,6 +399,15 @@
   color: var(--text-tertiary);
 }
 
+/* The part of the heading that contradicts the rest of it. Amber because it is
+   a caveat on the number below, and it has to be readable at a glance from the
+   heading itself — the reason it exists is that the footnote was not. */
+.cc-label-partial {
+  color: var(--warn);
+  font-weight: 600;
+  letter-spacing: 0.04em;
+}
+
 /* The headcount. Deliberately the largest thing on the page — it is the first
    question anyone asks, and listening-hours answers a different one. */
 .cc-peak {
@@ -430,7 +439,7 @@
 
 .cc-delta.up { color: var(--status-up); background: var(--status-up-surface); }
 .cc-delta.down { color: var(--warn); background: var(--warn-surface); }
-.cc-delta.none { font-weight: 500; }
+.cc-delta.none { font-weight: 500; color: var(--text-secondary); }
 
 .cc-row {
   display: flex;
@@ -504,9 +513,12 @@
 
 .cc-partial {
   margin-top: 8px;
-  font-size: 10px;
-  line-height: 1.4;
-  color: var(--text-tertiary);
+  font-size: 11px;
+  line-height: 1.45;
+  /* Was --text-tertiary at 10px: about 3:1 on this surface, under the AA floor
+     for small text. This text is the only thing that stops a floor being read
+     as a total, so it has to survive being glanced at. */
+  color: var(--text-secondary);
 }
 
 /* What the percentage beside it was actually measured against. Full width so it
@@ -516,7 +528,7 @@
   margin-top: 4px;
   font-size: 10px;
   line-height: 1.35;
-  color: var(--text-tertiary);
+  color: var(--text-secondary);
   text-align: right;
 }
 
