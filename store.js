@@ -1482,8 +1482,8 @@ function mergedDowntimeMs(list) {
  * configurable and a hard-coded one-minute assumption would silently mis-scale
  * the whole figure if it were ever changed.
  */
-function getListeningDelivered(streamIds, windowMs) {
-  const cutoff = Date.now() - windowMs;
+function getListeningDelivered(streamIds, windowMs, now = Date.now()) {
+  const cutoff = now - windowMs;
   let listenerMinutes = 0;
 
   for (const id of streamIds) {
@@ -1919,8 +1919,8 @@ function monthStartMs(timeZone, now = Date.now()) {
 }
 
 /** Listening hours over a window. The unit ATH is quoted in. */
-function getAth(streamIds, windowMs) {
-  return getListeningDelivered(streamIds, windowMs) / 60;
+function getAth(streamIds, windowMs, now = Date.now()) {
+  return getListeningDelivered(streamIds, windowMs, now) / 60;
 }
 
 /**
@@ -1933,13 +1933,12 @@ function getAth(streamIds, windowMs) {
  * whole purpose is warning about a threshold. `partial` says when that applies
  * so the UI can mark the figure rather than quietly showing a smaller one.
  */
-function getMonthToDateAth(streamIds, timeZone = 'UTC') {
-  const now = Date.now();
+function getMonthToDateAth(streamIds, timeZone = 'UTC', now = Date.now()) {
   const startMs = monthStartMs(timeZone, now);
   const endMs = zonedMidnightMs(firstOfNextMonth(zonedDayKey(now, timeZone)), timeZone);
 
   const elapsedMs = Math.max(1, now - startMs);
-  const ath = getAth(streamIds, elapsedMs);
+  const ath = getAth(streamIds, elapsedMs, now);
 
   const coverageStart = getCoverageStart(streamIds);
   const coveredFromMs = coverageStart

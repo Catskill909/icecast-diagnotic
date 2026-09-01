@@ -56,16 +56,6 @@
       </div>
     </header>
 
-    <div class="range-bar fade-in">
-      <div class="range-pills" id="range-pills">
-        <button type="button" class="range-pill" data-days="1">24H</button>
-        <button type="button" class="range-pill active" data-days="7">7D</button>
-        <button type="button" class="range-pill" data-days="30">30D</button>
-        <button type="button" class="range-pill" data-days="90">90D</button>
-      </div>
-      <span class="range-note" id="range-note"></span>
-    </div>
-
     <!-- HEADCOUNTS. The first question anyone asks, so it leads the page. -->
     <div class="section-title">
       <span class="material-symbols-outlined">groups</span>
@@ -95,6 +85,23 @@
       <span class="section-hint" id="counts-hint"></span>
     </div>
     <div class="count-cards fade-in" id="count-cards"></div>
+
+    <!-- THE RANGE STARTS HERE, and everything above it is deliberately outside.
+         The cards above are CALENDAR periods — today, this week, this month —
+         and no range pill can change what "this month" means. Sitting at the top
+         of the page the pills read as governing the whole of it, so clicking one
+         looked like a dead control: the biggest numbers on the screen never
+         moved. They now open the only region they actually change. -->
+    <div class="range-bar fade-in">
+      <span class="range-label">Range for everything below</span>
+      <div class="range-pills" id="range-pills">
+        <button type="button" class="range-pill" data-days="1">24H</button>
+        <button type="button" class="range-pill active" data-days="7">7D</button>
+        <button type="button" class="range-pill" data-days="30">30D</button>
+        <button type="button" class="range-pill" data-days="90">90D</button>
+      </div>
+      <span class="range-note" id="range-note"></span>
+    </div>
 
     <!-- Right now -->
     <div class="aud-tiles fade-in" id="aud-tiles"></div>

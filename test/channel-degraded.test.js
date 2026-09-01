@@ -663,9 +663,9 @@ test('the audience payload carries what the page renders from', () => {
 
 const MIN = 60 * 1000;
 
-function seedAth(id, { listeners, minutes, endingMsAgo = 0 }) {
+function seedAth(id, { listeners, minutes, endingMsAgo = 0, now = Date.now() }) {
   store.ensureStreams([id]);
-  const end = Date.now() - endingMsAgo;
+  const end = now - endingMsAgo;
   for (let i = minutes; i > 0; i--) {
     store.addSample(id, {
       timestamp: new Date(end - i * MIN).toISOString(),
@@ -675,6 +675,20 @@ function seedAth(id, { listeners, minutes, endingMsAgo = 0 }) {
     });
   }
 }
+
+/**
+ * A moment with a month already well underway.
+ *
+ * PINNED, because these assertions are about a month that started before we
+ * were watching — and the wall clock supplies that for twenty-nine days in
+ * thirty. Run in the first hours of the 1st, the elapsed month is SHORTER than
+ * the fixture's own hour of history, so coverage stops being a subset of the
+ * month and both invariants inverted. CI went red at 01:00 UTC on 1 September
+ * having been green all August, on a commit that touched none of this.
+ *
+ * A test whose result depends on the day it runs is not testing the code.
+ */
+const MID_MONTH = Date.parse('2026-08-14T12:00:00.000Z');
 
 test('ATH is listener-hours: ten listeners for an hour is ten', () => {
   seedAth('ath1', { listeners: 10, minutes: 60 });
@@ -711,7 +725,10 @@ test('the figure always declares itself an estimate', () => {
 
 test('a month that began before monitoring did is flagged partial', () => {
   // Otherwise the month-to-date figure reads as a total when it is a floor.
-  const m = store.getMonthToDateAth(['ath1'], 'UTC');
+  // An hour of history, thirteen days into the month: the month plainly began
+  // first, and that is the case the flag exists for.
+  seedAth('ath-partial', { listeners: 10, minutes: 60, now: MID_MONTH });
+  const m = store.getMonthToDateAth(['ath-partial'], 'UTC', MID_MONTH);
   assert.equal(m.partial, true, 'this stream has minutes of history, not a month');
   assert.ok(m.coveredMs < m.elapsedMs, 'and the covered span says so');
 });
@@ -721,7 +738,8 @@ test('the projection is rated over what was watched, not the elapsed month', () 
   // stretch of month in its record that was not a stretch of no listeners.
   // Rating over elapsed time would project far too low — on the one number whose
   // entire purpose is warning about a threshold.
-  const m = store.getMonthToDateAth(['ath1'], 'UTC');
+  seedAth('ath-proj', { listeners: 10, minutes: 60, now: MID_MONTH });
+  const m = store.getMonthToDateAth(['ath-proj'], 'UTC', MID_MONTH);
   const elapsedRate = (m.ath / m.elapsedMs) * (new Date(m.monthEnd) - new Date(m.monthStart));
   assert.ok(
     m.projected > elapsedRate * 2,

@@ -20,6 +20,16 @@
   color: var(--text-tertiary);
 }
 
+/* Names what the pills govern. Without it the bar is four numbers floating
+   between two sections, and a reader has to click one to find out which of the
+   two it moves. */
+.range-label {
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: var(--text-secondary);
+}
+
 /* ── Headline tiles ─────────────────────────────────────────────────────── */
 
 .aud-tiles {
