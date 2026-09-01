@@ -151,6 +151,33 @@ test('a previous window the monitor only saw the end of is not compared at all',
   assert.equal(c.week.peak, 180, 'the window still reports its own peak');
 });
 
+test('a window with partial edge hours is still counted as fully measured', () => {
+  // `now` almost never lands on an hour boundary, so a window's first and last
+  // hours are fractions — and an hourly rollup sits on an exact boundary and can
+  // never fill a fraction. Counting the edges left every rollup-backed window one
+  // or two hours short of its own span for ever, which withheld the 7-day and
+  // 30-day comparisons permanently. Caught on live data: 167 hours needed, 167
+  // available, and the comparison refused because the span was measured as 169.
+  seed();
+  const offset = NOW + 37 * MINUTE;   // deliberately not on the hour
+  const c = freshStore().getListenerCounts(['a'], TZ, offset);
+
+  assert.equal(c.week.concurrencyComparable, true,
+    'partial edges are not missing data — they are outside the whole hours');
+  assert.equal(c.week.comparisonResolution, 'hour');
+});
+
+test('a single missed hour does not void a whole week of comparison', () => {
+  // A monitor restart costs an hour. Demanding all 168 meant one gap silently
+  // withheld the week-over-week figure — the guard doing more damage than the
+  // artefact it exists to prevent. 167 of 168 is a measurement of that window.
+  seed({ prevHoursCovered: PREV_WEEK_HOURS - 1 });
+  const c = freshStore().getListenerCounts(['a'], TZ, NOW);
+
+  assert.equal(c.week.concurrencyComparable, true, 'one hour short is still measured');
+  assert.equal(c.week.changePct.peak, 0, 'and the levelled comparison still reads flat');
+});
+
 test('NO figure is ever compared against a window the gate rejected', () => {
   // The class, not the instance. The original bug was that one metric was gated
   // and its two neighbours, built from the very same pair of windows, were not.

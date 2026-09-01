@@ -30,6 +30,21 @@ const SAMPLE_RETENTION_MS = SAMPLE_RETENTION_DAYS * 24 * 60 * 60 * 1000;
 const HOUR_MS = 60 * 60 * 1000;
 const DAY_MS = 24 * HOUR_MS;
 
+/**
+ * How much of the EARLIER window must actually have been measured before a
+ * percentage may be divided out of it.
+ *
+ * Not 100%: one missed check costs an hour, and demanding every hour withheld
+ * the week-over-week comparison on live data for a single gap at 01:00 on 24 Aug
+ * — 166 hours of 167. A monitor restart must not silently void a week.
+ *
+ * Not low either: the artefact this exists to stop divided by a window covering
+ * six hours of a hundred and sixty-eight. A tenth of a window missing can move
+ * an average; less than that cannot move it beyond the uncertainty the figure
+ * already carries as a floor estimate.
+ */
+const COMPARISON_COVERAGE_FLOOR = 0.9;
+
 // Safety ceiling. Events are never pruned by age, but an unbounded array would
 // eventually be a memory problem — at ~35 events/day this is roughly 8 years.
 const MAX_EVENTS = parseInt(process.env.MAX_EVENTS, 10) || 100000;
@@ -1720,12 +1735,18 @@ function concurrentBetween(streamIds, startMs, endMs, forceResolution) {
     usedRollup = true;
   }
 
+  // WHOLE HOURS ONLY, and the window's partial edges are excluded deliberately.
+  //
+  // `now` is never on an hour boundary, so the first and last hours of any window
+  // are fractions. An hourly rollup sits on an exact boundary and can never fill
+  // a fraction, so counting the edges would leave every rollup-backed window
+  // permanently one or two hours short of its own span — and any caller checking
+  // "was this fully measured" would answer no for ever. Callers must compare this
+  // against the hours the window FULLY contains, computed the same way.
   const hoursCovered = new Set([
     ...rawHours,
-    ...[...byHour.keys()]
-      .map((t) => Math.floor(t / HOUR_MS) * HOUR_MS)
-      .filter((h) => !rawHours.has(h)),
-  ]).size;
+    ...[...byHour.keys()].map((t) => Math.floor(t / HOUR_MS) * HOUR_MS),
+  ].filter((h) => h >= startMs && h + HOUR_MS <= endMs)).size;
 
   if (!points.length) {
     return { peak: null, avg: null, low: null, readings: 0, resolution: null, hoursCovered: 0 };
@@ -1866,10 +1887,16 @@ function getListenerCountsAcross(groups, now = Date.now()) {
     // outlive the raw window. So the fix is to compare like with like: coarsen
     // the finer side and measure both hourly. The headline peak stays at full
     // resolution — only the percentage is computed from the levelled pair.
-    const prevSpanHours = Math.floor((prevStartMs + elapsed - 1) / HOUR_MS)
-      - Math.floor(prevStartMs / HOUR_MS) + 1;
+    // The hours the previous window FULLY contains — matching how hoursCovered
+    // counts them, so a rollup-backed window can actually reach its own span.
+    const prevWholeHours = Math.max(
+      0,
+      Math.floor(startMs / HOUR_MS) - Math.ceil(prevStartMs / HOUR_MS),
+    );
     // Data for only the tail of a window is not a measurement of that window.
-    const prevFullyMeasured = previous.readings > 0 && previous.hoursCovered >= prevSpanHours;
+    const prevFullyMeasured = previous.readings > 0
+      && (prevWholeHours === 0
+        || previous.hoursCovered >= Math.ceil(prevWholeHours * COMPARISON_COVERAGE_FLOOR));
     const levelled = prevFullyMeasured && previous.resolution !== current.resolution
       ? {
         current: concurrentBetween(allIds, startMs, now, 'hour'),
