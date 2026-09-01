@@ -352,12 +352,13 @@ somebody had to hold in their head to answer "who gets told when this breaks".
 
 ---
 
-## 8. What "Could not save." taught us
+## 8. A failed request must say what failed
 
-An operator hit a save failure on the alert panel and reported the entire
-message: **"Could not save."** That was the whole diagnostic surface for four
-different failure modes — a rejected address, an exception in the route, a
-dropped connection, a proxy error — and it was not reproducible from either end.
+The alert panel once answered every save failure with the same three words:
+**"Could not save."** That was the whole diagnostic surface for four different
+failure modes — a rejected address, an exception in the route, a dropped
+connection, a proxy error — so the message named none of them and no report of
+one could be acted on.
 
 Three things were wrong, and all three are now fixed:
 
@@ -367,9 +368,7 @@ Three things were wrong, and all three are now fixed:
 | `api()` discarded a non-JSON body | `res.json().catch(() => ({}))` threw the evidence away. It now keeps the raw text |
 | Every failure rendered the same six words | `failureText()` distinguishes a validation error, a server error with its message, an unreachable server, and a bare status code |
 
-**It was not reproduced.** Tried against a copy of the production configuration,
-as a deployed instance with SMTP configured, and with a production-sized store
-(a 3.7 MB samples file, on the theory that a forced write behind a proxy was
-timing out — it took 14 ms). Every attempt returned HTTP 200. Recorded here as
-unexplained rather than quietly assumed fixed: the change guarantees the *next*
-occurrence names itself, which is not the same as knowing what happened.
+**The rule this leaves behind:** a route that can throw must return JSON on every
+path, the client must keep a non-JSON body rather than discarding it, and the
+message shown to an operator must distinguish the failure modes. A generic
+failure string is not an error message — it is the absence of one.

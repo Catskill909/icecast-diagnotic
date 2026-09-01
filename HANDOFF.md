@@ -377,14 +377,6 @@ and would have looked correct in review.
 | The test email is **scoped to its station** and names it | It rendered every stream the monitor watches. Testing an address just added to WPFW sent that person KPFT, KPFK and WBAI's listener counts — four cities' figures that are not theirs |
 | Removing a mount or a recipient asks first | Both consequences are invisible: a channel keeps working while its listener count quietly drops by whatever that mount carried, and a removed address simply stops being told |
 
-**"Could not save." was reported and could not be reproduced.** Tried against a
-copy of the production configuration, as a deployed instance with SMTP
-configured, and with a production-sized store — a 3.7 MB samples file, on the
-theory that the forced write was timing out behind the proxy; it took 14 ms.
-Every attempt returned HTTP 200. **Recorded as unexplained rather than assumed
-fixed.** The diagnostics change guarantees the next occurrence names itself,
-which is not the same as knowing what happened.
-
 ### Corrections worth inheriting
 
 - **The handoff's own figures were stale and were corrected**, not merely

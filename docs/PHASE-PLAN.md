@@ -33,7 +33,6 @@ forgotten if they are not written down.
 | | Item | State |
 |---|---|---|
 | 0.1 | **Deploy the uncommitted docs** | ✅ Done |
-| 0.2 | **"Could not save." is not root-caused** | **Still open.** Intermittent; reproduced never, across production config, deployed-instance conditions and a production-sized store. Diagnostics shipped so the next occurrence names itself. **Not a fix** |
 | 0.3 | **The alert dispatch has not fired in production since it was rewritten** | **Unverified as of 2026-09-01.** The roundup and a test message prove SMTP and scoping; whether a real outage has since reached a station with recipients has not been checked |
 | 0.4 | **Decide WPFW and KPFK recipients** | **Unverified as of 2026-09-01** — recipients are redacted from public responses, so this needs the admin panel to answer. If still empty, both stations are watched and can tell nobody |
 | 0.5 | **KPFA is on the shared host and unmonitored** | ✅ Done. Live with 2 channels across two Icecast hosts (§5d) |
