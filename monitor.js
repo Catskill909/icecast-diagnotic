@@ -964,6 +964,38 @@ function init() {
     .join(' · ');
   console.log(`[Monitor] Email alerts — ${routing || 'no stations configured'}`);
   console.log(`[Monitor] Retention: newest ${store.MAX_EVENTS} events, raw samples ${store.SAMPLE_RETENTION_DAYS}d then hourly rollups`);
+
+  /* SAY WHETHER DEEP ANALYTICS IS ON, AND IF NOT, WHY.
+     Without a credential this whole subsystem returns early and records
+     nothing — correctly, but SILENTLY, and the only symptom is an audience
+     figure that stays empty for ever. An operator who has typed two of the
+     three settings into a hosting panel has no way to discover the third from
+     outside the container, because the credential state is redacted from every
+     public response (rightly). So it is stated at startup, where they look. */
+  if (!LISTENER_DETAIL_ENABLED) {
+    console.log('[Monitor] Listener detail: DISABLED (LISTENER_DETAIL_ENABLED=false)');
+  } else {
+    const host = adminHost();
+    const hasUser = Boolean((process.env.ICECAST_ADMIN_USER || '').trim());
+    const hasPass = Boolean(process.env.ICECAST_ADMIN_PASSWORD);
+    if (host && hasUser && hasPass) {
+      console.log(
+        `[Monitor] Listener detail: ON for ${host} — individual listeners (cume), ` +
+        `device and session detail, every ${LISTENER_DETAIL_EVERY} cycle(s)`,
+      );
+    } else {
+      const missing = [
+        !host && 'ICECAST_ADMIN_HOST (or ICECAST_STATUS_URL to derive it)',
+        !hasUser && 'ICECAST_ADMIN_USER',
+        !hasPass && 'ICECAST_ADMIN_PASSWORD',
+      ].filter(Boolean);
+      console.warn(
+        `[Monitor] Listener detail: OFF — missing ${missing.join(', ')}. ` +
+        'Individual listeners (cume), device and session breakdowns will stay empty. ' +
+        'Everything else is unaffected.',
+      );
+    }
+  }
 }
 
 // ── May this process send email? ────────────────────────────────────────────
