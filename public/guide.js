@@ -123,7 +123,7 @@
       id: 'alerts',
       icon: 'mail',
       title: 'When you get an email',
-      lead: 'Only when listeners were actually affected.',
+      lead: 'Only when listeners were affected — and never twice for the same fault.',
       body: [
         `This is the rule that makes the alerts worth reading. A failed probe proves
          only that <em>our</em> connection broke. Icecast is the witness: if it stayed
@@ -141,6 +141,16 @@
          monitoring: the outages are still recorded in full, still diagnosed, and
          still appear on every page — <strong>and so is every recovery</strong>, so
          a muted station's history still shows what came back and when.`,
+        `<strong>A fault that keeps repeating gets one alert, not one per flap.</strong>
+         A source encoder that drops and reconnects every few minutes produces a
+         genuine outage each time, and left alone would fill the mailbox with
+         them — the sixth message says nothing the first did not. So the second
+         failure within 45 minutes marks the channel <strong>UNSTABLE</strong>,
+         says so, and pauses further alerts for it. Everything carries on being
+         recorded and diagnosed; only the mail stops. When the channel has stayed
+         on air for 30 minutes, one summary arrives with the totals — how many
+         outages, how long off air, and what it cost in listeners — and normal
+         alerting resumes. The first outage is never held back.`,
         `Alerts lead with the root cause, the listener reach, and specific things to
          check. Every event records whether its alert actually sent.`,
         `A <strong>degraded channel</strong> — still playing, but missing one of its

@@ -78,9 +78,19 @@ rather than inventing a second one:
 - **Consolidate per cycle.** One server-wide failure is one message naming three
   streams, not three messages — the same rule `dispatchNotifications()` already
   applies to email.
-- **Rate-limit per stream.** A flapping encoder must not be able to send fifty
-  texts overnight. A hard cap per stream per hour, with the suppressed count
-  reported in the next message.
+- **Reuse the storm engine — do not build a rate limiter.** This bullet used to
+  propose a hard cap per stream per hour. It is superseded: as of 2026-09-02
+  `monitor.js` suppresses repeated failures properly, and a cap would be a
+  second, worse answer to a problem already solved. A 2nd confirmed failure on a
+  stream within `STORM_WINDOW_MS` marks it UNSTABLE and pauses further alerts;
+  one summary follows after `STORM_CLEAR_AFTER_MS` of health. Call
+  `noteStormEpisode()` / `noteStormClear()` from the SMS path — or better,
+  put SMS behind `sendAlert()` as §5.2 already plans, where the suppression
+  sits upstream and is inherited for free.
+
+  This matters more for SMS than for email. The flapping encoder that sent 14
+  emails in an hour would have sent 14 texts, at night, to a phone — the exact
+  outcome that makes an on-call channel get muted permanently.
 
 ### 5.2 Where it plugs in
 

@@ -134,6 +134,34 @@ An unconfirmed failure is split by the same verdict: `brief_outage` when the mou
 vanish (a real gap, just short) and `probe_error` when Icecast stayed healthy throughout. The
 retired name for both was `blip`; stored events still carry it and every counter recognises it.
 
+**A repeating fault is one fault.** The rule above judges a single episode, and judges it
+correctly — which is exactly why a flapping source encoder walked straight through it fourteen
+times in one hour on 2026-09-02, alternating DOWN and RECOVERED, every alert individually true
+and the set of them worthless. The consolidation that existed was *spatial* — several streams
+failing at once become one message — and there was none at all across *time*.
+
+So a second confirmed failure on the same stream inside `STORM_WINDOW_MS` (default 45 min)
+declares a **storm**:
+
+| | Emails |
+|---|---|
+| 1st confirmed outage | yes — immediately, exactly as before |
+| 2nd inside the window | yes — marked **UNSTABLE**, and says further alerts are paused |
+| every flap after that | **no** — recorded in full, each event carrying its own reason |
+| its recoveries | **no** — an all-clear per flap is half the flood |
+| after `STORM_CLEAR_AFTER_MS` (30 min) of unbroken health | yes — one summary, then normal alerting resumes |
+
+The summary carries what the storm actually cost: total outages, total downtime, peak audience
+affected, and listener-minutes lost. **The first outage is never delayed.** A hold-down — wait
+five minutes before emailing anything — would have quieted the inbox too, by taxing the one alert
+that matters; this pays with the sixth alert instead of the first.
+
+Outages and dead air share one storm per stream, because an encoder alternating between dropping
+its connection and feeding silence is one fault with two symptoms, and two independent
+suppressors would let it send twice as much mail by alternating between them. Storm state is
+persisted through the store, so a redeploy mid-storm does not restart the flood from email one.
+Set `STORM_WINDOW_MS=0` to disable the mechanism entirely.
+
 ### Who this is for, and which number leads
 
 Two audiences read the same pages, and the layout is built around that:

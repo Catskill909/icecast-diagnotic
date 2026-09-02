@@ -853,8 +853,16 @@ a signed link in the email is enough, no login required.
 
 ### Alert quality features
 
-- **Digest mode** — during a flapping event, one message every N minutes instead
-  of one per transition. Protects the listener-impact gate's hard-won credibility.
+- ~~**Digest mode** — during a flapping event, one message every N minutes instead
+  of one per transition.~~ **SHIPPED 2026-09-02**, and not as a digest. A timer
+  that re-sends every N minutes still sends N messages about a fault whose cause
+  never changes. What shipped instead is *suppression plus one summary*: the
+  second confirmed failure inside 45 minutes marks the stream UNSTABLE and says
+  alerts are paused, everything after that is recorded and silent, and a single
+  summary — total outages, downtime, listener-minutes lost — arrives once the
+  stream has held for 30 minutes. See `STORM_WINDOW_MS` and the storm block in
+  `monitor.js`. It did protect the gate's credibility: the trigger was 14 true
+  alerts in one hour that nobody could act on.
 - **Correlated network alert** — when four stations drop simultaneously, send
   *one* "Pacifica Icecast server outage" email, not four station alerts. Only
   possible because of the shared snapshot. Very strong demo moment.
