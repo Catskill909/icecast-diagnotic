@@ -985,7 +985,7 @@ function init() {
       );
     } else {
       const missing = [
-        !host && 'ICECAST_ADMIN_HOST (or ICECAST_STATUS_URL to derive it)',
+        !host && 'a monitored stream to derive the host from',
         !hasUser && 'ICECAST_ADMIN_USER',
         !hasPass && 'ICECAST_ADMIN_PASSWORD',
       ].filter(Boolean);
@@ -1595,12 +1595,37 @@ async function runChecks() {
    (docs/AUDIENCE-ROADMAP.md §4.1), following the same "env seeds, the store
    owns" rule as the rest of the configuration. */
 function adminHost() {
+  // An explicit override, for the unusual case: a credential issued for a
+  // server that is NOT the one carrying most of the channels.
   const explicit = (process.env.ICECAST_ADMIN_HOST || '').trim();
   if (explicit) return explicit;
-  // Falls back to the host the status URL points at. If NEITHER is set this
-  // returns '' and adminCredsFor() then matches no host at all — fail closed.
-  // A credential with no named destination is never sent speculatively.
-  try { return new URL(process.env.ICECAST_STATUS_URL || '').host; } catch { return ''; }
+  try {
+    const fromStatus = new URL(process.env.ICECAST_STATUS_URL || '').host;
+    if (fromStatus) return fromStatus;
+  } catch { /* not set, or not a URL — fall through to derivation */ }
+
+  /* DERIVED, because a hostname is not a secret and should not be a setting.
+     `streams.pacifica.org:9000` is in the README, in STREAMS.md, and is the
+     address listeners connect to — making an operator retype it to switch on a
+     feature is friction that buys nothing.
+
+     What the setting was ever FOR is scope: an admin password must reach one
+     server and no other. KPFA is carried both on Pacifica's shared host and on
+     its own at streams.kpfa.org:8443, so attaching one credential to "every
+     monitored host" would post Pacifica's password to a third party's machine.
+
+     So it is derived as the host carrying the MOST monitored channels — the
+     shared server this monitor was set up against — and the credential still
+     goes to exactly that one host. A station on its own server is a minority
+     of one and never matches. */
+  const tally = new Map();
+  for (const st of streams) {
+    let u; try { u = new URL(st.url); } catch { continue; }
+    tally.set(u.host, (tally.get(u.host) || 0) + 1);
+  }
+  if (!tally.size) return '';
+  const [best] = [...tally.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
+  return best[0];
 }
 
 function adminCredsFor(host) {
