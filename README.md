@@ -642,6 +642,16 @@ ICECAST_STATUS_TIMEOUT_MS=10000  # Icecast inventory request timeout
 ATH_MONTHLY_ALLOWANCE=159140     # SoundExchange noncommercial allowance per channel per
                                  # month, used only to draw the "% of allowance" bar.
                                  # Change if the station is on a different rate category.
+STORM_WINDOW_MS=2700000          # Repeated-outage suppression. A second confirmed outage on
+                                 # the same stream within this window declares a "storm":
+                                 # one email saying the stream is unstable, then silence for
+                                 # that stream. Every flap is still recorded. 0 disables it
+                                 # and alerts on every episode, which is what buried the real
+                                 # alerts under 14 messages in an hour on 2026-09-02.
+STORM_OUTAGE_COUNT=2             # Confirmed outages inside that window that declare a storm.
+STORM_CLEAR_AFTER_MS=1800000     # How long the stream must stay healthy before the storm is
+                                 # called over. One summary email goes out with the totals
+                                 # and normal alerting resumes.
 DEGRADED_ALERT_AFTER_MS=1800000  # A degraded channel emails only once it has lasted this
                                  # long AND cost listeners. Either alone stays silent and
                                  # recorded. 0 disables degraded alerting entirely.

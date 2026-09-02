@@ -66,6 +66,26 @@ find out about, because the dashboard shows it and nobody is watching the
 dashboard at 4am. The email says DEGRADED, never DOWN — describing a playing
 channel as offline is the most damaging thing an alert can get wrong.
 
+**Repeated outages.** Every rule above judges one episode. A fault that keeps
+recurring — almost always a source encoder dropping and reconnecting — satisfies
+all of them every time, truthfully, and produces one email per flap. On
+2026-09-02 that was fourteen messages in an hour about a single ongoing fault.
+
+So a second confirmed outage on the same stream within `STORM_WINDOW_MS`
+(default 45 min) declares a **storm**. The alert that declares it says so and
+says that further alerts are paused; after that the stream emails nothing.
+Recording is untouched — every outage, recovery, duration and listener-minute
+still lands on the dashboard, and each suppressed event carries the reason in
+its own `email.reason`. When the stream has been healthy without interruption
+for `STORM_CLEAR_AFTER_MS` (default 30 min) one summary goes out — total
+outages, total downtime, peak audience affected, listener-minutes lost — and
+normal alerting resumes. Storm state is persisted through the store, so a
+redeploy mid-storm does not restart the flood from the first email.
+
+The first outage is never delayed. A hold-down would have quieted the inbox too,
+by taxing the one alert that matters; this pays with the sixth alert instead of
+the first.
+
 **c. Cross-stream correlation.** All three KPFT streams are checked in the same cycle. One stream failing is a stream problem; all three failing in the same second is not a coincidence.
 
 ## 3. The decisive rule

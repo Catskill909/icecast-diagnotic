@@ -29,6 +29,15 @@
    or 'unknown' (Icecast unreachable, so we cannot clear it). An outage proven
    harmless is recorded in full and stays silent. Dead air always emails: the
    transport is fine, which is exactly why nobody else would catch it.
+
+   A REPEATING FAULT IS ONE FAULT. The gate above judges a single episode, and
+   judges it correctly — which is why a flapping source encoder walked straight
+   through it fourteen times in an hour on 2026-09-02, every alert true and the
+   set of them worthless. A second confirmed outage on the same stream inside
+   STORM_WINDOW_MS declares a storm: one further email saying the stream is
+   unstable, then silence for that stream, then a single summary once it has
+   stayed on air for STORM_CLEAR_AFTER_MS. Every flap in between is recorded in
+   full. See the storm-suppression block below the configuration constants.
    ═══════════════════════════════════════════════════════════════════════════ */
 
 const nodemailer = require('nodemailer');
@@ -95,6 +104,38 @@ const FAILURE_THRESHOLD = parseInt(process.env.FAILURE_THRESHOLD, 10) || 2;
 const SILENCE_PROBE_INTERVAL_MS = parseInt(process.env.SILENCE_PROBE_INTERVAL_MS, 10) || 5000;
 const SILENCE_FAILURE_THRESHOLD = parseInt(process.env.SILENCE_FAILURE_THRESHOLD, 10) || 3;
 const SAVE_INTERVAL = parseInt(process.env.SAVE_INTERVAL_MS, 10) || 60 * 1000;
+
+/* ── Storm suppression ───────────────────────────────────────────────────────
+   Every other gate in this file asks the same question: is THIS outage real,
+   and did it cost listeners? A flapping source encoder answers yes every time,
+   truthfully — each disconnect really does drop every connected player. So
+   nothing suppressed it, and on 2026-09-02 a KPFT encoder cycling every few
+   minutes produced fourteen emails in one hour, alternating DOWN and RECOVERED.
+
+   The consolidation that already exists is SPATIAL: several streams failing at
+   once become one message. What was missing is TEMPORAL — several episodes of
+   the same fault over an hour are still one fault, and the sixth email about it
+   carries no information the first did not.
+
+   So: the first outage emails immediately, exactly as before — the latency of
+   the alert that matters is not the thing to pay with. A second confirmed
+   outage on the same stream inside STORM_WINDOW_MS declares a storm, which
+   sends ONE more email saying the stream is unstable, and then goes quiet for
+   that stream. Every subsequent flap is still recorded in full — recording has
+   always been decoupled from notifying — and emails nobody. When the stream has
+   been healthy for STORM_CLEAR_AFTER_MS without interruption, one summary goes
+   out with the totals, and normal alerting resumes.
+
+   Set STORM_WINDOW_MS=0 to disable this entirely and alert on every episode. */
+// Confirmed outages on one stream, inside the window, that declare a storm.
+// Floored at 2: at 1 the very first outage of an isolated fault would be
+// declared a storm and the all-clear would never be more than noise.
+const STORM_OUTAGE_COUNT = Math.max(2, parseInt(process.env.STORM_OUTAGE_COUNT, 10) || 2);
+const STORM_WINDOW_MS = Math.max(0, parseInt(process.env.STORM_WINDOW_MS, 10) || 45 * 60 * 1000);
+// How long a stream must stay healthy before a storm is called over. Long
+// enough to outlast the gap between flaps — an encoder that drops every ten
+// minutes must not be declared stable in the eleventh.
+const STORM_CLEAR_AFTER_MS = Math.max(60 * 1000, parseInt(process.env.STORM_CLEAR_AFTER_MS, 10) || 30 * 60 * 1000);
 // Escape hatch: alert on every confirmed outage, even ones Icecast proves did
 // not touch a single listener. Off by default — that behaviour is what buried
 // the real alerts in noise. Tolerant of case and stray whitespace, because this
@@ -300,6 +341,201 @@ function worstImpact(a, b) {
   return (IMPACT_RANK[b] ?? 0) > (IMPACT_RANK[a] ?? 0) ? b : (a ?? 'none');
 }
 
+/* ── Storm suppression ───────────────────────────────────────────────────────
+   See the constants at the top of this file for why this exists. Three entry
+   points, all called from the check cycle:
+
+     noteStormEpisode()    at the moment an outage becomes alertable
+     noteStormClear()  when it ends, to total the cost and start the clock
+     resolveStorms()      every cycle, to notice a storm has ended            */
+
+function blankStorm() {
+  return { active: false, since: null, declaredAt: null, healthySince: null, outages: [] };
+}
+
+/** Storm state is meaningful across a redeploy, so it lives in the store. */
+function saveStorms() {
+  store.setMeta('storms', storms);
+}
+
+function loadStorms() {
+  const saved = store.getMeta('storms');
+  storms = saved && typeof saved === 'object' ? saved : {};
+  // A storm that has been sitting in the store since before the last restart
+  // may already have outlived its own clear window while nothing was watching.
+  // resolveStorms() settles that on the first cycle; it is not decided here,
+  // because ending a storm sends mail and init() must not send mail.
+  const active = Object.keys(storms).filter((id) => storms[id]?.active);
+  if (active.length) {
+    console.log(`[Monitor] Restored storm suppression for ${active.join(', ')}`);
+  }
+}
+
+/**
+ * Records a confirmed, alertable FAILURE and says what to do about the email.
+ *
+ * Outages and dead air share one storm per stream deliberately. An encoder
+ * fault that alternates between dropping its connection and feeding silence is
+ * one fault with two symptoms, and two independent suppressors would let it
+ * send twice as much mail by alternating between them.
+ *
+ *   'alert'    — send it normally. Nothing unusual is happening.
+ *   'declare'  — send it, marked as a storm: this stream is now suppressed.
+ *   'suppress' — send nothing. The stream is already known to be flapping.
+ *
+ * Called once per episode, never per cycle: the caller gates on the episode's
+ * own alerted/stormSuppressed flags.
+ */
+function noteStormEpisode(stream, startedAt) {
+  if (STORM_WINDOW_MS <= 0) return 'alert';
+
+  const at = new Date(startedAt).getTime();
+  const st = storms[stream.id] || (storms[stream.id] = blankStorm());
+
+  // A new outage ends any run of good health, so the clear clock restarts from
+  // the recovery that ends THIS outage rather than from the last one.
+  st.healthySince = null;
+  st.outages.push({ at, durationMs: null, listenersBefore: 0, listenerMinutesLost: 0 });
+
+  if (st.active) {
+    saveStorms();
+    return 'suppress';
+  }
+
+  // Only outages inside the window count toward declaring one. An outage last
+  // Tuesday and an outage today are two faults, not a storm.
+  st.outages = st.outages.filter((o) => at - o.at < STORM_WINDOW_MS);
+
+  if (st.outages.length >= STORM_OUTAGE_COUNT) {
+    st.active = true;
+    st.since = new Date(st.outages[0].at).toISOString();
+    st.declaredAt = new Date(at).toISOString();
+    saveStorms();
+    return 'declare';
+  }
+
+  saveStorms();
+  return 'alert';
+}
+
+/**
+ * Closes out the current outage and starts the clock on the stream being well.
+ *
+ * The audience cost is taken from the settled figure the recovery branch
+ * computes, because listener-minutes are unrecoverable once the sample window
+ * closes — and the summary email exists to report exactly that total.
+ */
+function noteStormClear(stream, { durationMs, audience, timestamp }) {
+  const st = storms[stream.id];
+  if (!st) return;
+
+  // The last outage without a duration is the one that just ended. Searching
+  // backwards rather than taking the last element, so a record completed out of
+  // order cannot make a finished outage look open forever.
+  for (let i = st.outages.length - 1; i >= 0; i--) {
+    if (st.outages[i].durationMs == null) {
+      st.outages[i].durationMs = durationMs;
+      st.outages[i].listenersBefore = audience?.listenersBefore || 0;
+      st.outages[i].listenerMinutesLost = audience?.listenerMinutesLost || 0;
+      break;
+    }
+  }
+
+  st.healthySince = new Date(timestamp).getTime();
+  saveStorms();
+}
+
+/** Totals for the summary email, over every outage the storm covered. */
+function stormTotals(st) {
+  const done = st.outages.filter((o) => o.durationMs != null);
+  return {
+    outages: st.outages.length,
+    downtimeMs: done.reduce((a, o) => a + o.durationMs, 0),
+    listenerMinutesLost: done.reduce((a, o) => a + (o.listenerMinutesLost || 0), 0),
+    peakListeners: st.outages.reduce((a, o) => Math.max(a, o.listenersBefore || 0), 0),
+    spanMs: st.outages.length
+      ? (st.healthySince || Date.now()) - st.outages[0].at
+      : 0,
+  };
+}
+
+/**
+ * Ends storms whose stream has been well long enough, and forgets stale state.
+ *
+ * Runs every cycle, including cycles where nothing failed — a storm ends by
+ * NOTHING happening, so it can never be noticed from inside a failure branch.
+ */
+async function resolveStorms(timestamp) {
+  const now = new Date(timestamp).getTime();
+  let dirty = false;
+
+  for (const streamId of Object.keys(storms)) {
+    const st = storms[streamId];
+
+    if (!st.active) {
+      // Not a storm and not on its way to being one — let the record age out
+      // so an outage a month from now starts from a clean count.
+      const before = st.outages.length;
+      st.outages = st.outages.filter((o) => now - o.at < STORM_WINDOW_MS);
+      if (st.outages.length !== before) dirty = true;
+      if (!st.outages.length) { delete storms[streamId]; dirty = true; }
+      continue;
+    }
+
+    // Down again, or failing a check right now. Not stable by any reading.
+    if (episodes[streamId]) continue;
+    if (!st.healthySince) continue;
+    if (now - st.healthySince < STORM_CLEAR_AFTER_MS) continue;
+
+    const stream = streams.find((x) => x.id === streamId);
+    if (!stream) { delete storms[streamId]; dirty = true; continue; }
+
+    const totals = stormTotals(st);
+    const steadyMs = now - st.healthySince;
+
+    // Recorded whether or not it is emailed, for the same reason recoveries
+    // are: the history has to be able to explain its own silence.
+    const event = store.addEvent({
+      timestamp,
+      streamId: stream.id,
+      streamName: stream.name,
+      type: 'up',
+      severity: 'recovery',
+      confirmed: true,
+      scope: 'stream',
+      message:
+        `${stream.name} has been stable for ${diagnose.fmtDuration(steadyMs)} — ` +
+        `${totals.outages} outage${totals.outages === 1 ? '' : 's'} over ${diagnose.fmtDuration(totals.spanMs)}`,
+      detail: { storm: { ...totals, since: st.since, steadyMs } },
+      email: { attempted: false, sent: null, reason: 'pending' },
+    });
+
+    let email;
+    if (!alertsEnabledFor(stream)) {
+      email = { attempted: false, sent: false, reason: mutedReasonFor(stream) };
+    } else {
+      const byStream = await sendGroupedAlert({
+        kind: 'storm_cleared',
+        entries: [{ stream, storm: { ...totals, since: st.since, steadyMs } }],
+        scope: 'stream',
+      });
+      email = byStream.get(stream.id) || { attempted: false, sent: false, reason: 'no message covered this stream' };
+    }
+    store.updateEvent(event.id, { email });
+
+    console.log(
+      `[Monitor] 🌤  ${stream.name} storm over — stable ${diagnose.fmtDuration(steadyMs)} after ` +
+      `${totals.outages} outage(s), ${diagnose.fmtDuration(totals.downtimeMs)} down, ` +
+      `${Math.round(totals.listenerMinutesLost)} listener-minutes lost`,
+    );
+
+    delete storms[streamId];
+    dirty = true;
+  }
+
+  if (dirty) saveStorms();
+}
+
 // ── State ───────────────────────────────────────────────────────────────────
 let streams = [];
 let streamStatus = {};
@@ -309,6 +545,11 @@ let episodes = {};        // { [streamId]: { eventId, startedAt, alerted, severi
 // playing, so it must not close, reopen, or otherwise disturb the outage
 // episode for the same stream — the two can legitimately overlap.
 let degradedEpisodes = {};  // { [streamId]: { eventId, startedAt, impaired, listenersBefore } }
+// Repeated-outage state, one entry per stream. Persisted through store meta:
+// a redeploy in the middle of a storm would otherwise forget it was suppressing
+// and start the flood over from the first email, which is precisely the hour
+// this mechanism exists to prevent.
+let storms = {};          // { [streamId]: { active, since, healthySince, outages: [...] } }
 // Per-mount probe verdicts, held BETWEEN variant-probe cycles. Recomputing
 // degradation from an empty map on the four cycles in between would make a
 // stalled variant look healthy again and flap the episode open and closed
@@ -672,6 +913,8 @@ function init() {
     }
   }
 
+  loadStorms();
+
   setupMailer();
 
   console.log(`[Monitor] Initialized with ${streams.length} streams`);
@@ -844,20 +1087,50 @@ function scheduleAggressiveProbe(stream) {
         email: { attempted: false, sent: null },
       });
 
+      // Dead air always emails — the transport is fine, so nobody else would
+      // catch it — but a source feeding intermittent silence repeats like any
+      // other encoder fault, and the sixth identical message is as worthless
+      // here as it is for an outage.
+      const verdict = noteStormEpisode(stream, timestamp);
+      const st2 = storms[stream.id];
+
+      let emailResult;
+      if (!alertsEnabledFor(stream)) {
+        // This path called sendAlert() directly and so never consulted the
+        // station's mute at all: a station with alerts switched off was emailed
+        // its dead air and its all-clear, because recipientsFor() answers with
+        // the stored list whether or not the station is enabled. Every other
+        // sender in this file checks; these two did not.
+        emailResult = { attempted: false, sent: false, reason: mutedReasonFor(stream) };
+        console.log(`[Monitor] 🔕 ${stream.name} dead air: recorded, not emailed — ${mutedReasonFor(stream)}`);
+      } else if (verdict === 'suppress') {
+        emailResult = {
+          attempted: false,
+          sent: false,
+          reason: `suppressed — ${stream.name} is failing repeatedly; alerts resume when it stabilises`,
+        };
+        console.log(`[Monitor] 🌩  ${stream.name} dead air #${st2.outages.length} of an active storm — recorded, not emailed`);
+      } else {
+        emailResult = await sendAlert({
+          kind: 'dead_air',
+          entries: [{
+            stream, result, diagnosis: dg,
+            // Dead air keeps listeners connected to silence, so the whole current
+            // audience is exposed to it — the same reach figure applies.
+            audience: store.getAudienceContext(stream.id, timestamp),
+            storm: verdict === 'declare' ? { ...stormTotals(st2), since: st2.since } : null,
+          }],
+          scope: 'stream',
+        });
+      }
+
       episodes[stream.id] = {
-        eventId: event.id, startedAt: timestamp, alerted: true, severity: 'dead_air',
+        eventId: event.id, startedAt: timestamp, severity: 'dead_air',
+        // Whether the all-clear is owed. Hardcoded true until 2026-09-02, which
+        // sent an "audio restored" to stations that were never told it stopped.
+        alerted: emailResult.sent === true,
       };
 
-      const emailResult = await sendAlert({
-        kind: 'dead_air',
-        entries: [{
-          stream, result, diagnosis: dg,
-          // Dead air keeps listeners connected to silence, so the whole current
-          // audience is exposed to it — the same reach figure applies.
-          audience: store.getAudienceContext(stream.id, timestamp),
-        }],
-        scope: 'stream',
-      });
       store.updateEvent(event.id, { email: emailResult });
       store.saveEvents();
     }
@@ -904,13 +1177,32 @@ async function resolveDeadAir(stream, result, timestamp) {
   });
 
   delete episodes[stream.id];
+  noteStormClear(stream, { durationMs: deadAirMs, audience, timestamp });
 
-  const emailResult = await sendAlert({
-    kind: 'recovery',
-    entries: [{ stream, result, diagnosis: dg, audience, durationMs: deadAirMs }],
-    scope: 'stream',
-    recoveredFrom: 'dead air',
-  });
+  // The same three silences the outage all-clear observes, for the same
+  // reasons — see dispatchNotifications(). The event above is written whatever
+  // this decides; only the mail is in question.
+  let emailResult;
+  if (!alertsEnabledFor(stream)) {
+    emailResult = { attempted: false, sent: false, reason: mutedReasonFor(stream) };
+  } else if (!episode?.alerted) {
+    emailResult = {
+      attempted: false, sent: false,
+      reason: 'no all-clear sent — the dead air it ends was not emailed',
+    };
+  } else if (storms[stream.id]?.active) {
+    emailResult = {
+      attempted: false, sent: false,
+      reason: `no all-clear sent — ${stream.name} is failing repeatedly; one summary follows when it stabilises`,
+    };
+  } else {
+    emailResult = await sendAlert({
+      kind: 'recovery',
+      entries: [{ stream, result, diagnosis: dg, audience, durationMs: deadAirMs }],
+      scope: 'stream',
+      recoveredFrom: 'dead air',
+    });
+  }
   store.updateEvent(event.id, { email: emailResult });
   store.saveEvents();
 }
@@ -1493,18 +1785,44 @@ async function runChecksInner() {
 
         store.updateEvent(episode.eventId, patch);
 
-        if (alertable && !episode.alerted) {
-          newlyNotable.push({
-            stream, result, diagnosis: dg,
-            eventId: episode.eventId,
-            reason: 'confirmed outage',
-            // What the audience WAS when this started. The loss cannot be
-            // totalled until recovery, but the reach can — and "≈66 listeners
-            // were connected" is the line that tells a reader in the first
-            // second whether to get out of bed.
-            audience: store.getAudienceContext(stream.id, episode.startedAt),
-            startedAt: episode.startedAt,
-          });
+        if (alertable && !episode.alerted && !episode.stormSuppressed) {
+          // A stream flapping on a known fault has already said everything the
+          // sixth email would say. The event is written either way; only the
+          // mail is in question here.
+          const verdict = noteStormEpisode(stream, episode.startedAt);
+
+          if (verdict === 'suppress') {
+            episode.stormSuppressed = true;
+            const st = storms[stream.id];
+            store.updateEvent(episode.eventId, {
+              email: {
+                attempted: false,
+                sent: false,
+                reason:
+                  `suppressed — ${stream.name} is flapping (${st.outages.length} outages since ` +
+                  `${new Date(st.since).toLocaleString('en-US', { timeZone: stream.stationTimezone || STATION_TZ })}); ` +
+                  'alerts resume when it stabilises',
+              },
+            });
+            console.log(`[Monitor] 🌩  ${stream.name} outage #${st.outages.length} of an active storm — recorded, not emailed`);
+          } else {
+            newlyNotable.push({
+              stream, result, diagnosis: dg,
+              eventId: episode.eventId,
+              reason: 'confirmed outage',
+              // Present only on the outage that DECLARES a storm, which is the
+              // one email that has to explain why the next few will not arrive.
+              storm: verdict === 'declare'
+                ? { ...stormTotals(storms[stream.id]), since: storms[stream.id].since }
+                : null,
+              // What the audience WAS when this started. The loss cannot be
+              // totalled until recovery, but the reach can — and "≈66 listeners
+              // were connected" is the line that tells a reader in the first
+              // second whether to get out of bed.
+              audience: store.getAudienceContext(stream.id, episode.startedAt),
+              startedAt: episode.startedAt,
+            });
+          }
         } else if (confirmed && !alertable && !episode.suppressionLogged) {
           episode.suppressionLogged = true;
           console.log(`[Monitor] 🔕 ${stream.name} outage confirmed but NOT emailed — mount still listed by Icecast, no listener impact`);
@@ -1587,6 +1905,11 @@ async function runChecksInner() {
         // it is deliberately given no recovery event: an all-clear for a
         // one-check blip is noise in a feed that has to stay readable.
         if (episode.severity === 'outage') {
+          // Totals the cost of this outage against any storm and starts the
+          // clock on the stream being well. Only confirmed outages count: a
+          // one-check blip is not a flap, and treating it as one would keep a
+          // storm alive on a stream that has actually recovered.
+          noteStormClear(stream, { durationMs, audience, timestamp });
           recoveries.push({ stream, result, diagnosis: dg, episode, durationMs, sourceOutage, audience });
         } else {
           console.log(`[Monitor] ✓ ${stream.name} cleared after ${diagnose.fmtDuration(durationMs)} — never confirmed as an outage`);
@@ -1599,6 +1922,14 @@ async function runChecksInner() {
   // ── Notification pass ─────────────────────────────────────────────────────
   await dispatchNotifications(newlyNotable, recoveries, { allDown, timestamp, snapshot: snap });
   await dispatchDegradedNotices(degradedNotices);
+
+  // A storm ends by nothing happening, so it can only be noticed from out here
+  // — no failure branch will ever run on the cycle that proves a stream well.
+  try {
+    await resolveStorms(timestamp);
+  } catch (err) {
+    console.error('[Monitor] storm resolution failed:', err.message);
+  }
 
   // Any alert a mail server refused earlier gets another try here. Wrapped
   // because a mail problem must never stop the stream checks — monitoring the
@@ -1653,6 +1984,7 @@ async function dispatchNotifications(newlyNotable, recoveries, ctx) {
 
     const entries = newlyNotable.map((n) => ({
       stream: n.stream, result: n.result, diagnosis: n.diagnosis, audience: n.audience,
+      storm: n.storm,
     }));
 
     const byStream = await sendGroupedAlert({
@@ -1681,7 +2013,13 @@ async function dispatchNotifications(newlyNotable, recoveries, ctx) {
   // Both used to decide whether the event was written. Muting a station is a
   // statement about who gets mail, never about what happened.
   if (recoveries.length > 0) {
-    const emailable = recoveries.filter((r) => r.episode.alerted && alertsEnabledFor(r.stream));
+    // A stream in a storm sends no all-clears. The outage that declared the
+    // storm was emailed, so it passes the `alerted` test — but its recovery is
+    // the second half of a pair this mechanism exists to stop, and the storm's
+    // own summary is the all-clear that replaces it.
+    const emailable = recoveries.filter(
+      (r) => r.episode.alerted && alertsEnabledFor(r.stream) && !storms[r.stream.id]?.active,
+    );
 
     let byStream = new Map();
     if (emailable.length > 0) {
@@ -1705,9 +2043,11 @@ async function dispatchNotifications(newlyNotable, recoveries, ctx) {
             // sends nothing at either end of the episode; an unalerted outage on
             // a station that does email has no all-clear because there was no
             // alarm to clear.
-            reason: alertsEnabledFor(r.stream)
-              ? 'no all-clear sent — the outage it ends was not emailed'
-              : mutedReasonFor(r.stream),
+            reason: !alertsEnabledFor(r.stream)
+              ? mutedReasonFor(r.stream)
+              : storms[r.stream.id]?.active
+              ? `no all-clear sent — ${r.stream.name} is flapping; one summary follows when it stabilises`
+              : 'no all-clear sent — the outage it ends was not emailed',
           };
 
       const event = store.addEvent({
@@ -2470,7 +2810,65 @@ async function sendAlert(opts) {
  * message can be rendered for inspection without an outage to trigger it —
  * an email template that can only be seen in production is one nobody checks.
  */
+/**
+ * The end of a storm: one message covering every outage it suppressed.
+ *
+ * Written as its own message rather than as a variant of the recovery template,
+ * because it answers a different question. A recovery says "the thing that was
+ * broken is fixed"; this says "the thing that kept breaking has stopped, and
+ * here is what it cost in total" — which is the only email in the sequence that
+ * an engineer can act on the morning after.
+ */
+function composeStormCleared({ entries }) {
+  const { stream, storm } = entries[0];
+  const tz = stream?.stationTimezone || STATION_TZ;
+  const owner = stream?.stationName || 'Stream';
+
+  const steady = diagnose.fmtDuration(storm.steadyMs);
+  const cost = Math.round(storm.listenerMinutesLost);
+
+  const subject =
+    `🟢 ${owner} Alert: ${stream.name} — STABLE for ${steady} · ` +
+    `${storm.outages} outage${storm.outages === 1 ? '' : 's'} in total`;
+
+  const started = new Date(storm.since).toLocaleString('en-US', {
+    timeZone: tz, weekday: 'short', month: 'short', day: 'numeric',
+    hour: 'numeric', minute: '2-digit', hour12: true, timeZoneName: 'short',
+  });
+
+  const contentHtml = `
+    <div class="callout-box" style="background-color:#211e3b; border:1px solid #3d3575; border-radius:8px; padding:16px; margin-bottom:16px;">
+      <p class="callout-title" style="margin:0 0 6px 0; font-weight:700; font-size:15px; color:#c4b5fd !important;"><span class="callout-title" style="color:#c4b5fd !important;">Repeated outages have stopped</span></p>
+      <p class="callout-text" style="margin:0; font-size:13px; line-height:1.6; color:#e2e8f0 !important;"><span class="callout-text" style="color:#e2e8f0 !important;">${esc(stream.name)} went down and recovered ${storm.outages} time${storm.outages === 1 ? '' : 's'} and has now been serving without interruption for ${esc(steady)}. Individual alerts were paused after the second outage so this mailbox would not fill with them; every one is recorded on the dashboard. Normal alerting has resumed.</span></p>
+    </div>
+    <table role="presentation" width="100%" border="0" cellspacing="0" cellpadding="0">
+      ${row('Stream', `<span class="val-col" style="color:#f8fafc !important;">${esc(stream.name)}</span>`)}
+      ${row('Started', `<span class="val-col" style="color:#f8fafc !important;">${esc(started)}</span>`)}
+      ${row('Outages', `<span class="val-col" style="color:#f8fafc !important;">${storm.outages} over ${esc(diagnose.fmtDuration(storm.spanMs))}</span>`)}
+      ${row('Total downtime', `<span class="val-col" style="color:#f8fafc !important;">${esc(diagnose.fmtDuration(storm.downtimeMs))}</span>`)}
+      ${row('Peak audience affected', `<span class="val-col" style="color:#f8fafc !important;">${storm.peakListeners} listener${storm.peakListeners === 1 ? '' : 's'}</span>`)}
+      ${row('Audience cost', `<span class="val-col" style="color:#f8fafc !important;">≈${cost} listener-minute${cost === 1 ? '' : 's'} lost</span>`)}
+      ${row('Stable since', `<span class="val-col" style="color:#4ade80 !important;">${esc(steady)} ago</span>`, true)}
+    </table>
+    <hr style="border: none; border-top: 1px solid #28283d; margin: 20px 0;">
+    ${renderAllStreamsTable(stream?.stationId)}`;
+
+  return {
+    subject,
+    html: buildEmailHtml({
+      title: '🟢 Stream STABLE',
+      subtitle:
+        `${stream.name} has been on air without interruption for ${steady}, after ${storm.outages} ` +
+        `outage${storm.outages === 1 ? '' : 's'} costing roughly ${cost} listener-minute${cost === 1 ? '' : 's'}.`,
+      headerBg: 'linear-gradient(135deg, #16a34a, #15803d)',
+      contentHtml,
+    }),
+  };
+}
+
 function composeAlert({ kind, entries, scope, consolidated = false, recoveredFrom = null }) {
+  if (kind === 'storm_cleared') return composeStormCleared({ entries });
+
   const isDeadAir = kind === 'dead_air';
   const isRecovery = kind === 'recovery';
   // A degraded channel is NOT down, and must never be described as though it
@@ -2479,7 +2877,7 @@ function composeAlert({ kind, entries, scope, consolidated = false, recoveredFro
   const isDown = !isRecovery && !isDegraded;
 
   const emoji = isDeadAir ? '🔇' : isDegraded ? '🟠' : isDown ? '🔴' : '🟢';
-  const statusText = isDeadAir ? 'DEAD AIR (SILENCE)'
+  let statusText = isDeadAir ? 'DEAD AIR (SILENCE)'
     : isDegraded ? 'DEGRADED'
     : isDown ? 'DOWN' : 'RECOVERED';
 
@@ -2509,6 +2907,11 @@ function composeAlert({ kind, entries, scope, consolidated = false, recoveredFro
     : 'Stream';
 
   // Subject leads with the root cause, so the inbox itself is diagnostic.
+  // A storm renames the state outright: "DOWN" for the third time in an hour
+  // describes the moment accurately and the situation badly.
+  const allStorm = entries.length > 0 && entries.every((e) => e.storm);
+  if (allStorm && isDown) statusText = 'UNSTABLE';
+
   let subject;
   if (consolidated) {
     subject = `${emoji} ${alertOwner} Alert: ${entries.length} streams ${statusText}${primaryCause ? ` — ${primaryCause}` : ''}${subjectCost}`;
@@ -2554,7 +2957,17 @@ function composeAlert({ kind, entries, scope, consolidated = false, recoveredFro
 
   const blocks = entries.map((e, i) => renderStreamBlock(e, i, entries.length)).join('');
 
+  // An email that goes quiet without saying so reads as a monitor that died.
+  // The alert that declares a storm is the one chance to tell the recipient
+  // that the silence which follows is deliberate, and what will end it.
+  const stormNotice = entries.filter((e) => e.storm).map((e) => `
+    <div class="callout-box" style="background-color:#211e3b; border:1px solid #3d3575; border-radius:8px; padding:16px; margin-bottom:16px;">
+      <p class="callout-title" style="margin:0 0 6px 0; font-weight:700; font-size:15px; color:#c4b5fd !important;"><span class="callout-title" style="color:#c4b5fd !important;">⏸ Further alerts for ${esc(e.stream.name)} are paused</span></p>
+      <p class="callout-text" style="margin:0; font-size:13px; line-height:1.6; color:#e2e8f0 !important;"><span class="callout-text" style="color:#e2e8f0 !important;">This is the ${e.storm.outages}${e.storm.outages === 2 ? 'nd' : e.storm.outages === 3 ? 'rd' : 'th'} time this stream has failed and recovered in ${esc(diagnose.fmtDuration(e.storm.spanMs || 0))}. Repeating like this almost always means the source encoder is dropping its connection, rather than the stream server failing. You will not be emailed about each one. Every outage is still recorded on the dashboard, and one summary will arrive once ${esc(e.stream.name)} has stayed on air for ${esc(diagnose.fmtDuration(STORM_CLEAR_AFTER_MS))}.</span></p>
+    </div>`).join('');
+
   const contentHtml = `
+    ${stormNotice}
     ${blocks}
     <table role="presentation" width="100%" border="0" cellspacing="0" cellpadding="0" style="margin-top:16px;">
       ${row('Detected At', `<span class="val-col" style="color:#f8fafc !important;">${detectedAt} CT</span>`, true)}
@@ -3459,14 +3872,24 @@ module.exports = {
   seedAlertsFromEnv,
   saveStationConfig,
   abandonEpisode,
-  // Exported for tests.
+  // Exported for tests. The storm engine is pure state plus a mail decision,
+  // so the flap sequence that caused the flood can be replayed without an
+  // encoder, a clock, or an SMTP server.
+  noteStormEpisode, noteStormClear, resolveStorms, stormTotals, loadStorms,
+  _storms: () => storms,
+  _resetStorms: () => { storms = {}; },
+  STORM_OUTAGE_COUNT, STORM_WINDOW_MS, STORM_CLEAR_AFTER_MS,
   composeAlert, renderAllStreamsTable, deliveryOutcome,
   isTransientRefusal, refusalDetail, queueDeliveryRetry, drainDeliveryRetries, _pendingDeliveries: pendingDeliveries,
   // Test seam. The retry loop is only meaningful against a transport that
   // refuses once and accepts later, which no real SMTP server will do on cue.
   _setTransporter: (t) => { transporter = t; },
+  // Test seam. resolveStorms() has to find the stream a storm belongs to, and
+  // the storm sequence is worth replaying without standing up a config file.
+  _setStreams: (list) => { streams = list; },
+  _setEpisodes: (e) => { episodes = e; },
   normaliseStreams, normaliseMounts, buildDefaultConfig, flattenChannels,
-  trackVariantDegradation, runChecks, probeVariants,
+  trackVariantDegradation, runChecks, probeVariants, resolveDeadAir,
   // Test seam. Recording a recovery must not depend on whether it was emailed,
   // and that is only provable by driving this directly.
   dispatchNotifications,
