@@ -1,12 +1,12 @@
 # ── Build Stage ──────────────────────────────────────
-FROM node:20-alpine AS deps
+FROM node:24-alpine AS deps
 
 WORKDIR /app
 COPY package.json package-lock.json* ./
 RUN npm ci --omit=dev 2>/dev/null || npm install --omit=dev
 
 # ── Production Stage ─────────────────────────────────
-FROM node:20-alpine
+FROM node:24-alpine
 
 LABEL org.opencontainers.image.title="Pacifica Stream Monitor"
 LABEL org.opencontainers.image.description="Real-time Icecast stream uptime monitor with email alerts"
