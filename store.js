@@ -178,6 +178,15 @@ function deviceSalt() {
   if (!salt) {
     salt = require('crypto').randomBytes(24).toString('hex');
     setMeta('deviceSalt', salt);
+    /* WRITTEN IMMEDIATELY, not on the next periodic flush.
+       setMeta only marks the record dirty, so a freshly generated salt would sit
+       in memory for up to SAVE_INTERVAL_MS. A container that died inside that
+       window would come back and generate a DIFFERENT salt — and then every
+       returning listener hashes to a new value and counts as a new person, so
+       cume climbs by the whole connected audience on that restart. Nothing
+       errors and nothing looks wrong; the graph just goes up.
+       One extra write, once in the lifetime of an install. */
+    saveEvents(true);
   }
   return salt;
 }

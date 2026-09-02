@@ -28,6 +28,7 @@ const assert = require('node:assert');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
+const { execFileSync } = require('child_process');
 
 process.env.DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'cume-'));
 
@@ -326,4 +327,61 @@ test('a year-over-year comparison needs two COMPLETE months', () => {
   const sep = store.getMonthlyAudience(['a'], { months: 36, now: Date.parse('2026-09-15T00:00:00Z') })
     .find((r) => r.month === '2026-09');
   if (sep) assert.equal(sep.vsLastYear, null, 'a part-month must not be put in a ratio');
+});
+
+/* ── The salt must survive a restart ────────────────────────────────────────
+   THE FAILURE THIS PREVENTS IS SILENT AND TOTAL. Device identity is a hash of
+   (IP + user agent + salt). If the salt is regenerated on boot, every returning
+   listener hashes to a new value and counts as a new person — so cume climbs by
+   the entire connected audience on every deploy, and the most important number
+   in the product quietly becomes a deploy counter. Nothing errors, nothing
+   looks wrong, and the graph goes up.
+
+   It was asserted in a comment and never tested. This tests it. */
+
+test('THE REAL TEST: the salt survives a process restart', () => {
+  // An in-process store.load() does NOT exercise this — module state stays in
+  // memory and the test passes while the real failure is wide open. That is
+  // exactly what happened: this was asserted in a comment, "tested" by reload,
+  // and a genuine restart produced a different salt every time. It must be a
+  // separate process or it proves nothing.
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'salt-restart-'));
+  const read = () => execFileSync(
+    process.execPath,
+    ['-e', 'const s=require("./store");s.load([]);process.stdout.write(s.deviceSalt())'],
+    { env: { ...process.env, DATA_DIR: dir }, cwd: path.join(__dirname, '..'),
+      encoding: 'utf8' },
+  ).trim().split('\n').pop();
+
+  const first = read();
+  assert.ok(first && first.length >= 24, 'a salt was generated');
+  assert.equal(read(), first, 'a new salt on restart would reset cume to zero on every deploy');
+  assert.equal(read(), first, 'and stays stable on the one after that');
+});
+
+test('a returning listener hashes the same after a restart', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'salt-dev-'));
+  const idFor = () => execFileSync(
+    process.execPath,
+    ['-e',
+      'const s=require("./store");const l=require("./listener-detail");s.load([]);'
+      + 'process.stdout.write(l.deviceId("203.0.113.9","Safari/605",s.deviceSalt()))'],
+    { env: { ...process.env, DATA_DIR: dir }, cwd: path.join(__dirname, '..'),
+      encoding: 'utf8' },
+  ).trim().split('\n').pop();
+
+  assert.equal(idFor(), idFor(), 'the same device must not look new after a redeploy');
+});
+
+test('an explicit DEVICE_HASH_SALT wins and is stable', () => {
+  const saved = process.env.DEVICE_HASH_SALT;
+  process.env.DEVICE_HASH_SALT = 'operator-supplied-salt';
+  try {
+    assert.equal(store.deviceSalt(), 'operator-supplied-salt');
+    store.load([]);
+    assert.equal(store.deviceSalt(), 'operator-supplied-salt');
+  } finally {
+    if (saved === undefined) delete process.env.DEVICE_HASH_SALT;
+    else process.env.DEVICE_HASH_SALT = saved;
+  }
 });
