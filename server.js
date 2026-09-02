@@ -706,6 +706,41 @@ app.get('/api/listeners', (req, res) => {
   );
 });
 
+/* ── Deep listener analytics ─────────────────────────────────────────────────
+   AUTHENTICATED, and it stays that way even though the payload carries no IP
+   address and no raw user agent — listener-detail.js aggregates before anything
+   reaches here, and its tests walk the whole returned object to prove it.
+
+   The gate is not compensating for a leak; it is a judgement that a station's
+   audience breakdown — which players, how long people listen, how much of the
+   audience is smart speakers — is competitive and internal, and is not the
+   emergency status information the front page exists to publish. The front page
+   stays fully public precisely so this can be closed without cost. */
+app.get('/api/listener-detail', auth.requireAuth, (req, res) => {
+  const detail = monitor.getListenerDetail();
+  const mountFilter = (req.query.mount || '').trim();
+
+  const mounts = Object.entries(detail.mounts)
+    .filter(([key]) => !mountFilter || key.endsWith(mountFilter))
+    .map(([key, agg]) => ({ key, ...agg }))
+    .sort((a, b) => (b.listeners || 0) - (a.listeners || 0));
+
+  res.json({
+    ...detail.meta,
+    enabled: monitor.LISTENER_DETAIL_ENABLED,
+    everyCycles: monitor.LISTENER_DETAIL_EVERY,
+    // Named so a reader can see WHICH server the credential covers, without the
+    // credential itself ever being in a response.
+    credentialedHost: monitor.adminHost() || null,
+    totals: {
+      connections: mounts.reduce((n, m) => n + (m.connections || 0), 0),
+      listeners: mounts.reduce((n, m) => n + (m.listeners || 0), 0),
+      bots: mounts.reduce((n, m) => n + (m.bots || 0), 0),
+    },
+    mounts,
+  });
+});
+
 // ── Live Icecast Server Diagnostics ─────────────────────────────────────────
 // Exposes the raw mount inventory the diagnosis engine correlates against —
 // including other stations on the same host, which is how a KPFT-only fault is

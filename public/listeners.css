@@ -565,3 +565,154 @@
 .cc-sec .cc-delta { margin-top: 0; margin-left: auto; font-size: 10px; }
 
 .count-card.unavailable .cc-total { color: var(--text-tertiary); }
+
+/* ── Who Is Listening (authenticated section) ───────────────────────────────
+   Matches the audience tiles above rather than introducing a second visual
+   language: this is one more panel on the same page, not a separate product. */
+
+.deep-tiles {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  gap: 12px;
+  margin: 4px 0 18px;
+}
+
+.deep-tile {
+  background: var(--surface-1);
+  border: 1px solid var(--surface-3);
+  border-radius: 12px;
+  padding: 16px 18px;
+}
+
+.deep-tile-label {
+  font-size: 12px;
+  color: var(--text-secondary);
+  margin-bottom: 6px;
+}
+
+.deep-tile-value {
+  font-size: 28px;
+  font-weight: 700;
+  color: var(--primary-light);
+  line-height: 1.1;
+}
+
+.deep-tile-note {
+  margin-top: 5px;
+  font-size: 11px;
+  color: var(--text-tertiary);
+  line-height: 1.45;
+}
+
+.deep-split {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 22px;
+  margin-bottom: 20px;
+}
+
+.deep-sub {
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: .04em;
+  text-transform: uppercase;
+  color: var(--text-secondary);
+  margin: 4px 0 10px;
+}
+
+/* A label / bar / value row. The bar is the comparison; the number is the fact.
+   Both are present because a bar alone cannot be read off precisely and a
+   number alone cannot be scanned. */
+.deep-bar-row {
+  display: grid;
+  grid-template-columns: minmax(88px, 34%) 1fr auto;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 7px;
+  font-size: 13px;
+}
+
+.deep-bar-label {
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.deep-bar-track {
+  height: 8px;
+  background: var(--surface-2);
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.deep-bar-fill {
+  height: 100%;
+  background: var(--primary);
+  border-radius: 4px;
+  min-width: 2px;
+}
+
+.deep-bar-val {
+  font-variant-numeric: tabular-nums;
+  color: var(--text-primary);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.deep-bar-pct {
+  color: var(--text-tertiary);
+  margin-left: 6px;
+}
+
+/* Machines are shown, not hidden — the count is the gap between the published
+   listener figure and the real audience. */
+.deep-bot { color: var(--status-unknown); font-weight: 600; }
+
+.deep-locked {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 20px 22px;
+  background: var(--surface-1);
+  border: 1px dashed var(--surface-4);
+  border-radius: 12px;
+}
+
+.deep-locked .material-symbols-outlined {
+  font-size: 26px;
+  color: var(--text-tertiary);
+  flex: none;
+}
+
+.deep-locked-title {
+  font-weight: 600;
+  color: var(--text-primary);
+  margin-bottom: 3px;
+}
+
+.deep-locked-note {
+  font-size: 12.5px;
+  color: var(--text-secondary);
+  line-height: 1.5;
+  max-width: 62ch;
+}
+
+.deep-signin {
+  margin-left: auto;
+  flex: none;
+  padding: 8px 16px;
+  border-radius: 8px;
+  background: var(--primary);
+  color: #fff;
+  font-size: 13px;
+  font-weight: 600;
+  text-decoration: none;
+}
+
+.deep-signin:hover { background: var(--primary-dark); }
+
+@media (max-width: 560px) {
+  .deep-locked { flex-wrap: wrap; }
+  .deep-signin { margin-left: 0; }
+}

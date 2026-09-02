@@ -66,11 +66,14 @@ stations' broadcasts, which is a different product with a different risk profile
 the same reason §3.4 declines `killsource`. Recorded here as a fact about what was
 sent, so that a later reader does not go looking for where it was filed.
 
-**§8 Q2 is now the blocking question rather than a theoretical one.** This is the
-credential for the *shared* host: it reads the listeners of every Pacifica sister
-station on `streams.pacifica.org`, not only KPFT's. Being technically able to is
-not being entitled to, and the answer decides how much of §3 may be collected at
-all. It should be asked before 5.3 begins collecting, not after.
+**The credential covers the whole shared host**, so it reads every Pacifica
+sister station on `streams.pacifica.org`, not only KPFT's. That is intended, and
+authorised — see §8 Q2, closed 2026-09-02. It is what makes the network-level
+question in §2 ("five metros or one national audience?") answerable at all.
+
+The one thing to remember when building on it: **the dashboard needs no login to
+read**, so a page showing per-listener rows would show them to anyone with the
+URL. §5 covers this.
 
 **Next step is 5.1 and nothing else:** fetch `/admin/stats` and
 `/admin/listclients` raw and read the XML. Every design in this document assumes a
@@ -202,9 +205,10 @@ that is working — a fault the monitor currently cannot see at all.
 | `listclients?mount=/classic_country` (ours) | **HTTP 200** |
 | `listclients?mount=/wbai_128` (WBAI's) | **HTTP 200** |
 
-It reads **every station's listeners on the host**, not only KPFT's. The technical
-half of §8 Q2 is answered yes; only the entitlement half is open, and it is now
-the sole thing standing between this document and a build. Ask Pacifica.
+It reads **every station's listeners on the host**, not only KPFT's — which is
+what the cross-station work in §6 needs, and is authorised (§8 Q2). Nothing here
+is blocked on anyone. What remains is ordinary build work: §4 (storage) and §5
+(don't put per-listener rows on a page that needs no login).
 
 ### The four fields §1 predicted are the four fields that exist
 
@@ -660,8 +664,18 @@ those two are where a wrong decision is expensive to undo.
    **ANSWERED 2026-09-02 — yes, for `streams.pacifica.org:9000`.** See §0. No
    credential yet for `streaming.wbai.org`, which is a separate server and a
    separate ask; every WBAI figure stays credential-free until there is one.
-2. **Does holding a server credential entitle us to read every station's
-   listeners on it**, including stations not monitored here? A technical yes is
-   not a policy yes.
+2. ~~**Does holding a server credential entitle us to read every station's
+   listeners on it**, including stations not monitored here?~~
+   **ANSWERED 2026-09-02 — yes. Authorised.** Pacifica issued the credential to
+   this project's own build team for this purpose; the network's stations are
+   the intended beneficiaries of the cross-station analysis in §6. Q1 and Q2 are
+   both closed, and **nothing in this document is waiting on Pacifica any more.**
+
+   > §5 still applies, for one unrelated reason: **reading the dashboard needs no
+   > login**, so whatever a page shows is visible to anyone with the URL. Aggregate
+   > on the server, or set `REQUIRE_LOGIN_FOR_READ=true`. Either is fine.
 3. **Is there an existing listener-privacy policy** these panels must comply
-   with? If Pacifica has published one, it decides §5 rather than us.
+   with? If Pacifica has published one, it decides §5 rather than us. Worth
+   knowing whenever someone happens to find out — **not a gate on any build**,
+   because §5's rule (aggregate on the server, never publish a per-listener row)
+   is stricter than any policy is likely to require.

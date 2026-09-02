@@ -43,6 +43,7 @@
 const nodemailer = require('nodemailer');
 const diagnose = require('./diagnose');
 const store = require('./store');
+const listenerDetailModule = require('./listener-detail');
 
 // ── Default Streams ─────────────────────────────────────────────────────────
 const DEFAULT_STREAMS = [
@@ -1549,6 +1550,82 @@ async function runChecks() {
  * statusUrl for a host still wins — that is the only way to point at a status
  * document that is not at the conventional path.
  */
+/* ── Icecast admin credentials ───────────────────────────────────────────────
+   BOUND TO ONE HOST, DELIBERATELY.
+
+   Several monitored stations run their own Icecast — KPFA is on both Pacifica's
+   shared server and its own. Applying one admin credential to "every monitored
+   host" would send Pacifica's admin password to streams.kpfa.org, which is a
+   third party's machine. A credential is therefore attached to exactly the host
+   it was issued for and to nothing else.
+
+   Env is the supply mechanism until per-host entry exists in the admin panel
+   (docs/AUDIENCE-ROADMAP.md §4.1), following the same "env seeds, the store
+   owns" rule as the rest of the configuration. */
+function adminHost() {
+  const explicit = (process.env.ICECAST_ADMIN_HOST || '').trim();
+  if (explicit) return explicit;
+  // Falls back to the host the status URL points at. If NEITHER is set this
+  // returns '' and adminCredsFor() then matches no host at all — fail closed.
+  // A credential with no named destination is never sent speculatively.
+  try { return new URL(process.env.ICECAST_STATUS_URL || '').host; } catch { return ''; }
+}
+
+function adminCredsFor(host) {
+  const user = (process.env.ICECAST_ADMIN_USER || '').trim();
+  const password = process.env.ICECAST_ADMIN_PASSWORD || '';
+  if (!user || !password) return null;
+  const scoped = adminHost();
+  if (!scoped || host !== scoped) return null;
+  return { user, password };
+}
+
+/* How often per-listener detail is collected, in check cycles. Session length
+   comes from Icecast's own `Connected` counter rather than being inferred from
+   polling, so minute resolution buys nothing here — five minutes catches every
+   session and cuts the request volume fivefold. */
+const LISTENER_DETAIL_EVERY = Math.max(1, parseInt(process.env.LISTENER_DETAIL_EVERY, 10) || 5);
+const LISTENER_DETAIL_ENABLED = String(process.env.LISTENER_DETAIL_ENABLED ?? 'true').toLowerCase() !== 'false';
+
+// Latest aggregate per "host+mount". Aggregates only — see listener-detail.js.
+let listenerDetail = {};
+let listenerDetailMeta = { lastRunAt: null, lastError: null, mounts: 0, host: null };
+
+/**
+ * Collect per-listener aggregates for every mount on a host we hold a
+ * credential for.
+ *
+ * Sequential rather than parallel: this is somebody else's production server
+ * and fifteen simultaneous admin requests every five minutes is a burst it has
+ * no reason to absorb. The whole pass costs well under a second in practice.
+ */
+async function collectListenerDetail(hosts) {
+  if (!LISTENER_DETAIL_ENABLED) return;
+  const withCreds = (hosts || [])
+    .map((h) => ({ ...h, creds: adminCredsFor(h.host) }))
+    .filter((h) => h.creds);
+  if (!withCreds.length) return;
+
+  const next = {};
+  let lastError = null;
+  for (const h of withCreds) {
+    const snap = snapshot?.byHost?.[h.host];
+    const mountPaths = Object.keys(snap?.mounts || {});
+    const base = h.statusUrl.replace(/\/[^/]*$/, '');
+    for (const mountPath of mountPaths) {
+      const agg = await listenerDetailModule.collectMount(base, mountPath, h.creds);
+      if (agg.ok) next[h.host + mountPath] = agg;
+      else lastError = `${mountPath}: ${agg.error}`;
+    }
+    listenerDetailMeta.host = h.host;
+  }
+
+  listenerDetail = next;
+  listenerDetailMeta.lastRunAt = new Date().toISOString();
+  listenerDetailMeta.lastError = lastError;
+  listenerDetailMeta.mounts = Object.keys(next).length;
+}
+
 function currentHosts() {
   const configured = new Map();
   const cfg = store.getStationConfig();
@@ -1586,6 +1663,21 @@ async function runChecksInner() {
   // open afterwards and are gone long before the next cycle reads it again.
   const snap = await diagnose.fetchHostSnapshots(currentHosts());
   snapshot = snap;
+
+  // Also before the probes, and for a second reason on top of the one above:
+  // these are admin requests, not stream connections, so they add nobody to any
+  // listener count — but reading the audience BEFORE opening our own probes
+  // keeps the detail and the counts describing the same moment.
+  if (cycleCount % LISTENER_DETAIL_EVERY === 1 % LISTENER_DETAIL_EVERY) {
+    try {
+      await collectListenerDetail(currentHosts());
+    } catch (e) {
+      // Never allowed to break a check cycle: this is an enrichment, and the
+      // outage monitoring it sits beside is the part that matters.
+      listenerDetailMeta.lastError = e.message;
+      console.warn(`[Monitor] listener detail collection failed: ${e.message}`);
+    }
+  }
 
   const results = await Promise.all(streams.map((s) => diagnose.probeStream(s)));
 
@@ -3958,4 +4050,10 @@ module.exports = {
   // and that is only provable by driving this directly.
   dispatchNotifications,
   getVariantHealth: (streamId) => variantHealth[streamId] || {},
+  // Deep listener analytics. Aggregates only — listener-detail.js guarantees no
+  // IP or raw user agent is in here. Served behind the admin gate regardless,
+  // because the audience breakdown is not something to publish by default.
+  getListenerDetail: () => ({ meta: { ...listenerDetailMeta }, mounts: { ...listenerDetail } }),
+  collectListenerDetail, adminCredsFor, adminHost,
+  LISTENER_DETAIL_EVERY, LISTENER_DETAIL_ENABLED,
 };

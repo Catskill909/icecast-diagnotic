@@ -188,10 +188,14 @@ phase is no longer waiting on anyone. `streaming.wbai.org` is a separate server
 with no credential, so WBAI stays on credential-free figures.
 
 **Start at 5.1 and do not skip to 5.3.** Two things gate collection, both named
-below: the field shape is undocumented (5.1), and the storage decision (5.2) has
-to be made before rows exist rather than migrated after. A third gate is not
-technical — the credential reads *every* station on that shared host, and whether
-we may is a question for Pacifica: `ADMIN-ACCESS-SCOPE.md` §8 Q2.
+below: the field shape is undocumented (5.1 — now done, see
+`ADMIN-ACCESS-SCOPE.md` §0.3), and the storage decision (5.2) has to be made
+before rows exist rather than migrated after.
+
+**Nothing is gated on Pacifica.** The credential covers the whole shared host and
+that is authorised (`ADMIN-ACCESS-SCOPE.md` §8). Only the ordinary build rule in
+§5 remains: the dashboard needs no login to read, so aggregate per-listener data
+server-side rather than shipping rows to the page.
 
 | | Item |
 |---|---|

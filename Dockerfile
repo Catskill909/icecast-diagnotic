@@ -31,6 +31,7 @@ COPY auth.js ./
 COPY redact.js ./
 COPY safe-url.js ./
 COPY discover.js ./
+COPY listener-detail.js ./
 COPY scripts/ ./scripts/
 COPY seed/ ./seed/
 COPY public/ ./public/

@@ -220,6 +220,40 @@
       <div id="ath-panel"></div>
     </div>
 
+    <!-- Deep listener detail. Authenticated: the page itself is public so the
+         status information stays readable in an emergency, and this one section
+         is gated rather than the whole page. -->
+    <div class="section-title">
+      <span class="material-symbols-outlined">devices</span>
+      Who Is Listening
+      <details class="info-popover">
+        <summary class="help-btn" title="About this panel">
+          <span class="material-symbols-outlined">help</span>
+        </summary>
+        <div class="info-popover-card">
+          Measured from Icecast's own per-connection record, not inferred from
+          polling. <strong>Session length is real</strong> — Icecast reports how long
+          each connection has lasted — so this is the only place the app can state
+          time spent listening rather than estimate it.
+          <br><br>
+          <strong>Machines are separated from people.</strong> A connection open for
+          longer than 12 hours is a relay or a scraper, not a listener, and is
+          excluded from the audience figure while still being counted.
+          <br><br>
+          <strong>Aggregators may hide the majority.</strong> Where TuneIn and similar
+          proxy their listeners, one connection stands for many and carries no device
+          detail — so the breakdown describes the direct-connection audience.
+          <br><br>
+          Requires sign-in. No listener address or raw device string is ever sent to
+          this page; everything here is counted on the server.
+        </div>
+      </details>
+      <span class="section-hint" id="deep-hint"></span>
+    </div>
+    <div class="panel fade-in">
+      <div id="deep-panel"></div>
+    </div>
+
   </div>
 </div>
 

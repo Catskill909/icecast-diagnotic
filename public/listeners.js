@@ -688,6 +688,166 @@
       : d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
   }
 
+  /* ── Who is listening (authenticated) ─────────────────────────────────
+     This section is gated while the rest of the page is public, so a signed-out
+     visitor must get an EXPLANATION rather than an error or a missing panel. A
+     panel that silently disappears teaches nobody that the data exists. */
+
+  function fmtSession(sec) {
+    if (sec == null) return '—';
+    if (sec < 60) return `${Math.round(sec)}s`;
+    if (sec < 3600) return `${Math.round(sec / 60)}m`;
+    const h = Math.floor(sec / 3600);
+    const m = Math.round((sec % 3600) / 60);
+    return m ? `${h}h ${m}m` : `${h}h`;
+  }
+
+  function bars(obj, total, limit) {
+    const rows = Object.entries(obj || {}).sort((a, b) => b[1] - a[1]).slice(0, limit || 8);
+    if (!rows.length) return '<div class="muted">No data</div>';
+    return rows.map(([label, n]) => {
+      const pct = total ? Math.round((n / total) * 100) : 0;
+      return `
+        <div class="deep-bar-row">
+          <div class="deep-bar-label">${esc(label)}</div>
+          <div class="deep-bar-track"><div class="deep-bar-fill" style="width:${pct}%"></div></div>
+          <div class="deep-bar-val">${n}<span class="deep-bar-pct">${pct}%</span></div>
+        </div>`;
+    }).join('');
+  }
+
+  async function renderDeep() {
+    const panel = document.getElementById('deep-panel');
+    const hint = document.getElementById('deep-hint');
+    if (!panel) return;
+
+    let res;
+    try {
+      res = await fetch('/api/listener-detail');
+    } catch {
+      panel.innerHTML = '<div class="muted">Could not reach the server.</div>';
+      return;
+    }
+
+    if (res.status === 401 || res.status === 503) {
+      // 401 = not signed in. 503 = no admin password configured on the server.
+      // Different causes, and the fix differs, so they do not share a message.
+      const why = res.status === 401
+        ? 'Sign in to see which players, devices and smart speakers the audience uses, and how long people actually listen.'
+        : 'No admin password is configured on this server, so protected sections are switched off.';
+      panel.innerHTML = `
+        <div class="deep-locked">
+          <span class="material-symbols-outlined">lock</span>
+          <div>
+            <div class="deep-locked-title">Sign in to view</div>
+            <div class="deep-locked-note">${esc(why)}</div>
+          </div>
+          ${res.status === 401 ? '<a class="deep-signin" href="/login.html">Sign in</a>' : ''}
+        </div>`;
+      if (hint) hint.textContent = '';
+      return;
+    }
+
+    if (!res.ok) { panel.innerHTML = '<div class="muted">Unavailable.</div>'; return; }
+
+    const d = await res.json();
+    const mounts = (d.mounts || []).filter((m) => (m.connections || 0) > 0);
+
+    if (!d.credentialedHost) {
+      panel.innerHTML = `
+        <div class="deep-locked">
+          <span class="material-symbols-outlined">key_off</span>
+          <div>
+            <div class="deep-locked-title">No Icecast admin credential</div>
+            <div class="deep-locked-note">This needs an Icecast admin password for the stream's server. Without one the rest of the page is unaffected — only this section depends on it.</div>
+          </div>
+        </div>`;
+      return;
+    }
+
+    if (!mounts.length) {
+      panel.innerHTML = '<div class="muted">No listener detail collected yet — the first pass runs within a few minutes of startup.</div>';
+      return;
+    }
+
+    // Totals across the credentialed host.
+    const players = {}; const platforms = {};
+    let listeners = 0; let bots = 0; let connections = 0;
+    for (const m of mounts) {
+      listeners += m.listeners || 0; bots += m.bots || 0; connections += m.connections || 0;
+      for (const [k, v] of Object.entries(m.players || {})) players[k] = (players[k] || 0) + v;
+      for (const [k, v] of Object.entries(m.platforms || {})) platforms[k] = (platforms[k] || 0) + v;
+    }
+
+    // The longest-running mount's median is the most meaningful single session
+    // figure; medians cannot be averaged across mounts, so one is SHOWN rather
+    // than a blended number invented from several.
+    const busiest = mounts.slice().sort((a, b) => (b.session?.count || 0) - (a.session?.count || 0))[0];
+
+    const rows = mounts.map((m) => `
+      <tr>
+        <td class="mono">${esc(m.mount)}</td>
+        <td class="num">${m.listeners}</td>
+        <td class="num">${m.bots ? `<span class="deep-bot">${m.bots}</span>` : '—'}</td>
+        <td class="num">${fmtSession(m.session?.medianSec)}</td>
+        <td class="num">${fmtSession(m.session?.p90Sec)}</td>
+        <td class="num">${fmtSession(m.session?.maxSec)}</td>
+        <td>${esc(Object.entries(m.players || {}).sort((a, b) => b[1] - a[1]).slice(0, 2).map(([k, v]) => `${k} ${v}`).join(', ') || '—')}</td>
+      </tr>`).join('');
+
+    panel.innerHTML = `
+      <div class="deep-tiles">
+        <div class="deep-tile">
+          <div class="deep-tile-label">Listeners</div>
+          <div class="deep-tile-value">${listeners}</div>
+          <div class="deep-tile-note">${connections} connections, ${bots} machine${bots === 1 ? '' : 's'} excluded</div>
+        </div>
+        <div class="deep-tile">
+          <div class="deep-tile-label">Typical session${busiest ? ` · ${esc(busiest.mount)}` : ''}</div>
+          <div class="deep-tile-value">${fmtSession(busiest?.session?.medianSec)}</div>
+          <div class="deep-tile-note">median — measured, not estimated</div>
+        </div>
+        <div class="deep-tile">
+          <div class="deep-tile-label">Longest session</div>
+          <div class="deep-tile-value">${fmtSession(Math.max(...mounts.map((m) => m.session?.maxSec || 0)) || null)}</div>
+          <div class="deep-tile-note">of a real listener, machines removed</div>
+        </div>
+        <div class="deep-tile">
+          <div class="deep-tile-label">Mounts measured</div>
+          <div class="deep-tile-value">${mounts.length}</div>
+          <div class="deep-tile-note">on ${esc(d.credentialedHost)}</div>
+        </div>
+      </div>
+
+      <div class="deep-split">
+        <div>
+          <div class="deep-sub">Player / app</div>
+          ${bars(players, listeners, 9)}
+        </div>
+        <div>
+          <div class="deep-sub">Platform</div>
+          ${bars(platforms, listeners, 6)}
+        </div>
+      </div>
+
+      <div class="deep-sub">Per mount</div>
+      <div class="table-scroll">
+        <table class="aud-table">
+          <thead><tr>
+            <th>Mount</th><th class="num">Listeners</th><th class="num">Machines</th>
+            <th class="num">Median</th><th class="num">p90</th><th class="num">Longest</th><th>Top players</th>
+          </tr></thead>
+          <tbody>${rows}</tbody>
+        </table>
+      </div>`;
+
+    if (hint) {
+      hint.textContent = d.lastRunAt
+        ? `measured ${fmtWhen(d.lastRunAt)} · live, not a stored average`
+        : '';
+    }
+  }
+
   /* ── Boot ────────────────────────────────────────────────────────────── */
 
   document.getElementById('range-pills').addEventListener('click', (e) => {
@@ -704,5 +864,8 @@
   (async function boot() {
     await initStationPicker();
     await load();
+    // Independent of load(): a failure here must not take the public page with
+    // it, and it does not move with the date-range pills — it is a live reading.
+    renderDeep().catch(() => {});
   })();
 })();
