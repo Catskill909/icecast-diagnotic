@@ -115,3 +115,66 @@ test('the ceiling is the documented one, so the guard cannot be loosened silentl
   assert.equal(store.TUNE_IN_PEAK_MULTIPLE, 12);
   assert.equal(store.TUNE_IN_SANITY_FLOOR, 50);
 });
+
+/* ── Under-counting ─────────────────────────────────────────────────────────
+   The other half, and the harder one to catch. A figure that is too LOW is
+   plausible against its own hour — it looks like a quiet stretch — so nothing
+   about its size gives it away. Only the readings can, and only while they still
+   exist.
+
+   Driven through arrivalFault() rather than through prune(), because the live
+   counter is correct and will not produce an under-count on demand. Proving the
+   arm fires means handing it a figure the real code cannot generate.
+   ─────────────────────────────────────────────────────────────────────────── */
+
+test('arrivals below the rise the readings observed are refused', () => {
+  // The hour climbed from 40 to 300, so at least 260 people arrived. A counter
+  // reporting 12 has missed them, and 12 is a number nobody would question.
+  const fault = store.arrivalFault(12, 260, 300, 60);
+
+  assert.ok(fault, 'an impossible figure is rejected however modest it looks');
+  assert.match(fault, /under-counting/);
+  assert.match(fault, /at least 260/);
+});
+
+test('a figure exactly at the floor is allowed', () => {
+  // A monotonic climb from 40 to 300 with no dips: the rise IS the arrivals, and
+  // the bound is inclusive. An off-by-one here would reject sound data every time
+  // an audience only ever grew.
+  assert.equal(store.arrivalFault(260, 260, 300, 60), null);
+});
+
+test('the two arms cannot both be satisfied away — a real figure passes both', () => {
+  // Floor 260, ceiling max(50, 300 * 12) = 3,600. A true count sits between.
+  assert.equal(store.arrivalFault(410, 260, 300, 60), null);
+  assert.ok(store.arrivalFault(259, 260, 300, 60), 'one below the floor still fails');
+  assert.ok(store.arrivalFault(3601, 260, 300, 60), 'one above the ceiling still fails');
+});
+
+test('a rise across a monitoring gap does not become a floor the counter must meet', () => {
+  // THE FALSE-POSITIVE THIS GUARD COULD CAUSE. A stream off the air for ten
+  // minutes returns with its audience intact; compaction deliberately does not
+  // count that step as arrivals. If the floor measured the whole hour instead of
+  // each contiguous run, it would demand arrivals the counter is right to omit
+  // and would erase sound hours — the guard becoming the bug.
+  store.ensureStreams(['sanity-gap']);
+  const start = agedHourStart();
+  const push = (m, listeners) => store.addSample('sanity-gap', {
+    timestamp: new Date(start + m * MIN).toISOString(),
+    status: 'up',
+    responseTime: 10,
+    listeners,
+  });
+
+  for (let m = 0; m < 10; m++) push(m, 30);   // steady, then off the air
+  for (let m = 40; m < 60; m++) push(m, 300); // back with the audience intact
+
+  store.prune();
+  const r = (store.getRollups('sanity-gap') || []).find((x) => Date.parse(x.hour) === start);
+
+  assert.ok(r, 'the hour was compacted');
+  assert.equal(typeof r.tuneIns, 'number',
+    'the hour survives: the 30 -> 300 step is across a gap and is not arrivals');
+  assert.ok(r.tuneIns < 270,
+    'and the step was genuinely not counted, so the floor never demanded it');
+});

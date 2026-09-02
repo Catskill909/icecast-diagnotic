@@ -61,6 +61,13 @@ const COMPARISON_COVERAGE_FLOOR = 0.9;
    (peak 1, toggling every minute) from tripping a ratio test it cannot help but
    fail.
    ─────────────────────────────────────────────────────────────────────────── */
+// Two consecutive readings further apart than this are not a measurement of what
+// happened between them, so a rise across the gap is not counted as arrivals.
+// SHARED DELIBERATELY: compaction counts arrivals with this rule and the floor
+// below proves them against it. If the two ever used different gaps the floor
+// would reject sound figures, so they must read the same constant.
+const TUNE_IN_MAX_GAP_MS = 5 * 60 * 1000;
+
 const TUNE_IN_PEAK_MULTIPLE = parseInt(process.env.TUNE_IN_PEAK_MULTIPLE, 10) || 12;
 const TUNE_IN_SANITY_FLOOR = parseInt(process.env.TUNE_IN_SANITY_FLOOR, 10) || 50;
 
@@ -861,6 +868,41 @@ function deriveListenerImpact(event) {
 }
 
 /**
+ * Why an hour's arrival count cannot be believed, or null if it can.
+ *
+ * Split out from prune() and exported because a guard that cannot be exercised
+ * directly is not a guard. The counter it protects is correct today, so the only
+ * way to prove the under-count arm actually fires is to hand this function a
+ * figure the live code will not produce.
+ *
+ * `floor` is the rise the readings themselves observed (see the run-based bound
+ * in prune); `peak` and `count` describe the same hour.
+ */
+function arrivalFault(tuneIns, floor, peak, count) {
+  if (tuneIns == null) return null;
+
+  // Arithmetic, not judgement: reaching the peak from the opening level takes
+  // that much rise, so arrivals below it were missed rather than absent.
+  if (tuneIns < floor) {
+    return `${tuneIns} arrivals, but the readings rise by at least ${floor} `
+      + `(peak ${peak} over ${count} reading(s)). Arrivals cannot be fewer than the `
+      + 'rise that was actually observed, so compaction is under-counting.';
+  }
+
+  // Judgement, and deliberately loose: above this the whole audience turned over
+  // every few minutes, which no station does and a counting fault does.
+  const ceiling = Math.max(TUNE_IN_SANITY_FLOOR, peak * TUNE_IN_PEAK_MULTIPLE);
+  if (tuneIns > ceiling) {
+    return `${tuneIns} arrivals against a peak of ${peak} over ${count} reading(s) `
+      + `— above the ${TUNE_IN_PEAK_MULTIPLE}x ceiling. This is the signature of the `
+      + 'listener-minutes fault repaired on 2026-08-31; if it recurs, compaction is '
+      + 'miscounting and arrival figures written since should not be trusted.';
+  }
+
+  return null;
+}
+
+/**
  * Compacts raw samples older than the retention window into hourly rollups,
  * preserving uptime accuracy indefinitely at ~1/60th the storage cost.
  */
@@ -914,7 +956,7 @@ function prune() {
           let add;
           if (!prev) {
             add = cur.listeners;              // genuinely the first ever reading
-          } else if (t - prev.t > 5 * 60 * 1000) {
+          } else if (t - prev.t > TUNE_IN_MAX_GAP_MS) {
             add = 0;                          // a gap is not a surge of listeners
           } else {
             add = Math.max(0, cur.listeners - prev.listeners);
@@ -924,6 +966,55 @@ function prune() {
         }
 
         if (prev) setMeta('compactCarry', { ...carry, [id]: prev });
+      }
+
+      // ── The lower bound each hour's arrivals cannot fall below ────────────
+      //
+      // Not a heuristic. Over any run of consecutive readings, the sum of the
+      // positive steps is at least (highest - first): reaching the peak from the
+      // opening level requires that much rise, and any dips in between only add
+      // more. So an hour whose stored arrivals sit BELOW this did not observe a
+      // quiet hour — it failed to count one it observed.
+      //
+      // Measured per contiguous run rather than per hour, because a gap wider
+      // than TUNE_IN_MAX_GAP_MS is deliberately not counted as arrivals: a stream
+      // that returns from a ten-minute outage with 200 listeners did not gain 200
+      // in that moment. Breaking the run at each gap is what keeps the floor a
+      // fact about the counter rather than about the monitor's downtime.
+      const floorByHour = new Map();
+      {
+        const ordered = [...expire]
+          .filter((s) => s.status === 'up' && s.listeners != null)
+          .sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
+
+        let runHour = null;
+        let runFirst = 0;
+        let runPeak = 0;
+        let prevT = null;
+
+        const closeRun = () => {
+          if (runHour == null) return;
+          const rise = Math.max(0, runPeak - runFirst);
+          if (rise) floorByHour.set(runHour, (floorByHour.get(runHour) || 0) + rise);
+          runHour = null;
+        };
+
+        for (const cur of ordered) {
+          const t = new Date(cur.timestamp).getTime();
+          const key = hourKey(cur.timestamp);
+          // A new hour starts a new run for the same reason a gap does: the
+          // figure being proved is stored per hour, so the bound must be too.
+          if (runHour !== key || (prevT != null && t - prevT > TUNE_IN_MAX_GAP_MS)) {
+            closeRun();
+            runHour = key;
+            runFirst = cur.listeners;
+            runPeak = cur.listeners;
+          } else if (cur.listeners > runPeak) {
+            runPeak = cur.listeners;
+          }
+          prevT = t;
+        }
+        closeRun();
       }
       for (const s of expire) {
         const key = hourKey(s.timestamp);
@@ -957,26 +1048,22 @@ function prune() {
         }
       }
 
-      // THE GATE. Checked here because this is the last moment the raw samples
-      // and the figure derived from them exist together.
+      // THE GATE. Applied here because this is the last moment the raw samples
+      // and the figure derived from them exist together — once these samples are
+      // discarded nothing can contradict the number again, which is precisely how
+      // the listener-minutes fault survived a month unnoticed.
       //
-      // The response is to store nothing, not to store the number with a warning
+      // The response is to store nothing rather than the number with a warning
       // beside it: `null` already means "not recorded" to every reader, and
-      // publishing an arrival count we have just proved impossible is the exact
-      // failure being guarded against. An hour that trips this is reported as
-      // uncounted, which is true, rather than as an audience it never had.
+      // publishing an arrival count just proved wrong is the exact failure being
+      // guarded against. An hour that trips this reports as uncounted, which is
+      // true, rather than as an audience it never had.
       for (const b of buckets.values()) {
-        if (b.tuneIns == null) continue;
-        const ceiling = Math.max(TUNE_IN_SANITY_FLOOR, b.listenerPeak * TUNE_IN_PEAK_MULTIPLE);
-        if (b.tuneIns <= ceiling) continue;
-        console.error(
-          `[Store] Implausible arrival count rejected for ${id} at ${b.hour}: ` +
-          `${b.tuneIns} arrivals against a peak of ${b.listenerPeak} over ` +
-          `${b.listenerCount} reading(s) — above the ${TUNE_IN_PEAK_MULTIPLE}x ceiling. ` +
-          'That hour is recorded as unmeasured. This is the signature of the ' +
-          'listener-minutes fault repaired on 2026-08-31; if it recurs, compaction ' +
-          'is miscounting and arrival figures written since should not be trusted.',
+        const fault = arrivalFault(
+          b.tuneIns, floorByHour.get(b.hour) || 0, b.listenerPeak, b.listenerCount,
         );
+        if (!fault) continue;
+        console.error(`[Store] Rejected arrival count for ${id} at ${b.hour}: ${fault} That hour is recorded as unmeasured.`);
         b.tuneIns = null;
         // Distinct from a plain null: a rejected batch must not be quietly added
         // to a good figure already stored for the same hour by an earlier prune.
@@ -1650,7 +1737,7 @@ function tuneInsFromSamples(streamId, startMs, endMs, maxGapMs) {
  * and are reported as uncovered rather than as zero.
  */
 function getTuneIns(streamIds, startMs, endMs) {
-  const maxGapMs = 5 * 60 * 1000;   // five minutes: generous against a slow cycle
+  const maxGapMs = TUNE_IN_MAX_GAP_MS;   // five minutes: generous against a slow cycle
   let total = 0;
   let gaps = 0;
   let hoursFromRollup = 0;
@@ -2751,7 +2838,7 @@ module.exports = {
   getListeningDelivered, getAth, getMonthToDateAth, ATH_MONTHLY_ALLOWANCE,
   getListenerCounts, getListenerCountsAcross, concurrentBetween,
   getTuneInRecordingStart,
-  getTuneIns, tuneInsFromSamples,
+  getTuneIns, tuneInsFromSamples, arrivalFault,
   SAMPLE_RETENTION_DAYS,
   TUNE_IN_PEAK_MULTIPLE,
   TUNE_IN_SANITY_FLOOR,
