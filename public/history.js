@@ -1303,8 +1303,25 @@
       ? `<span class="state-chip resolved" title="Recovered ${new Date(e.resolvedAt).toLocaleString('en-US')}"><span class="material-symbols-outlined">check_circle</span>Resolved</span>`
       : '<span class="state-chip ongoing"><span class="material-symbols-outlined">pending</span>Ongoing</span>';
 
+    // A green "Alert sent" on a message the mail server partly refused is the
+    // one state that must not look healthy: the person who did not receive it
+    // has no other way to find out it was meant for them.
+    const rejectedCount = e.email?.rejectedCount != null
+      ? e.email.rejectedCount
+      : Array.isArray(e.email?.rejected) ? e.email.rejected.length : 0;
+
+    const retry = e.email?.retry;
+
     let mailChip;
-    if (e.email?.sent === true) {
+    if (retry?.recovered) {
+      // Refused at first, delivered on a retry. Nobody missed anything, so this
+      // must not read as a fault — but it is worth seeing that it happened.
+      mailChip = `<span class="mail-chip sent" title="Refused at first, delivered on retry ${retry.attempts}"><span class="material-symbols-outlined">mark_email_read</span>Alert sent (retried)</span>`;
+    } else if (retry?.pending) {
+      mailChip = '<span class="mail-chip partial" title="The mail server refused a recipient — retrying"><span class="material-symbols-outlined">schedule_send</span>Retrying delivery</span>';
+    } else if (e.email?.sent === true && rejectedCount > 0) {
+      mailChip = `<span class="mail-chip partial" title="${rejectedCount} recipient${rejectedCount === 1 ? '' : 's'} rejected by the receiving mail server"><span class="material-symbols-outlined">mark_email_unread</span>Partly delivered</span>`;
+    } else if (e.email?.sent === true) {
       mailChip = '<span class="mail-chip sent"><span class="material-symbols-outlined">mark_email_read</span>Alert sent</span>';
     } else if (e.email?.attempted) {
       mailChip = '<span class="mail-chip failed"><span class="material-symbols-outlined">error</span>Send failed</span>';

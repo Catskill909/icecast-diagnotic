@@ -848,6 +848,7 @@ a.help-btn { text-decoration: none; }
 .mail-chip .material-symbols-outlined { font-size: 14px; }
 .mail-chip.sent { background: var(--status-up-surface); color: var(--status-up); }
 .mail-chip.failed { background: var(--status-down-surface); color: var(--status-down); }
+.mail-chip.partial { background: rgba(245, 158, 11, 0.14); color: var(--warn); }
 .mail-chip.none { background: var(--surface-3); color: var(--text-tertiary); }
 
 /* Whether a failure is over is the first thing you want to know about it. */

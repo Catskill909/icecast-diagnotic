@@ -244,8 +244,41 @@
     const em = e.email || {};
     const er = [];
     const epush = (k, v, cls) => { if (v != null && v !== '') er.push(kvRow(k, v, cls)); };
-    epush('Alert sent', em.sent === true ? 'Yes' : em.attempted ? 'FAILED' : 'No',
-      em.sent === true ? 'good' : em.attempted ? 'bad' : '');
+    // A message some recipients were refused is not a delivered alert, and
+    // saying "Yes" here is how an alert that never arrived looks identical to
+    // one that did. Anonymous callers see only the count; an administrator sees
+    // which address bounced, which is the whole value of the audit trail.
+    const rejectedCount = em.rejectedCount != null
+      ? em.rejectedCount
+      : Array.isArray(em.rejected) ? em.rejected.length : 0;
+    const partial = em.sent === true && rejectedCount > 0;
+
+    epush('Alert sent',
+      partial ? `Partly — ${rejectedCount} recipient${rejectedCount === 1 ? '' : 's'} rejected`
+        : em.sent === true ? 'Yes'
+        : em.attempted ? 'FAILED' : 'No',
+      partial || (em.sent !== true && em.attempted) ? 'bad' : em.sent === true ? 'good' : '');
+    if (partial) {
+      epush('Not delivered to',
+        Array.isArray(em.rejected) && em.rejected.length
+          ? esc(em.rejected.join(', '))
+          : `${rejectedCount} recipient${rejectedCount === 1 ? '' : 's'} — the mail server refused the address`,
+        'bad');
+    }
+
+    // What happened after the refusal is the part that says whether anyone
+    // actually went uninformed.
+    const rt = em.retry;
+    if (rt?.recovered) {
+      epush('Retry', `Delivered on retry ${rt.attempts} — everyone received it`, 'good');
+    } else if (rt?.pending) {
+      epush('Retry', `Refused — retrying${rt.nextAt ? `, next attempt ${new Date(rt.nextAt).toLocaleTimeString('en-US')}` : ''}`, 'warn');
+    } else if (rt?.exhausted) {
+      epush('Retry',
+        `Gave up after ${rt.attempts} attempt${rt.attempts === 1 ? '' : 's'}${
+          Array.isArray(rt.stillRefused) && rt.stillRefused.length ? ` — ${esc(rt.stillRefused.join(', '))} never received it` : ''}`,
+        'bad');
+    }
     if (em.reason) epush('Reason', esc(em.reason));
     if (em.error) epush('SMTP error', `<code class="inline">${esc(em.error)}</code>`, 'bad');
     if (em.recipients && em.recipients.length) epush('Recipients', esc(em.recipients.join(', ')));

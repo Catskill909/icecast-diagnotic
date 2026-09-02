@@ -334,6 +334,7 @@ Public responses go through [`redact.js`](redact.js):
 | Withheld from anonymous callers | Why |
 |---|---|
 | `event.email.recipients` / `cc` | These are people. Replaced by `recipientCount`, so the history page can still say an alert reached three people without naming them |
+| `event.email.rejected` | The addresses a mail server refused. These are people too. Replaced by `rejectedCount`, so the page can still show partial delivery |
 | `event.email.messageId` | Embeds the sending domain and reads as an address; nothing renders it |
 | `diagnosis.icecast.admin` | The Icecast server's published contact address |
 | `host.statusUrl` | May carry credentials — `https://user:pass@host/admin/stats.xml` |
@@ -341,10 +342,18 @@ Public responses go through [`redact.js`](redact.js):
 
 Authenticated administrators see the full records, including who was notified.
 
-**Station configuration is projected by allowlist, not blocklist.** A blocklist
-protects the fields someone remembered; the next field leaks silently and nothing
-fails. A field wrongly withheld is a bug report — a field wrongly published
-cannot be recalled.
+**Everything is projected by allowlist, not blocklist.** A blocklist protects the
+fields someone remembered; the next field leaks silently and nothing fails. A
+field wrongly withheld is a bug report — a field wrongly published cannot be
+recalled.
+
+The delivery record was the last blocklist here, and it leaked exactly that way:
+`rejected` was added to it, carried real addresses, and was published to
+anonymous callers on every partially delivered alert. Nothing failed, because a
+blocklist cannot fail — it can only be out of date. It is now an allowlist like
+the rest, so a field added to the record is withheld until someone names it, and
+free-text SMTP errors are scrubbed as well (a rejection routinely quotes the
+address it refused).
 
 **What the gate is and is not.** It is one shared credential, an scrypt password
 hash, constant-time comparison, rate limiting with lockout, and a signed
@@ -401,6 +410,74 @@ last address by accident".
 **One list, no CC.** To/CC distinguishes people — "act on this" from "for your
 awareness" — and distinguishes nothing in an automated alert, where everyone
 receives the identical message and anyone can act on it.
+
+#### "Sent" is not "delivered"
+
+`sendMail` **resolves on a partial delivery failure**: the SMTP dialogue refuses
+some recipients and accepts the rest, and the promise only rejects when *every*
+recipient is refused. So a message can reach two of three people and look, to
+anything reading "did it throw", exactly like a clean send.
+
+Every alert therefore carries a `delivery` verdict alongside `sent`:
+
+| `delivery` | Means | `sent` |
+|---|---|---|
+| `all` | every recipient accepted it | `true` |
+| `partial` | **some addresses were refused** — `rejectedCount` says how many | `true` |
+| `none` | nobody received it, or the send threw | `false` |
+
+`sent` still means "at least one mailbox took it", because that is what the
+alert counters need — two people genuinely were told. It is `delivery` that
+answers whether the alert arrived, and the history page and event detail both
+read it: a partially delivered alert shows an amber **Partly delivered** chip,
+never the green "Alert sent".
+
+This existed because all three senders wrote `sent: true` by hand after an
+`await`. On 2026-09-02 a KPFT DOWN alert was stored `sent: true` and rendered
+"Alert sent: Yes" while the same record held the address the receiving server
+had just refused — the recipient found out only by noticing that the recovery
+email had arrived on its own. All three now read `deliveryOutcome()`, and
+`test/alert-delivery.test.js` fails if a fourth sender hand-rolls a success.
+
+#### A refused recipient is retried, not written off
+
+Recording the refusal honestly is only half of it. **A mail server refusing a
+recipient is usually temporary** — greylisting, a restart, an hourly rate cap, a
+moment of load — so the refused addresses are queued and tried again by the check
+cycle that is already running every minute.
+
+| | |
+|---|---|
+| Schedule | +1 min, +3 min, +7 min (`ALERT_RETRY_SCHEDULE_MS`) |
+| Retried | **only the refused addresses** — never the whole message |
+| Not retried | permanent 5xx refusals; the mailbox does not exist and the answer will not change |
+| On success | the event's record is rewritten to `delivery: "all"` with `retry.recovered` |
+| On exhaustion | `retry.exhausted`, naming who never received it |
+
+Re-sending the whole envelope would mail a duplicate outage alert to the people
+who *did* receive it, so the retry is scoped to the addresses that were refused.
+
+This is the same reasoning the Icecast status fetch already runs on: a one-second
+hiccup between two machines must not change the outcome. The difference is the
+timescale — a refused mailbox needs minutes, not seconds, so retrying inline
+would stall the check cycle.
+
+**This is what actually cost KPFT the alert on 2026-09-02.** The mail server
+refused one recipient at 9:44 and again at 9:46, then accepted normally from
+9:47. The refusal was recoverable and simply was never tried again, so a
+three-minute hiccup became a permanently missing DOWN alert for an outage that
+was still in progress. The recovery notice twenty minutes later arrived fine,
+which is the confusing part it produced: the alerting worked, one message did
+not, and nothing said so.
+
+The queue is in memory. A redeploy mid-retry drops pending attempts — acceptable
+because nothing is lost silently: the event keeps its `partial` verdict and the
+history page keeps showing it.
+
+**A test alert to a refused address now fails loudly.** That button exists to
+prove an address receives mail, so reporting success for one the mail server
+rejected defeats its only purpose — and it is the first thing reached for when
+an alert did not arrive.
 
 #### What the upgrade does to an existing deployment
 

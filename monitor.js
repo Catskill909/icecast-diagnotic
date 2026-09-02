@@ -1567,6 +1567,15 @@ async function runChecksInner() {
   await dispatchNotifications(newlyNotable, recoveries, { allDown, timestamp, snapshot: snap });
   await dispatchDegradedNotices(degradedNotices);
 
+  // Any alert a mail server refused earlier gets another try here. Wrapped
+  // because a mail problem must never stop the stream checks — monitoring the
+  // streams is the more important of the two jobs.
+  try {
+    await drainDeliveryRetries();
+  } catch (err) {
+    console.error('[Monitor] ✉️  delivery retry pass failed:', err.message);
+  }
+
   store.prune();
   store.saveEvents();
   store.setStatusCache(streamStatus);
@@ -2055,6 +2064,229 @@ async function sendGroupedAlert(opts) {
   return byStream;
 }
 
+/* ── Deferred delivery retries ───────────────────────────────────────────────
+   A mail server refusing a recipient is usually TEMPORARY: greylisting, a
+   restart, an hourly rate cap, a moment of load. On 2026-09-02 hype.net refused
+   one KPFT recipient at 9:44 and again at 9:46, then accepted normally from 9:47
+   onward — a roughly three-minute window that cost that recipient the DOWN alert
+   for an outage that was still in progress. The message was never retried, so a
+   transient refusal became a permanently missing alert.
+
+   This is the same reasoning the Icecast status fetch already runs on: a
+   one-second hiccup between two machines must not change the outcome. The
+   difference is the timescale — a refused mailbox needs minutes, not seconds, so
+   retrying inline would stall the check cycle. Instead the send is queued and
+   drained by the cycle that is already running every minute.
+
+   ONLY THE REFUSED RECIPIENTS ARE RETRIED. Re-sending the whole message would
+   mail the people who already received it a second copy, and a duplicate outage
+   alert is its own kind of noise.
+
+   Permanent refusals (5xx — no such mailbox) are NOT retried: the answer will
+   not change, and the event record says so instead.
+
+   The queue is in memory. A redeploy mid-retry drops pending attempts, which is
+   acceptable because nothing is lost silently — the event keeps its
+   `delivery: 'partial'` verdict and the history page keeps showing it. */
+const ALERT_RETRY_SCHEDULE_MS = (process.env.ALERT_RETRY_SCHEDULE_MS || '60000,180000,420000')
+  .split(',').map((n) => parseInt(n.trim(), 10)).filter((n) => Number.isFinite(n) && n > 0);
+
+const pendingDeliveries = [];
+let deliverySeq = 0;
+
+/** Whether a refusal is worth trying again. 4xx is temporary; 5xx is final. */
+function isTransientRefusal(responseCode) {
+  if (responseCode == null) return true;    // no code — assume temporary rather than give up
+  return responseCode >= 400 && responseCode < 500;
+}
+
+/**
+ * Per-recipient refusal detail from a nodemailer result.
+ *
+ * `rejectedErrors` carries the SMTP response code for each refused address,
+ * which is the only thing that distinguishes "try again in a minute" from
+ * "this mailbox does not exist".
+ */
+function refusalDetail(info) {
+  const errors = Array.isArray(info?.rejectedErrors) ? info.rejectedErrors : [];
+  const byAddress = new Map();
+  for (const e of errors) {
+    const addr = e?.recipient || e?.address;
+    if (addr) byAddress.set(String(addr).toLowerCase(), { code: e?.responseCode ?? null, message: e?.message || '' });
+  }
+  return byAddress;
+}
+
+/**
+ * Reads a nodemailer result honestly.
+ *
+ * `sendMail` RESOLVES on a PARTIAL delivery failure. The SMTP dialogue can
+ * refuse individual RCPT TO addresses and accept the rest; the returned promise
+ * only rejects when every recipient is refused. So "it did not throw" means "at
+ * least one mailbox took it" — never "it was delivered".
+ *
+ * All three senders in this file read it as the latter. On 2026-09-02 a KPFT
+ * DOWN alert was stored `sent: true` and rendered "Alert sent: Yes" while the
+ * same result object carried `rejected: [<an address>]`; the refusal was
+ * recorded and read by nothing, so the only evidence the alert never arrived
+ * was its intended recipient noticing the silence. Every sender goes through
+ * here now, so a fourth cannot reintroduce it by writing `sent: true` inline.
+ */
+function deliveryOutcome(info, recipients = [], cc = []) {
+  const rejected = (Array.isArray(info?.rejected) ? info.rejected : []).map(String);
+  // Transports that report neither list (jsonTransport, stubs) leave us with
+  // the recipient list we asked for, which is the correct assumption for a
+  // transport that cannot refuse anyone.
+  const accepted = Array.isArray(info?.accepted)
+    ? info.accepted.length
+    : Math.max(recipients.length + cc.length - rejected.length, 0);
+
+  const detail = refusalDetail(info);
+  const retryable = rejected.filter((a) => isTransientRefusal(detail.get(a.toLowerCase())?.code));
+  const permanent = rejected.filter((a) => !retryable.includes(a));
+
+  return {
+    accepted,
+    rejected,
+    rejectedCount: rejected.length,
+    // Split so the record says whether the missing recipient can still be
+    // reached. "Refused, and it will never work" and "refused, retrying" are
+    // different facts and lead to different actions.
+    retryableRejections: retryable,
+    permanentRejections: permanent,
+    // A message every recipient refused is not a send, even where the transport
+    // resolves rather than throwing.
+    sent: accepted > 0,
+    // The verdict every reader must consult before claiming an alert arrived.
+    // `sent` alone cannot express "two of the three people were told".
+    delivery: accepted === 0 ? 'none' : rejected.length ? 'partial' : 'all',
+  };
+}
+
+/**
+ * Queues the refused recipients of a message for another try.
+ *
+ * Returns the schedule actually applied, so the delivery record on the event
+ * can say a retry is pending rather than leaving a bare "partial".
+ */
+function queueDeliveryRetry({ deliveryId, from, to, cc, subject, html, reason }) {
+  if (!to.length || !ALERT_RETRY_SCHEDULE_MS.length) return null;
+
+  pendingDeliveries.push({
+    deliveryId,
+    from, to, cc: cc || [], subject, html,
+    attempt: 0,
+    nextAt: Date.now() + ALERT_RETRY_SCHEDULE_MS[0],
+    reason,
+  });
+
+  console.warn(
+    `[Monitor] ✉️  queued retry for ${to.length} refused recipient(s) — ` +
+    `${to.join(', ')} — first retry in ${Math.round(ALERT_RETRY_SCHEDULE_MS[0] / 1000)}s`,
+  );
+  return { attempts: ALERT_RETRY_SCHEDULE_MS.length, nextAt: new Date(Date.now() + ALERT_RETRY_SCHEDULE_MS[0]).toISOString() };
+}
+
+/**
+ * Rewrites the delivery record on every event a message covered.
+ *
+ * The events are found by `email.deliveryId` rather than tracked by id, because
+ * a single message covers several events and, for recoveries, the event does not
+ * exist yet when the send happens.
+ */
+function patchDeliveryRecord(deliveryId, patch) {
+  if (!deliveryId) return 0;
+  let touched = 0;
+  // Bounded by the retry schedule rather than scanning the whole record: a job
+  // cannot outlive its own backoff, so nothing older than a day can match.
+  const since = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+  const { events } = store.getEvents({ since, limit: 5000 });
+
+  for (const e of events) {
+    if (e.email?.deliveryId !== deliveryId) continue;
+    store.updateEvent(e.id, { email: { ...e.email, ...patch } });
+    touched++;
+  }
+  if (touched) store.saveEvents();
+  return touched;
+}
+
+/**
+ * Retries whatever is due. Called once per check cycle.
+ *
+ * Never throws: a failure here must not take down the cycle that is monitoring
+ * the streams, which is the more important job of the two.
+ */
+async function drainDeliveryRetries() {
+  if (!pendingDeliveries.length || !transporter) return;
+  const now = Date.now();
+
+  for (const job of [...pendingDeliveries]) {
+    if (job.nextAt > now) continue;
+    job.attempt++;
+
+    try {
+      const info = await transporter.sendMail({
+        from: job.from,
+        to: job.to.join(', '),
+        ...(job.cc.length ? { cc: job.cc.join(', ') } : {}),
+        subject: job.subject,
+        html: job.html,
+      });
+      const outcome = deliveryOutcome(info, job.to, job.cc);
+
+      if (outcome.rejected.length === 0) {
+        pendingDeliveries.splice(pendingDeliveries.indexOf(job), 1);
+        console.log(`[Monitor] ✉️  retry ${job.attempt} DELIVERED to ${job.to.join(', ')} — ${job.subject}`);
+        patchDeliveryRecord(job.deliveryId, {
+          delivery: 'all',
+          rejected: [],
+          rejectedCount: 0,
+          retry: { attempts: job.attempt, deliveredAt: new Date().toISOString(), recovered: true },
+        });
+        continue;
+      }
+
+      // Still refused. Keep only the addresses that are still worth trying.
+      job.to = outcome.retryableRejections;
+      scheduleNextRetry(job, outcome.rejected);
+    } catch (err) {
+      // The whole send failed — server down or unreachable. Always temporary
+      // enough to be worth another attempt within the schedule.
+      console.warn(`[Monitor] ✉️  retry ${job.attempt} failed for ${job.to.join(', ')} — ${err.message}`);
+      scheduleNextRetry(job, job.to, err.message);
+    }
+  }
+}
+
+/** Reschedules a job, or gives up and records why. */
+function scheduleNextRetry(job, stillRefused, errorMessage) {
+  const nextDelay = ALERT_RETRY_SCHEDULE_MS[job.attempt];
+
+  if (!job.to.length || nextDelay == null) {
+    pendingDeliveries.splice(pendingDeliveries.indexOf(job), 1);
+    console.error(
+      `[Monitor] ✉️  GIVING UP after ${job.attempt} retries — ${(stillRefused || []).join(', ')} ` +
+      `never received "${job.subject}"${errorMessage ? ` (${errorMessage})` : ''}`,
+    );
+    patchDeliveryRecord(job.deliveryId, {
+      retry: {
+        attempts: job.attempt,
+        exhausted: true,
+        gaveUpAt: new Date().toISOString(),
+        stillRefused: stillRefused || [],
+        error: errorMessage || null,
+      },
+    });
+    return;
+  }
+
+  job.nextAt = Date.now() + nextDelay;
+  patchDeliveryRecord(job.deliveryId, {
+    retry: { attempts: job.attempt, pending: true, nextAt: new Date(job.nextAt).toISOString() },
+  });
+}
+
 async function sendAlert(opts) {
   const attemptedAt = new Date().toISOString();
 
@@ -2103,25 +2335,61 @@ async function sendAlert(opts) {
 
     const info = await transporter.sendMail(mailOptions);
 
-    console.log(`[Monitor] ✉️  Alert sent to ${recipients.length} recipient(s)${ccRecipients.length ? ` + ${ccRecipients.length} CC` : ''} — ${subject}`);
+    const outcome = deliveryOutcome(info, recipients, ccRecipients);
+    const deliveryId = `d${Date.now().toString(36)}-${++deliverySeq}`;
+    let retry = null;
+
+    if (outcome.rejected.length) {
+      console.warn(`[Monitor] ✉️  ${outcome.rejected.length} recipient(s) REJECTED by the mail server — ${outcome.rejected.join(', ')} — ${subject}`);
+      // A refusal that can still succeed is queued rather than written off. This
+      // is the difference between "you were not told" and "you were told a
+      // minute late".
+      retry = queueDeliveryRetry({
+        deliveryId, from: fromAddr,
+        to: outcome.retryableRejections,
+        cc: [], subject, html,
+        reason: 'refused at RCPT TO',
+      });
+    }
+
     return {
       attempted: true,
-      sent: true,
+      ...outcome,
+      deliveryId,
+      ...(retry ? { retry: { attempts: 0, pending: true, nextAt: retry.nextAt } } : {}),
       attemptedAt,
       sentAt: new Date().toISOString(),
       recipients,
       cc: ccRecipients,
       subject,
       messageId: info?.messageId || null,
-      accepted: info?.accepted?.length ?? recipients.length,
-      rejected: info?.rejected || [],
       error: null,
     };
   } catch (err) {
     console.error('[Monitor] ✉️  FAILED to send alert email:', err.message);
+    // The send failed outright — the mail server was unreachable, restarting, or
+    // refused the whole envelope. That is exactly the case the recipient never
+    // hears about otherwise, so it is queued like a partial refusal. When the
+    // envelope carries per-address codes, a permanently dead mailbox is dropped
+    // from the retry rather than tried three more times for nothing.
+    const detail = refusalDetail(err);
+    const refused = Array.isArray(err?.rejected) && err.rejected.length
+      ? err.rejected.map(String)
+      : recipients;
+    const worthRetrying = refused.filter((a) => isTransientRefusal(detail.get(a.toLowerCase())?.code));
+
+    const deliveryId = `d${Date.now().toString(36)}-${++deliverySeq}`;
+    const retry = queueDeliveryRetry({
+      deliveryId, from: fromAddr, to: worthRetrying, cc: ccRecipients,
+      subject, html, reason: err.message,
+    });
+
     return {
       attempted: true,
       sent: false,
+      delivery: 'none',
+      deliveryId,
+      ...(retry ? { retry: { attempts: 0, pending: true, nextAt: retry.nextAt } } : {}),
       attemptedAt,
       recipients,
       cc: ccRecipients,
@@ -2576,7 +2844,27 @@ function getConfig() {
     silenceProbeInterval: SILENCE_PROBE_INTERVAL_MS,
     silenceFailureThreshold: SILENCE_FAILURE_THRESHOLD,
     emailConfigured: !!transporter,
-    alertRecipients: (process.env.ALERT_EMAILS || '').split(',').map((e) => e.trim()).filter(Boolean).length,
+    // The LIVE recipient count, summed from what each station actually holds.
+    //
+    // This read `ALERT_EMAILS` — a seed value the store stopped consulting the
+    // moment it was migrated. It reported 2 while the KPFT alerts that morning
+    // went to 3 people, so the one endpoint whose job is "what is this monitor
+    // configured to do" was answering from a variable nothing sends mail by.
+    alertRecipients: getStations()
+      .reduce((n, st) => n + (describeAlertRouting(st.id).recipientCount || 0), 0),
+    // Per station, because one number across five stations cannot show that a
+    // station has nobody listed — which is the case worth seeing.
+    alertRecipientsByStation: getStations().map((st) => {
+      const routing = describeAlertRouting(st.id);
+      return {
+        stationId: st.id,
+        name: st.name,
+        recipientCount: routing.recipientCount || 0,
+        enabled: routing.enabled === true,
+        willSend: routing.willSend === true,
+        reason: routing.reason || null,
+      };
+    }),
     alertPolicy: ALERT_ON_HARMLESS_OUTAGE ? 'all confirmed outages' : 'confirmed outages with listener impact',
     alertStations: ALERT_STATIONS.length ? ALERT_STATIONS : 'all',
     alertOnHarmlessOutage: ALERT_ON_HARMLESS_OUTAGE,
@@ -2648,7 +2936,7 @@ async function sendTestAlert(toEmail, stationId) {
     contentHtml,
   });
 
-  await transporter.sendMail({
+  const info = await transporter.sendMail({
     from: fromAddr,
     to: toEmail,
     subject: stationName
@@ -2656,6 +2944,16 @@ async function sendTestAlert(toEmail, stationId) {
       : `🧪 ${PRODUCT_NAME} — Test Alert`,
     html,
   });
+
+  // This message exists ONLY to prove an address receives mail, so reporting
+  // success for one the receiving server refused defeats its entire purpose —
+  // and it is the first thing an operator reaches for when an alert did not
+  // arrive. Throwing surfaces the refusal in the panel; the route renders it.
+  const outcome = deliveryOutcome(info, [toEmail]);
+  if (!outcome.sent || outcome.rejected.length) {
+    throw new Error(`The mail server refused ${outcome.rejected.join(', ') || toEmail}. The address was not delivered to.`);
+  }
+
   console.log(`[Monitor] Test alert sent to ${toEmail}`);
 }
 
@@ -2968,9 +3266,19 @@ async function sendWeeklyRoundup({ to, windowMs = WEEKLY_ROUNDUP_WINDOW_MS, stat
     if (ccRecipients.length) mailOptions.cc = ccRecipients.join(', ');
 
     const info = await transporter.sendMail(mailOptions);
-    console.log(`[Monitor] 📊 Weekly roundup sent to ${recipients.length} recipient(s)${ccRecipients.length ? ` + ${ccRecipients.length} CC` : ''} — ${subject}`);
+    const outcome = deliveryOutcome(info, recipients, ccRecipients);
+
+    // The roundup is the only message that arrives in a quiet week, so it is
+    // the one whose silent non-delivery is indistinguishable from "nothing
+    // broke". A refused recipient must be visible, not logged as a send.
+    if (outcome.rejected.length) {
+      console.warn(`[Monitor] 📊 ${outcome.rejected.length} roundup recipient(s) REJECTED by the mail server — ${outcome.rejected.join(', ')}`);
+    } else {
+      console.log(`[Monitor] 📊 Weekly roundup sent to ${recipients.length} recipient(s)${ccRecipients.length ? ` + ${ccRecipients.length} CC` : ''} — ${subject}`);
+    }
+
     return {
-      attempted: true, sent: true, attemptedAt, sentAt: new Date().toISOString(),
+      attempted: true, ...outcome, attemptedAt, sentAt: new Date().toISOString(),
       recipients, cc: ccRecipients, subject, stationId: station, messageId: info?.messageId || null,
     };
   } catch (err) {
@@ -3087,7 +3395,11 @@ module.exports = {
   saveStationConfig,
   abandonEpisode,
   // Exported for tests.
-  composeAlert, renderAllStreamsTable,
+  composeAlert, renderAllStreamsTable, deliveryOutcome,
+  isTransientRefusal, refusalDetail, queueDeliveryRetry, drainDeliveryRetries, _pendingDeliveries: pendingDeliveries,
+  // Test seam. The retry loop is only meaningful against a transport that
+  // refuses once and accepts later, which no real SMTP server will do on cue.
+  _setTransporter: (t) => { transporter = t; },
   normaliseStreams, normaliseMounts, buildDefaultConfig, flattenChannels,
   trackVariantDegradation, runChecks, probeVariants,
   getVariantHealth: (streamId) => variantHealth[streamId] || {},

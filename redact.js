@@ -21,6 +21,36 @@
 const EMAIL_RE = /[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g;
 
 /**
+ * Every field of an alert's delivery record an anonymous caller may see.
+ *
+ * Adding a field to the record does NOT publish it. That is the point: a new
+ * field is withheld until someone adds its name here and decides it is safe.
+ */
+const PUBLIC_EMAIL_FIELDS = [
+  'attempted', 'sent', 'delivery', 'reason', 'attemptedAt', 'sentAt',
+  'subject', 'accepted', 'rejectedCount', 'error', 'errorCode',
+  'consolidated', 'deliveryReconstructed',
+];
+
+/**
+ * The retry record an anonymous caller may see.
+ *
+ * Whether a refused alert was eventually delivered is exactly the kind of thing
+ * the history page must show. WHO was refused is not — `stillRefused` names
+ * people, so it is omitted here and counted instead.
+ */
+function publicRetry(retry) {
+  if (!retry || typeof retry !== 'object') return undefined;
+  const out = {};
+  for (const f of ['attempts', 'pending', 'recovered', 'exhausted', 'nextAt', 'deliveredAt', 'gaveUpAt']) {
+    if (retry[f] !== undefined) out[f] = retry[f];
+  }
+  if (Array.isArray(retry.stillRefused)) out.stillRefusedCount = retry.stillRefused.length;
+  if (retry.error !== undefined) out.error = scrubText(retry.error);
+  return out;
+}
+
+/**
  * Removes address-shaped strings from human-readable text.
  *
  * Structured redaction is not enough on its own. Advice and evidence strings are
@@ -77,23 +107,40 @@ function publicEvent(event) {
     return out;
   }
 
-  const {
-    // Withheld: these are people.
-    recipients, cc, to, bcc, replyTo, from,
-    // Withheld: a Message-ID embeds the sending domain and reads as an address.
-    // Nothing renders it, and an absolute "no address-shaped string" invariant
-    // is enforceable in a way that "no address except these" is not.
-    messageId,
-    ...safeEmail
-  } = email;
+  // ALLOWLIST, like every other projection in this file. This block was the one
+  // place that named forbidden fields instead of permitted ones, and it leaked
+  // exactly the way the header warns: `rejected` — the addresses a receiving
+  // mail server refused — was later added to the delivery record and published
+  // to anonymous callers on every partially-delivered alert. Nothing failed,
+  // because a blocklist cannot fail; it can only be out of date.
+  //
+  // Withheld by omission and deliberately: `recipients`, `cc`, `to`, `bcc`,
+  // `replyTo`, `from` and `rejected` are people, and a `messageId` embeds the
+  // sending domain and reads as an address.
+  const out_email = {};
+  for (const field of PUBLIC_EMAIL_FIELDS) {
+    if (email[field] !== undefined) out_email[field] = email[field];
+  }
 
-  out.email = {
-    ...safeEmail,
-    // Preserved as counts: the delivery record stays legible without naming
-    // anyone, so the history page can still say an alert reached N people.
-    recipientCount: Array.isArray(recipients) ? recipients.length : undefined,
-    ccCount: Array.isArray(cc) ? cc.length : undefined,
-  };
+  // Free text from the SMTP conversation. A rejection message routinely quotes
+  // the address it refused — "550 5.1.1 <someone@example.org> User unknown" —
+  // so the structured redaction above is not on its own enough.
+  if (out_email.reason !== undefined) out_email.reason = scrubText(out_email.reason);
+  if (out_email.error !== undefined) out_email.error = scrubText(out_email.error);
+
+  // Preserved as counts: the delivery record stays legible without naming
+  // anyone, so the history page can still say an alert reached N people — and,
+  // now, that it failed to reach one of them.
+  out_email.recipientCount = Array.isArray(email.recipients) ? email.recipients.length : undefined;
+  out_email.ccCount = Array.isArray(email.cc) ? email.cc.length : undefined;
+  if (out_email.rejectedCount === undefined && Array.isArray(email.rejected)) {
+    out_email.rejectedCount = email.rejected.length;
+  }
+
+  const retry = publicRetry(email.retry);
+  if (retry) out_email.retry = retry;
+
+  out.email = out_email;
   return out;
 }
 

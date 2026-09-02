@@ -82,6 +82,40 @@ test('SWEEP: no email address survives anywhere in a public event', () => {
   assert.deepEqual(found, [], `these leaked: ${found.join(', ')}`);
 });
 
+test('SWEEP: a delivery record leaks no address through a field the redactor never knew about', () => {
+  // THIS is the test that was missing. The sweep above plants addresses only in
+  // fields the projection already names, so it passed while `rejected` — added
+  // to the delivery record later, holding the addresses a mail server refused —
+  // was published to anonymous callers on every partially-delivered alert.
+  //
+  // An allowlist is what makes this test possible to pass at all: an unknown
+  // field is withheld because it is unknown, not because someone predicted it.
+  const nasty = {
+    ...EVENT,
+    email: {
+      ...EVENT.email,
+      rejected: ['bounced@example.org'],
+      envelope: { from: 'monitor@example.org', to: ['gm@example.org'] },
+      somethingAddedNextYear: 'escalate to oncall@example.org',
+      error: '550 5.1.1 <refused@example.org>: Recipient address rejected',
+      reason: 'no recipients configured for admin@example.org',
+    },
+  };
+  const found = emailsIn(publicEvent(nasty));
+  assert.deepEqual(found, [], `these leaked: ${found.join(', ')}`);
+});
+
+test('but a refused recipient is still COUNTED, so the page can say delivery was partial', () => {
+  const out = publicEvent({
+    ...EVENT,
+    email: { ...EVENT.email, delivery: 'partial', accepted: 2, rejected: ['bounced@example.org'] },
+  });
+  assert.equal(out.email.rejectedCount, 1, 'the history page must be able to show partial delivery');
+  assert.equal(out.email.rejected, undefined, 'without naming who bounced');
+  assert.equal(out.email.delivery, 'partial');
+  assert.equal(out.email.accepted, 2);
+});
+
 test('SWEEP: a list of events is redacted, not just a single one', () => {
   const found = emailsIn(publicEvents([EVENT, EVENT, EVENT]));
   assert.deepEqual(found, [], `these leaked: ${found.join(', ')}`);
