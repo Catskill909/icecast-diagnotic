@@ -182,6 +182,17 @@ Detail: [`ADMIN-ACCESS-SCOPE.md`](ADMIN-ACCESS-SCOPE.md) for what is unlocked;
 endpoints exist and are password-protected: this phase is gated on a credential
 and on nothing else Pacifica needs to build.
 
+**ENTRY CONDITION MET 2026-09-02.** Pacifica issued an admin credential for
+`streams.pacifica.org:9000` — the host carrying all five sister stations. This
+phase is no longer waiting on anyone. `streaming.wbai.org` is a separate server
+with no credential, so WBAI stays on credential-free figures.
+
+**Start at 5.1 and do not skip to 5.3.** Two things gate collection, both named
+below: the field shape is undocumented (5.1), and the storage decision (5.2) has
+to be made before rows exist rather than migrated after. A third gate is not
+technical — the credential reads *every* station on that shared host, and whether
+we may is a question for Pacifica: `ADMIN-ACCESS-SCOPE.md` §8 Q2.
+
 | | Item |
 |---|---|
 | 5.1 | **Read `listclients` raw** — the field shape is undocumented |

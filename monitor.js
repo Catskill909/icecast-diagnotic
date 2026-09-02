@@ -136,6 +136,22 @@ const STORM_WINDOW_MS = Math.max(0, parseInt(process.env.STORM_WINDOW_MS, 10) ||
 // enough to outlast the gap between flaps — an encoder that drops every ten
 // minutes must not be declared stable in the eleventh.
 const STORM_CLEAR_AFTER_MS = Math.max(60 * 1000, parseInt(process.env.STORM_CLEAR_AFTER_MS, 10) || 30 * 60 * 1000);
+// A storm suppresses REPETITION. It must never suppress DURATION.
+//
+// The clear-down above can only be reached by a stream going healthy, and a
+// stream that flaps and then stays down never does: its episode stays open, so
+// `resolveStorms()` skips it every cycle, so the storm stays active and every
+// further outage is silenced — for ever, and the longer the outage runs the more
+// certain the silence. Observed on KPFT 2026-09-02: 52 alerts up to 13:47, then
+// a permanent DOWN at 15:44 that nobody was told about because the flapping that
+// preceded it had already declared a storm.
+//
+// So a suppressed outage that has now run this long escalates ONCE, on duration
+// alone, and says it is a continuing outage rather than a new one. 0 disables.
+const STORM_SUSTAINED_MS = (() => {
+  const raw = parseInt(process.env.STORM_SUSTAINED_MS, 10);
+  return Number.isFinite(raw) ? Math.max(0, raw) : 15 * 60 * 1000;
+})();
 // Escape hatch: alert on every confirmed outage, even ones Icecast proves did
 // not touch a single listener. Off by default — that behaviour is what buried
 // the real alerts in noise. Tolerant of case and stray whitespace, because this
@@ -465,6 +481,23 @@ function stormTotals(st) {
  * Runs every cycle, including cycles where nothing failed — a storm ends by
  * NOTHING happening, so it can never be noticed from inside a failure branch.
  */
+/**
+ * Whether a storm-suppressed outage has now run long enough that the suppression
+ * is doing the wrong thing, and this one episode must be escalated.
+ *
+ * Pure so the sequence can be replayed without a clock or an encoder. Returns
+ * null when nothing should be sent, which is the overwhelmingly common case.
+ */
+function sustainedEscalation(episode, nowMs) {
+  if (!episode || !episode.stormSuppressed || episode.sustainedAlerted) return null;
+  if (!(STORM_SUSTAINED_MS > 0)) return null;               // explicitly disabled
+  const startedMs = new Date(episode.startedAt).getTime();
+  if (!Number.isFinite(startedMs)) return null;
+  const downMs = nowMs - startedMs;
+  if (downMs < STORM_SUSTAINED_MS) return null;
+  return { downMs, since: episode.startedAt };
+}
+
 async function resolveStorms(timestamp) {
   const now = new Date(timestamp).getTime();
   let dirty = false;
@@ -1785,6 +1818,8 @@ async function runChecksInner() {
 
         store.updateEvent(episode.eventId, patch);
 
+        const sustained = alertable ? sustainedEscalation(episode, Date.now()) : null;
+
         if (alertable && !episode.alerted && !episode.stormSuppressed) {
           // A stream flapping on a known fault has already said everything the
           // sixth email would say. The event is written either way; only the
@@ -1823,6 +1858,24 @@ async function runChecksInner() {
               startedAt: episode.startedAt,
             });
           }
+        } else if (sustained) {
+          // Storm suppression has been swallowing this stream's outages because
+          // it was flapping. It has now been down continuously long enough that
+          // "it keeps flapping" is no longer what is happening, and the storm's
+          // own exit condition can never fire while the episode stays open.
+          // Escalate exactly once per episode.
+          episode.sustainedAlerted = true;
+          const downMs = sustained.downMs;
+          newlyNotable.push({
+            stream, result, diagnosis: dg,
+            eventId: episode.eventId,
+            reason: 'sustained outage during storm',
+            storm: null,
+            sustained: { downMs, since: episode.startedAt },
+            audience: store.getAudienceContext(stream.id, episode.startedAt),
+            startedAt: episode.startedAt,
+          });
+          console.log(`[Monitor] 🚨 ${stream.name} still down after ${diagnose.fmtDuration(downMs)} during a storm — escalating past suppression`);
         } else if (confirmed && !alertable && !episode.suppressionLogged) {
           episode.suppressionLogged = true;
           console.log(`[Monitor] 🔕 ${stream.name} outage confirmed but NOT emailed — mount still listed by Icecast, no listener impact`);
@@ -1984,7 +2037,7 @@ async function dispatchNotifications(newlyNotable, recoveries, ctx) {
 
     const entries = newlyNotable.map((n) => ({
       stream: n.stream, result: n.result, diagnosis: n.diagnosis, audience: n.audience,
-      storm: n.storm,
+      storm: n.storm, sustained: n.sustained,
     }));
 
     const byStream = await sendGroupedAlert({
@@ -2966,7 +3019,17 @@ function composeAlert({ kind, entries, scope, consolidated = false, recoveredFro
       <p class="callout-text" style="margin:0; font-size:13px; line-height:1.6; color:#e2e8f0 !important;"><span class="callout-text" style="color:#e2e8f0 !important;">This is the ${e.storm.outages}${e.storm.outages === 2 ? 'nd' : e.storm.outages === 3 ? 'rd' : 'th'} time this stream has failed and recovered in ${esc(diagnose.fmtDuration(e.storm.spanMs || 0))}. Repeating like this almost always means the source encoder is dropping its connection, rather than the stream server failing. You will not be emailed about each one. Every outage is still recorded on the dashboard, and one summary will arrive once ${esc(e.stream.name)} has stayed on air for ${esc(diagnose.fmtDuration(STORM_CLEAR_AFTER_MS))}.</span></p>
     </div>`).join('');
 
+  // The counterpart to the storm notice. That one promises silence; this one
+  // breaks it, so it has to say plainly that this is the SAME outage continuing
+  // rather than a new one, or it reads as the flood the suppression prevents.
+  const sustainedNotice = entries.filter((e) => e.sustained).map((e) => `
+    <div class="callout-box" style="background-color:#3b1e1e; border:1px solid #7f1d1d; border-radius:8px; padding:16px; margin-bottom:16px;">
+      <p class="callout-title" style="margin:0 0 6px 0; font-weight:700; font-size:15px; color:#fca5a5 !important;"><span class="callout-title" style="color:#fca5a5 !important;">\u26a0 ${esc(e.stream.name)} is STILL DOWN \u2014 ${esc(diagnose.fmtDuration(e.sustained.downMs || 0))}</span></p>
+      <p class="callout-text" style="margin:0; font-size:13px; line-height:1.6; color:#e2e8f0 !important;"><span class="callout-text" style="color:#e2e8f0 !important;">This is not a new outage. ${esc(e.stream.name)} was flapping, so alerts were paused \u2014 but it has now been off the air continuously for ${esc(diagnose.fmtDuration(e.sustained.downMs || 0))}. That is no longer flapping, so this one message is being sent through the pause. You will not be emailed again about this outage; the all-clear will arrive when it recovers.</span></p>
+    </div>`).join('');
+
   const contentHtml = `
+    ${sustainedNotice}
     ${stormNotice}
     ${blocks}
     <table role="presentation" width="100%" border="0" cellspacing="0" cellpadding="0" style="margin-top:16px;">
@@ -3876,9 +3939,10 @@ module.exports = {
   // so the flap sequence that caused the flood can be replayed without an
   // encoder, a clock, or an SMTP server.
   noteStormEpisode, noteStormClear, resolveStorms, stormTotals, loadStorms,
+  sustainedEscalation,
   _storms: () => storms,
   _resetStorms: () => { storms = {}; },
-  STORM_OUTAGE_COUNT, STORM_WINDOW_MS, STORM_CLEAR_AFTER_MS,
+  STORM_OUTAGE_COUNT, STORM_WINDOW_MS, STORM_CLEAR_AFTER_MS, STORM_SUSTAINED_MS,
   composeAlert, renderAllStreamsTable, deliveryOutcome,
   isTransientRefusal, refusalDetail, queueDeliveryRetry, drainDeliveryRetries, _pendingDeliveries: pendingDeliveries,
   // Test seam. The retry loop is only meaningful against a transport that

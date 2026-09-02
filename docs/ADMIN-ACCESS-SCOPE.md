@@ -30,6 +30,211 @@
 is a password. Nothing here needs Pacifica to install, enable or upgrade
 anything — **the entire Phase 2 roadmap is gated on one credential.**
 
+### That credential arrived — 2026-09-02
+
+Pacifica sent the `<authentication>` block from the Icecast configuration for
+`streams.pacifica.org:9000`, containing `admin-user` and `admin-password`.
+**The gate described above is open.** §8 Q1 is answered yes, and the entry
+condition for Phase 5 in [`PHASE-PLAN.md`](PHASE-PLAN.md) is met.
+
+**The value is not in this repository and must not be put in it.** Decided
+2026-09-02: **production sets `ICECAST_ADMIN_USER` / `ICECAST_ADMIN_PASSWORD` as
+environment variables in the Coolify panel; local testing puts them in `.env`,
+which is gitignored.** `.env.example` carries the names and no values.
+
+That is not in tension with [`AUDIENCE-ROADMAP.md`](AUDIENCE-ROADMAP.md) §4.1,
+which says a credential belongs to the **host** and is entered in the panel: env
+is how a credential is *supplied* until that entry exists, exactly as `STREAMS`
+and `ALERT_EMAILS` seed a store that then owns them. The §4.1 rule is about the
+end state for affiliate operators, who must be able to supply their own without
+a redeploy. Env seeds, the store owns.
+
+> **Quote a password containing `#`.** dotenv treats an unquoted `#` as the start
+> of a comment even with no whitespace before it, so `PASS=a#b` silently parses as
+> `a` and produces a 401 against a password that looks correct in the file.
+> Verified against dotenv 16 in this project. In the Coolify UI type the raw value
+> **without** quotes — that is a form field, not a parsed file. This applies to
+> `SMTP_PASS` and every other secret, not just this one.
+
+**The same message also carried `source-password` and `relay-password`. Those are
+not stored, and should not be.** We did not ask for them and nothing here needs
+them. The distinction is not pedantic: an admin password **reads**, a source
+password **writes** — it is the credential that lets a client connect as a source
+and take over a mount, including another station's. Holding it would turn a
+read-only diagnostic tool into something capable of silently interrupting five
+stations' broadcasts, which is a different product with a different risk profile,
+the same reason §3.4 declines `killsource`. Recorded here as a fact about what was
+sent, so that a later reader does not go looking for where it was filed.
+
+**§8 Q2 is now the blocking question rather than a theoretical one.** This is the
+credential for the *shared* host: it reads the listeners of every Pacifica sister
+station on `streams.pacifica.org`, not only KPFT's. Being technically able to is
+not being entitled to, and the answer decides how much of §3 may be collected at
+all. It should be asked before 5.3 begins collecting, not after.
+
+**Next step is 5.1 and nothing else:** fetch `/admin/stats` and
+`/admin/listclients` raw and read the XML. Every design in this document assumes a
+field shape the Icecast documentation does not enumerate, and §7 step 0 exists
+precisely so that assumption is checked before anything is built on it.
+
+---
+
+## 0.1 5.1, first pass — what `/admin/stats` actually returns
+
+Fetched 2026-09-02 15:53 EDT. **HTTP 200 — the credential works.** Only
+`/admin/stats` was requested: it carries no per-listener rows, so it stays clear
+of the §8 Q2 question, which `listclients` does not. `listclients` is still
+unfetched and stays that way until Q2 is answered.
+
+Three findings change what should be built, and one of them changes what the app
+currently *says*.
+
+### `slow_listeners` is per mount, on `/admin/stats`, and needs no listener data
+
+§3.2 listed lagging listeners as "if `listclients` exposes lag on 2.4.3 — to be
+confirmed". It does not need `listclients` at all. `/admin/stats` returns a
+cumulative `slow_listeners` counter per mount:
+
+| Mount | Listeners | `slow_listeners` |
+|---|---|---|
+| `/wbai_128` | 15 | **1324** |
+| `/kpfk_128` | 68 | **705** |
+| `/wpfw_128` | 55 | **469** |
+| `/classic_country` | 10 | 302 |
+| `/kpfa` | 12 | 57 |
+| `/live_128`, `/live_64`, `/kpfk`, `/kpfk_64`, `/kpfa_16`, `/kpfa_64` | — | 0 |
+
+**This is an aggregate count, not a person.** It is the privacy-safe half of §3.2
+and it can be collected today, under no part of the §5 decision and no part of Q2.
+It measures something no current signal catches: a listener whose buffer drained
+and who was dropped — audible to them, invisible to a reachability probe.
+
+Counters are cumulative since `server_start` (2026-08-19), so only the
+**delta between polls** is meaningful. Do not publish the raw total.
+
+### The source is not the Barix — it is a Pacifica-hosted relay
+
+Every KPFT and sister-station mount reports `source_ip` `127.0.0.1` and
+`user_agent` **`pontifistreamer 3.1.2`** — a process on Pacifica's own server. The
+only genuinely external sources on the host are `/classic_country`
+(`104.56.82.169`, *PlayIt Live*) and `/padma` (`108.30.98.171`, *ZIPStream R1*).
+
+`/live_128` carries the title "From KPFT Barix", but **the Barix is not what
+connects to Icecast.** The chain is `Barix → pontifistreamer (on Pacifica's
+server) → Icecast`, and the app has only ever been able to see the last hop.
+
+**This matters because the app tells people to check the Barix.** README's core
+table reads a 404 as "KPFT — check the encoder and studio audio chain", and
+`faultSplit: source` means the same. That verdict collapses a two-hop chain into
+its first hop. The evidence still says *the mount's source went away*; it does
+**not** say which of the two hops dropped it, and the wording should stop implying
+it does. See §0.2.
+
+### `total_bytes_read` separates "connected" from "actually streaming"
+
+Per mount, cumulative since `stream_start`. A source that connects and passes no
+audio is directly visible, which no current signal reports — the mount is present,
+so a reachability probe calls it healthy.
+
+Also worth recording: the public listen port is **7267** (`listenurl`), fronted by
+9000 for TLS; `clients` (194) exceeds `listeners` (137), so a server-wide client
+count is not an audience figure; and `listener_peak` is since server start, not
+since `stream_start`.
+
+---
+
+## 0.2 What the first admin fetch caught in the act
+
+The 5.1 fetch landed during a live KPFT fault, which is the reason the finding
+above is stated as strongly as it is.
+
+**`/live_128` had 9 listeners and `total_bytes_read` of 5009 bytes**, against
+467 MB on `/kpfk_128` and 10.7 GB on `/wbai_128`. At 128 kbps, 5009 bytes is about
+a third of a second of audio. The source had connected 20 seconds earlier and
+delivered essentially nothing. Sampling `/status-json.xsl` every 10 seconds for
+two minutes afterwards:
+
+| | |
+|---|---|
+| `/live_128`, `/live_64` (KPFT Main) | present in **1 of 12** samples |
+| `/HD3_128` (KPFT HD2) | present in **0 of 12** — it had been listed minutes earlier |
+| `/classic_country` (KPFT HD3) | present in **12 of 12**, `stream_start` 2026-08-29 |
+| every sister station | present in 12 of 12 |
+
+**KPFT HD3 is the control, and it is the one that stays up.** It is also the only
+KPFT mount whose source is genuinely external — `104.56.82.169`, *PlayIt Live*.
+The two that flap are the two fed by `pontifistreamer` on Pacifica's own host.
+
+**That is a correlation, not a verdict, and it must not be written into the app as
+one.** `pontifistreamer` carries every stable sister station on the same box, so
+the process is not broken in general; and a relay whose own upstream Barix feed
+dies will drop its Icecast connection exactly like this. Both remain live
+hypotheses. What the evidence *does* establish is narrower and still new:
+
+- The failure is **not** "Icecast is unhealthy" — 10 of 12 mounts never wavered.
+- The failing hop is somewhere in `Barix → pontifistreamer → Icecast`, and
+  **`/admin/stats` cannot see which**, because it only ever observes the last hop.
+- A mount can be **present and passing no audio**. `total_bytes_read` is the only
+  field that shows this, and a reachability probe scores that moment as healthy.
+
+**The actionable change is to stop naming a device we cannot see.** "Check the
+Barix" is one hypothesis out of two, printed as a conclusion, in the sentence an
+engineer acts on at 3am. Reporting the observation — *the mount's source stopped
+delivering audio; Icecast and every other station on the host are fine* — is both
+true and enough to route the call, and it is what `faultSplit: source` already
+means. The renaming from `kpft`/`pacifica` to `source`/`server` on 2026-08-31 was
+this same correction applied to the enum; the operator-facing text still says the
+old thing.
+
+**Adding `total_bytes_read` to the poll is the cheapest real upgrade here.** It is
+one field on a document already fetched every cycle, it needs no per-listener data
+and no §5 decision, and it distinguishes a source that is present from a source
+that is working — a fault the monitor currently cannot see at all.
+
+---
+
+## 0.3 `listclients` — tested 2026-09-02, field shape confirmed
+
+### The credential is server-wide. Q2 is now purely a policy question.
+
+| Request | Result |
+|---|---|
+| `listclients?mount=/classic_country` (ours) | **HTTP 200** |
+| `listclients?mount=/wbai_128` (WBAI's) | **HTTP 200** |
+
+It reads **every station's listeners on the host**, not only KPFT's. The technical
+half of §8 Q2 is answered yes; only the entitlement half is open, and it is now
+the sole thing standing between this document and a build. Ask Pacifica.
+
+### The four fields §1 predicted are the four fields that exist
+
+`IP`, `UserAgent`, `Connected`, `ID` — no more. Read from KPFT's own mount;
+IP and UserAgent values were masked on sight and the response deleted, because
+nothing here needed them.
+
+**There is no lag or buffer field.** §3.2 hoped `listclients` might expose one on
+2.4.3. It does not, which makes the per-mount `slow_listeners` counter in §0.1 the
+**only** signal for a draining listener — it is not a duplicate of something
+`listclients` also offers, it is the sole source.
+
+### `Connected` is seconds, and the first read already contains a non-person
+
+One session on `/classic_country` read `Connected` **340388** — 3 days 22 hours.
+Nobody listens to a radio stream for 3.9 days. That is a relay, a scraper or a
+stuck client, and **it is inside the listener count the app publishes today**,
+including the ATH figure the SoundExchange estimate rests on.
+
+So §3.2's bot filtering is not a refinement to schedule later; it is a
+**precondition for quoting any session-derived number at all**. A mean session
+length computed without it is meaningless — one 3.9-day connection outweighs
+hundreds of real ones. Build order 5.5 before 5.6 and 5.7, exactly as
+[`PHASE-PLAN.md`](PHASE-PLAN.md) has it, and the reason is now measured rather
+than anticipated.
+
+**It also revises existing figures downward when fixed, and that is correct.**
+§4 already says the monitor's own probes inflate counts; this is a second inflation
+source, larger and not of our making.
+
 **The server is Icecast 2.4.3**, which fixes exactly which admin endpoints exist
 and what they return.
 
@@ -451,7 +656,10 @@ those two are where a wrong decision is expensive to undo.
 
 ## 8. Open questions for Pacifica
 
-1. **Will they issue an admin credential**, and for which hosts?
+1. ~~**Will they issue an admin credential**, and for which hosts?~~
+   **ANSWERED 2026-09-02 — yes, for `streams.pacifica.org:9000`.** See §0. No
+   credential yet for `streaming.wbai.org`, which is a separate server and a
+   separate ask; every WBAI figure stays credential-free until there is one.
 2. **Does holding a server credential entitle us to read every station's
    listeners on it**, including stations not monitored here? A technical yes is
    not a policy yes.

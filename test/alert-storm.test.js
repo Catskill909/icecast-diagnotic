@@ -370,3 +370,88 @@ test('a dead-air all-clear is still emailed when nothing is suppressing it', asy
   monitor._setEpisodes({});
   monitor._setTransporter(null);
 });
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   A storm suppresses REPETITION. It must never suppress DURATION.
+
+   THE MECHANISM, and it is the mirror image of the flood above: the storm's
+   only exit is `resolveStorms()`, which begins `if (episodes[streamId]) continue`
+   — a stream that is down right now is never declared stable, correctly. But a
+   stream that flaps and then STAYS down keeps that episode open for ever. The
+   storm therefore never clears, and every outage on it stays suppressed with no
+   path back to an alert, however long it lasts.
+
+   That inverts the whole point of the monitor: the worse the fault gets, the
+   more certain the silence. Observed on KPFT 2026-09-02 — 52 alerts up to
+   13:47, then a permanent outage from 15:44 that nobody was emailed about,
+   because the flapping that came first had already declared a storm.
+
+   That is the class: ANY suppressor whose only exit is a state the failure
+   itself prevents will go permanently silent on the worst version of the fault
+   it was built for. These tests pin the escape hatch, and pin that it fires
+   ONCE — an escalation on every cycle would just be the flood again.
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+const SUSTAINED = monitor.STORM_SUSTAINED_MS;
+
+const suppressedEpisode = (startedAt) => ({
+  eventId: 'e1', startedAt, alerted: false, severity: 'outage', stormSuppressed: true,
+});
+
+test('THE CLASS: a suppressed outage that never recovers still has no way to alert', async () => {
+  reset();
+  // A storm is running and the stream is down right now — the real KPFT state.
+  monitor.noteStormEpisode(kpftMain, at(0));
+  monitor.noteStormClear(kpftMain, { durationMs: MIN, audience: {}, timestamp: at(1) });
+  monitor.noteStormEpisode(kpftMain, at(5));
+  monitor._setEpisodes({ 'kpft-main': suppressedEpisode(at(5)) });
+
+  // Hours later, still down. The clear-down path is the ONLY other exit.
+  await monitor.resolveStorms(at(600));
+  assert.ok(monitor._storms()['kpft-main'], 'storm cannot clear while the stream is down');
+
+  // So without the duration escape hatch there is no alert at all. That is the bug.
+  const esc = monitor.sustainedEscalation(suppressedEpisode(at(5)), Date.parse(at(600)));
+  assert.ok(esc, 'a permanently down, storm-suppressed stream MUST escalate');
+});
+
+test('a suppressed outage escalates once it has been down long enough', () => {
+  const ep = suppressedEpisode(at(0));
+  const esc = monitor.sustainedEscalation(ep, Date.parse(at(0)) + SUSTAINED);
+  assert.ok(esc, 'reaching the threshold escalates');
+  assert.equal(esc.downMs, SUSTAINED);
+});
+
+test('it escalates EXACTLY once — a per-cycle escalation is the flood again', () => {
+  const ep = suppressedEpisode(at(0));
+  const first = monitor.sustainedEscalation(ep, Date.parse(at(0)) + SUSTAINED);
+  assert.ok(first, 'first crossing escalates');
+  ep.sustainedAlerted = true;                       // what the call site sets
+  for (const mins of [30, 60, 240, 1440]) {
+    assert.equal(
+      monitor.sustainedEscalation(ep, Date.parse(at(0)) + mins * MIN), null,
+      `still silent ${mins} minutes in — one escalation per episode, not one per cycle`,
+    );
+  }
+});
+
+test('a suppressed outage below the threshold stays silent', () => {
+  const ep = suppressedEpisode(at(0));
+  assert.equal(
+    monitor.sustainedEscalation(ep, Date.parse(at(0)) + SUSTAINED - MIN), null,
+    'a flap that is merely ongoing is still a flap',
+  );
+});
+
+test('an outage that was never suppressed does not take this path', () => {
+  const ep = { eventId: 'e', startedAt: at(0), alerted: true, severity: 'outage' };
+  assert.equal(
+    monitor.sustainedEscalation(ep, Date.parse(at(0)) + SUSTAINED * 4), null,
+    'it already sent its own alert; this hatch is only for suppressed episodes',
+  );
+});
+
+test('a garbled start time cannot manufacture an escalation', () => {
+  const ep = suppressedEpisode('not-a-date');
+  assert.equal(monitor.sustainedEscalation(ep, Date.now()), null);
+});

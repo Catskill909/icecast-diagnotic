@@ -149,7 +149,18 @@ declares a **storm**:
 | 2nd inside the window | yes — marked **UNSTABLE**, and says further alerts are paused |
 | every flap after that | **no** — recorded in full, each event carrying its own reason |
 | its recoveries | **no** — an all-clear per flap is half the flood |
+| one that **stays down** for `STORM_SUSTAINED_MS` (15 min) | **yes — once**, saying plainly it is the same outage continuing |
 | after `STORM_CLEAR_AFTER_MS` (30 min) of unbroken health | yes — one summary, then normal alerting resumes |
+
+**A storm suppresses repetition. It must never suppress duration.** The clear-down above is
+reached only by a stream going healthy, and a stream that flaps and then simply *stays* down never
+does — its episode stays open, so the storm never clears, so every further outage is silenced with
+no path back. That inverts the entire point of the monitor: the worse the fault gets, the more
+certain the silence. It is what happened to KPFT on 2026-09-02 — 52 alerts up to 13:47, then a
+permanent outage from 15:44 that nobody was emailed about, because the flapping that came first had
+already declared a storm. A suppressed outage still down after `STORM_SUSTAINED_MS` therefore
+escalates **once**, and the message says it is a continuing outage rather than a new one. Once per
+episode, never once per cycle — that would be the flood again.
 
 The summary carries what the storm actually cost: total outages, total downtime, peak audience
 affected, and listener-minutes lost. **The first outage is never delayed.** A hold-down — wait
@@ -677,6 +688,11 @@ STORM_WINDOW_MS=2700000          # Repeated-outage suppression. A second confirm
                                  # and alerts on every episode, which is what buried the real
                                  # alerts under 14 messages in an hour on 2026-09-02.
 STORM_OUTAGE_COUNT=2             # Confirmed outages inside that window that declare a storm.
+STORM_SUSTAINED_MS=900000        # A storm-suppressed outage that is STILL DOWN after this long
+                                 # sends one more alert, because "it keeps flapping" has stopped
+                                 # being true. Without it a flap that becomes a permanent outage
+                                 # is silent for ever — the storm cannot clear while the stream
+                                 # is down. 0 disables the escape hatch.
 STORM_CLEAR_AFTER_MS=1800000     # How long the stream must stay healthy before the storm is
                                  # called over. One summary email goes out with the totals
                                  # and normal alerting resumes.

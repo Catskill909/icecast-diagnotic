@@ -249,8 +249,12 @@ real figure."
 5. **Per-mount trend over time**, not just the current split — does the
    low-bitrate variant's share move?
 
-**Phase 2 — needs admin credentials.** Deferred by decision, not blocked: see
-§4.1. Build when a credential exists to build against.
+**Phase 2 — needs admin credentials. UNBLOCKED 2026-09-02:** Pacifica issued an
+admin credential for `streams.pacifica.org:9000`, so the credential this phase
+was waiting for now exists. See `ADMIN-ACCESS-SCOPE.md` §0 for where the secret
+lives and what still has to be answered before collection starts — notably §4.2
+below, which was allowed to stay undecided only while there was nothing to
+collect.
 
 > **Scoped in full in [`ADMIN-ACCESS-SCOPE.md`](ADMIN-ACCESS-SCOPE.md)** —
 > what each `listclients` field unlocks, the listener-map question answered, the
