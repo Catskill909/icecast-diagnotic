@@ -121,6 +121,212 @@ function makeEventId(timestamp, streamId) {
   return `evt_${new Date(timestamp).getTime()}_${streamId}_${eventSeq}`;
 }
 
+/* ── Distinct devices (cume) ────────────────────────────────────────────────
+   THE NUMBER RADIO ACTUALLY RUNS ON. "Total listeners" counts tune-in events —
+   one person who listens every morning is thirty of them in a month, and the
+   figure rises when the stream FLAPS and everyone reconnects. Cume is the count
+   of distinct devices reached in a period, and it is what underwriting is
+   priced on, what funders and boards ask for, and the only audience number that
+   cannot be inflated by instability.
+
+   WHAT IS STORED: a truncated hash of (IP + user agent) and a classification
+   like "Safari|iOS". No address, no raw agent, nothing reversible to a person.
+   The hash exists only to answer "have we already counted this one".
+
+   TWO TIERS, for the same reason samples compact into rollups:
+     - hourly buckets, so a rolling 24h window is exact
+     - compacted to DAILY buckets after DEVICE_HOUR_RETENTION_H, because a
+       30-day cume needs day resolution and a daily bucket dedupes a regular
+       listener from 24 rows down to 1
+
+   A union is order-free and idempotent, so compaction loses nothing a cume
+   needs — unlike an average, which is why samples cannot be treated this way. */
+const DEVICE_HOUR_RETENTION_H = Math.max(2, parseInt(process.env.DEVICE_HOUR_RETENTION_H, 10) || 48);
+const DEVICE_DAY_RETENTION_DAYS = Math.max(2, parseInt(process.env.DEVICE_DAY_RETENTION_DAYS, 10) || 90);
+/* MONTHS ARE KEPT FOR EVER by default, and that is the whole point.
+   0 means never delete. A station's reach five years ago is not stale data —
+   it is the baseline every growth claim is measured against, and it is what a
+   board, a funder and a CPB return actually ask for. Set a number of months
+   only if a deployment has a legal or disk reason to forget.
+
+   This mirrors what the app already does with hourly rollups, which are never
+   pruned by age. An earlier version of this file capped devices at 40 days,
+   which quietly made the most important figure in the product unable to answer
+   the questions it exists for. */
+const DEVICE_MONTH_RETENTION = Math.max(0, parseInt(process.env.DEVICE_MONTH_RETENTION_MONTHS, 10) || 0);
+// Kept as an alias so an existing deployment's env var still means something.
+const DEVICE_RETENTION_DAYS = DEVICE_DAY_RETENTION_DAYS;
+
+// { [streamId]: { [hourKeyISO]: { [deviceHash]: "Family|Platform" } } }
+let deviceHours = {};
+// { [streamId]: { [YYYY-MM-DD]: { [deviceHash]: "Family|Platform" } } }
+let deviceDays = {};
+// { [streamId]: { [YYYY-MM]: { [deviceHash]: "Family|Platform" } } }  — PERMANENT
+let deviceMonths = {};
+
+/**
+ * The salt device hashes are built with, stable for the life of the install.
+ *
+ * Generated once and persisted with the events meta. It must NOT come from
+ * SESSION_SECRET or anything an operator might rotate: rotating it silently
+ * resets cume to zero and every returning listener reads as a new person.
+ */
+function deviceSalt() {
+  const env = (process.env.DEVICE_HASH_SALT || '').trim();
+  if (env) return env;
+  let salt = getMeta('deviceSalt');
+  if (!salt) {
+    salt = require('crypto').randomBytes(24).toString('hex');
+    setMeta('deviceSalt', salt);
+  }
+  return salt;
+}
+
+function dayKeyUTC(ts) {
+  return new Date(ts).toISOString().slice(0, 10);
+}
+
+function monthKeyUTC(ts) {
+  return new Date(ts).toISOString().slice(0, 7);
+}
+
+/**
+ * Record the devices seen on one channel at one moment.
+ *
+ * `entries` is [{ id, cls }] — already hashed and classified by the caller, so
+ * this module never sees an address. Re-recording the same device in the same
+ * hour is free: the bucket is a set.
+ */
+function recordDevices(streamId, ts, entries) {
+  if (!streamId || !Array.isArray(entries) || !entries.length) return;
+  const hk = hourKey(ts);
+  const forStream = (deviceHours[streamId] ||= {});
+  const bucket = (forStream[hk] ||= {});
+  for (const e of entries) {
+    if (!e || !e.id) continue;
+    // First classification seen wins. A device that changes how it identifies
+    // mid-hour is one device, and rewriting it would make the mix depend on
+    // poll order.
+    if (bucket[e.id] === undefined) bucket[e.id] = e.cls || '';
+  }
+  dirtySamples = true;
+}
+
+/**
+ * Fold each tier into the next as it ages: hours → days → months.
+ *
+ * RESOLUTION IS DISCARDED, DATA IS NOT. After the day tier expires you can no
+ * longer ask "cume for 3–17 March 2024", but "cume for March 2024" and "2024 vs
+ * 2025" stay exactly answerable for ever — which is what a station, a board and
+ * a funder actually ask. A union is order-free and idempotent, so folding it
+ * loses nothing; an average could not survive this, which is why samples are
+ * tiered differently.
+ */
+function compactDevices(now = Date.now()) {
+  const fold = (from, to, keyOf) => {
+    for (const [id, cls] of Object.entries(from)) if (to[id] === undefined) to[id] = cls;
+  };
+
+  // hours → days
+  const hourCutoff = now - DEVICE_HOUR_RETENTION_H * 60 * 60 * 1000;
+  for (const streamId of Object.keys(deviceHours)) {
+    for (const hk of Object.keys(deviceHours[streamId])) {
+      if (Date.parse(hk) >= hourCutoff) continue;
+      fold(deviceHours[streamId][hk], ((deviceDays[streamId] ||= {})[dayKeyUTC(hk)] ||= {}));
+      delete deviceHours[streamId][hk];
+      dirtySamples = true;
+    }
+    if (!Object.keys(deviceHours[streamId]).length) delete deviceHours[streamId];
+  }
+
+  // days → months
+  const dayCutoff = dayKeyUTC(now - DEVICE_DAY_RETENTION_DAYS * 24 * 60 * 60 * 1000);
+  for (const streamId of Object.keys(deviceDays)) {
+    for (const dk of Object.keys(deviceDays[streamId])) {
+      if (dk >= dayCutoff) continue;
+      fold(deviceDays[streamId][dk], ((deviceMonths[streamId] ||= {})[monthKeyUTC(`${dk}T00:00:00Z`)] ||= {}));
+      delete deviceDays[streamId][dk];
+      dirtySamples = true;
+    }
+    if (!Object.keys(deviceDays[streamId]).length) delete deviceDays[streamId];
+  }
+
+  // months: kept for ever unless a deployment explicitly asks otherwise.
+  if (DEVICE_MONTH_RETENTION > 0) {
+    const d = new Date(now);
+    d.setUTCMonth(d.getUTCMonth() - DEVICE_MONTH_RETENTION);
+    const dropBefore = monthKeyUTC(d);
+    for (const streamId of Object.keys(deviceMonths)) {
+      for (const mk of Object.keys(deviceMonths[streamId])) {
+        if (mk < dropBefore) { delete deviceMonths[streamId][mk]; dirtySamples = true; }
+      }
+      if (!Object.keys(deviceMonths[streamId]).length) delete deviceMonths[streamId];
+    }
+  }
+}
+
+/**
+ * Cume — distinct devices across a window, with the device mix that composes it.
+ *
+ * Both tiers are unioned together, so a window spanning the hourly/daily
+ * boundary counts a device that appears in both exactly once.
+ *
+ * `coveredFrom` is the earliest data actually held. A caller must not present a
+ * 30-day cume built from four days of data as a 30-day figure — the same rule
+ * the rolling comparison cards already follow.
+ */
+function getDistinctDevices(streamIds, sinceMs, untilMs = Date.now()) {
+  const ids = Array.isArray(streamIds) ? streamIds : [streamIds];
+  const seen = new Map();          // hash -> cls
+  let earliest = null;
+
+  const note = (tsMs) => { if (earliest == null || tsMs < earliest) earliest = tsMs; };
+
+  for (const streamId of ids) {
+    for (const [hk, bucket] of Object.entries(deviceHours[streamId] || {})) {
+      const t = Date.parse(hk);
+      if (!Number.isFinite(t) || t < sinceMs || t > untilMs) continue;
+      note(t);
+      for (const [id, cls] of Object.entries(bucket)) if (!seen.has(id)) seen.set(id, cls);
+    }
+    for (const [dk, bucket] of Object.entries(deviceDays[streamId] || {})) {
+      const t = Date.parse(`${dk}T00:00:00.000Z`);
+      // A day bucket is included when ANY of it falls inside the window; a
+      // partial day at the edge slightly over-counts rather than dropping real
+      // devices, and the alternative loses people entirely.
+      if (!Number.isFinite(t) || t + 24 * 60 * 60 * 1000 < sinceMs || t > untilMs) continue;
+      note(t);
+      for (const [id, cls] of Object.entries(bucket)) if (!seen.has(id)) seen.set(id, cls);
+    }
+    for (const [mk, bucket] of Object.entries(deviceMonths[streamId] || {})) {
+      const t = Date.parse(`${mk}-01T00:00:00.000Z`);
+      const end = Date.parse(`${mk}-01T00:00:00.000Z`) + 31 * 24 * 60 * 60 * 1000;
+      if (!Number.isFinite(t) || end < sinceMs || t > untilMs) continue;
+      note(t);
+      for (const [id, cls] of Object.entries(bucket)) if (!seen.has(id)) seen.set(id, cls);
+    }
+  }
+
+  const players = {};
+  const platforms = {};
+  for (const cls of seen.values()) {
+    const [fam, plat] = String(cls || '').split('|');
+    if (fam) players[fam] = (players[fam] || 0) + 1;
+    if (plat) platforms[plat] = (platforms[plat] || 0) + 1;
+  }
+
+  return {
+    devices: seen.size,
+    players,
+    platforms,
+    coveredFrom: earliest == null ? null : new Date(earliest).toISOString(),
+    // True when the window reaches back further than anything recorded, so the
+    // UI can say "since we started measuring" instead of quoting a short
+    // period as though it were a whole month.
+    partial: earliest == null ? true : earliest > sinceMs + 60 * 60 * 1000,
+  };
+}
+
 function hourKey(ts) {
   const d = new Date(ts);
   d.setUTCMinutes(0, 0, 0);
@@ -158,9 +364,18 @@ function load(streamIds = []) {
         rollups[id] = Array.isArray(sm.rollups[id]) ? sm.rollups[id] : [];
       }
     }
+    if (sm.deviceHours) deviceHours = sm.deviceHours;
+    if (sm.deviceDays) deviceDays = sm.deviceDays;
+    if (sm.deviceMonths) deviceMonths = sm.deviceMonths;
     const total = Object.values(samples).reduce((a, b) => a + b.length, 0);
     const rollTotal = Object.values(rollups).reduce((a, b) => a + b.length, 0);
     console.log(`[Store] Loaded ${total} raw sample(s), ${rollTotal} hourly rollup(s)`);
+    const devTotal = Object.values(deviceDays).reduce(
+      (a, d) => a + Object.values(d).reduce((x, b) => x + Object.keys(b).length, 0), 0,
+    ) + Object.values(deviceHours).reduce(
+      (a, d) => a + Object.values(d).reduce((x, b) => x + Object.keys(b).length, 0), 0,
+    );
+    if (devTotal) console.log(`[Store] Loaded ${devTotal} device observation(s) for cume`);
   }
 
   // One-time migration off the old combined history.json. Its incidents are
@@ -2055,6 +2270,67 @@ function getTuneInRecordingStart(streamIds) {
  * our September numbers", and they live in the history page and the roundup
  * email, where the period being named is the whole point.
  */
+/**
+ * Named calendar months, oldest first — the growth series.
+ *
+ * THIS IS WHAT A BOARD, A FUNDER AND A CPB RETURN ACTUALLY ASK FOR: not a
+ * rolling window, but "September" against "September last year". The rolling
+ * cards deliberately cannot answer it, because "last 30 days" is a moving
+ * target and a named month is not.
+ *
+ * Cume per month is EXACT and computed from that month's own device set. It is
+ * NOT summed across months — one person listening in March and April is one
+ * person over the two, so a multi-month figure is a union, never a total, and
+ * `combined` is how a caller gets one honestly.
+ */
+function getMonthlyAudience(streamIds, { months = 24, now = Date.now() } = {}) {
+  const ids = Array.isArray(streamIds) ? streamIds : [streamIds];
+  const keys = new Set();
+  for (const id of ids) {
+    for (const mk of Object.keys(deviceMonths[id] || {})) keys.add(mk);
+    for (const dk of Object.keys(deviceDays[id] || {})) keys.add(dk.slice(0, 7));
+    for (const hk of Object.keys(deviceHours[id] || {})) keys.add(hk.slice(0, 7));
+  }
+  const ordered = [...keys].sort().slice(-months);
+
+  const rows = ordered.map((mk) => {
+    const startMs = Date.parse(`${mk}-01T00:00:00.000Z`);
+    const end = new Date(startMs);
+    end.setUTCMonth(end.getUTCMonth() + 1);
+    const endMs = Math.min(end.getTime(), now);
+    const d = getDistinctDevices(ids, startMs, endMs);
+    return {
+      month: mk,
+      devices: d.devices,
+      players: d.players,
+      platforms: d.platforms,
+      // The month is still running, so it is not yet comparable with a whole one.
+      inProgress: endMs >= now && startMs <= now,
+    };
+  });
+
+  // Year-over-year, computed only where BOTH months are complete — the same
+  // rule every other comparison on this page follows.
+  for (const r of rows) {
+    const prevKey = `${Number(r.month.slice(0, 4)) - 1}-${r.month.slice(5)}`;
+    const prev = rows.find((x) => x.month === prevKey);
+    r.vsLastYear = prev && !prev.inProgress && !r.inProgress && prev.devices > 0
+      ? Math.round(((r.devices - prev.devices) / prev.devices) * 1000) / 10
+      : null;
+  }
+  return rows;
+}
+
+/** Whether any device observation exists for these channels at all. */
+function hasDeviceData(streamIds) {
+  for (const id of streamIds || []) {
+    if (Object.keys(deviceHours[id] || {}).length) return true;
+    if (Object.keys(deviceDays[id] || {}).length) return true;
+    if (Object.keys(deviceMonths[id] || {}).length) return true;
+  }
+  return false;
+}
+
 function getListenerCountsAcross(groups, now = Date.now()) {
   const list = (groups || []).filter((g) => g && (g.streamIds || []).length);
   const allIds = list.flatMap((g) => g.streamIds);
@@ -2077,6 +2353,16 @@ function getListenerCountsAcross(groups, now = Date.now()) {
 
     const tuneIns = getTuneIns(allIds, startMs, now);
     const prevTuneIns = getTuneIns(allIds, prevStartMs, startMs);
+
+    /* CUME — distinct devices reached in this window. The number radio is sold
+       on, and the only audience figure here that cannot be inflated by the
+       stream flapping: a listener who reconnects nine times is nine tune-ins
+       and one device. */
+    const cume = getDistinctDevices(allIds, startMs, now);
+    const prevCume = getDistinctDevices(allIds, prevStartMs, startMs);
+    // Same rule as every other comparison on this card: both windows must be
+    // fully recorded, or the percentage is an artefact of when we started.
+    const cumeComparable = !cume.partial && !prevCume.partial && prevCume.devices > 0;
 
     // CONCURRENCY DOES NOT SUM. "At once" is a claim about one instant, and two
     // stations' separate busiest moments were not the same moment — adding them
@@ -2155,6 +2441,11 @@ function getListenerCountsAcross(groups, now = Date.now()) {
       ...current,
       totalListeners: tuneIns.total || null,
       totalListenersMeta: tuneIns,
+      // Cume. Null (not zero) until anything has been recorded, so the UI can
+      // tell "nobody" apart from "not measured yet".
+      individualListeners: cume.devices || null,
+      individualListenersMeta: cume,
+      individualListenersComparable: cumeComparable,
       previous: {
         ...previous,
         totalListeners: prevTuneIns.total || null,
@@ -2165,6 +2456,7 @@ function getListenerCountsAcross(groups, now = Date.now()) {
         peak: concurrencyComparable ? pct(levelled.current.peak, levelled.previous.peak) : null,
         avg: concurrencyComparable ? pct(levelled.current.avg, levelled.previous.avg) : null,
         totalListeners: comparable ? pct(tuneIns.total, prevTuneIns.total) : null,
+        individualListeners: cumeComparable ? pct(cume.devices, prevCume.devices) : null,
       },
       // Why the reach comparison is absent, when it is. The UI says "not enough
       // history yet" rather than leaving a bare dash that reads as a fault.
@@ -2197,12 +2489,16 @@ function getListenerCountsAcross(groups, now = Date.now()) {
     // person who tunes in ten times is ten total listeners and one individual
     // listener, and a station needs both figures — so this is a headline slot
     // showing why it is empty, not a hidden feature.
-    unavailable: {
+    /* Empty once cume is being recorded. It stays a DECLARED slot while it is
+       not, rather than a hidden feature, so the page says what it cannot yet
+       answer and why — but the moment devices are observed it becomes a real
+       headline figure alongside the others. */
+    unavailable: hasDeviceData(allIds) ? {} : {
       individualListeners: {
         value: null,
         label: 'Total individual listeners',
         detail: 'How many different people, however many times each of them tuned in.',
-        reason: 'needs Icecast admin access — telling one listener from another requires per-connection detail the public status page does not carry',
+        reason: 'no per-connection data recorded yet — this needs an Icecast admin credential for the stream\'s server, and a few minutes of collection once it has one',
       },
     },
   };
@@ -2871,7 +3167,7 @@ function saveSamples(force = false) {
     // roughly triple it for no operator benefit.
     atomicWrite(
       SAMPLES_FILE,
-      JSON.stringify({ version: 2, savedAt: new Date().toISOString(), samples, rollups }),
+      JSON.stringify({ version: 2, savedAt: new Date().toISOString(), samples, rollups, deviceHours, deviceDays, deviceMonths }),
     );
     dirtySamples = false;
   } catch (err) {
@@ -2903,6 +3199,11 @@ function getStorageInfo() {
 }
 
 module.exports = {
+  // Cume — distinct devices over a period. See the block above hourKey().
+  recordDevices, getDistinctDevices, compactDevices, deviceSalt, getMonthlyAudience,
+  _deviceHours: () => deviceHours, _deviceDays: () => deviceDays, _deviceMonths: () => deviceMonths,
+  _resetDevices: () => { deviceHours = {}; deviceDays = {}; deviceMonths = {}; },
+  DEVICE_RETENTION_DAYS, DEVICE_HOUR_RETENTION_H, DEVICE_DAY_RETENTION_DAYS, DEVICE_MONTH_RETENTION,
   load, save, saveEvents, saveSamples, prune,
   addEvent, updateEvent, getEvents, findOpenOutage,
   addSample, getSamples, getAllSamples, getRollups,

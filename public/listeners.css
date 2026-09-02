@@ -7,12 +7,29 @@
    component is a divergence waiting to happen.
    ═══════════════════════════════════════════════════════════════════════════ */
 
+/* STICKY, and framed. This one control governs six sections that scroll past
+   below it, and as a plain row it was scrolled straight over — by the third
+   section a reader had no idea whether they were looking at a day or a quarter.
+   Sticking it to the top means the answer is always on screen, and the frame
+   stops it reading as a caption belonging to the section above. */
 .range-bar {
   display: flex;
   align-items: center;
   gap: 14px;
   flex-wrap: wrap;
-  margin: 18px 0 6px;
+  margin: 22px 0 10px;
+  padding: 12px 16px;
+  position: sticky;
+  top: 0;
+  z-index: 20;
+  background: var(--surface-1);
+  border: 1px solid var(--surface-3);
+  border-left: 4px solid var(--primary);
+  border-radius: 12px;
+  box-shadow: var(--shadow-md);
+  /* Opaque, or the content scrolling underneath shows through and the bar
+     becomes less readable exactly when it is doing its job. */
+  backdrop-filter: blur(8px);
 }
 
 .range-note {
@@ -715,4 +732,85 @@
 @media (max-width: 560px) {
   .deep-locked { flex-wrap: wrap; }
   .deep-signin { margin-left: 0; }
+}
+
+/* Cume — distinct people reached. Set apart from the secondary rows because it
+   answers a different question from the listening figures around it. */
+.cc-cume {
+  margin: 14px 0 4px;
+  padding: 12px 14px;
+  background: var(--primary-surface);
+  border: 1px solid var(--primary-dark);
+  border-radius: 10px;
+}
+
+.cc-cume.pending {
+  background: var(--surface-1);
+  border-style: dashed;
+  border-color: var(--surface-4);
+}
+
+.cc-cume-v {
+  font-size: 26px;
+  font-weight: 700;
+  color: var(--primary-light);
+  line-height: 1.1;
+}
+
+.cc-cume-l {
+  margin-top: 3px;
+  font-size: 12px;
+  color: var(--text-secondary);
+  line-height: 1.4;
+}
+
+/* ── The range selector, deliberately larger here ───────────────────────────
+   NOT a redefinition of the shared .range-pill component — a size variation
+   scoped to this page's one governing control. It sits between the headline
+   cards and six sections that all obey it, and at the shared 10px it read as
+   decoration rather than as the switch driving everything below. */
+.range-bar .range-pills {
+  gap: 4px;
+  padding: 4px;
+}
+
+.range-bar .range-pill {
+  font-size: 15px;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  padding: 10px 22px;
+}
+
+.range-bar .range-label {
+  font-size: 14px;
+  font-weight: 700;
+}
+
+@media (max-width: 560px) {
+  .range-bar .range-pills { width: 100%; justify-content: space-between; }
+  .range-bar .range-pill { flex: 1; text-align: center; padding: 10px 8px; }
+}
+
+/* Echo of the active range, repeated on every section the range governs. Six
+   sections scroll past below the selector, and by the third one a reader has
+   no way to tell whether a chart is showing a day or three months without
+   scrolling back up. */
+.range-echo {
+  margin-left: 8px;
+  padding: 3px 10px;
+  border-radius: 100px;
+  background: var(--primary-surface);
+  border: 1px solid var(--primary-dark);
+  color: var(--primary-light);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  white-space: nowrap;
+  vertical-align: middle;
+}
+
+/* The period headline inside a panel that also carries live figures. */
+.deep-tile.primary {
+  background: var(--primary-surface);
+  border-color: var(--primary-dark);
 }

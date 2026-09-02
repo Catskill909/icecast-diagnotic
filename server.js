@@ -720,6 +720,19 @@ app.get('/api/listener-detail', auth.requireAuth, (req, res) => {
   const detail = monitor.getListenerDetail();
   const mountFilter = (req.query.mount || '').trim();
 
+  /* TWO CLOCKS ON ONE PANEL, and they must never be conflated.
+     `period` is measured over the requested window from the stored device
+     record — cume and the device mix that composes it. `live` is a reading of
+     this instant, which is the only way to know a session's length or how many
+     are connected right now. Icecast keeps no history, so neither can be
+     derived from the other, and each figure on the page is labelled with the
+     clock it belongs to. */
+  const days = Math.min(Math.max(parseFloat(req.query.days) || 7, 0.04), 3650);
+  const station = stationOf(req);
+  const streamIds = station ? monitor.streamIdsFor(station) : monitor.getStreams().map((x) => x.id);
+  const sinceMs = Date.now() - days * 24 * 60 * 60 * 1000;
+  const period = { days, ...monitor.getDistinctDevices(streamIds, sinceMs) };
+
   const mounts = Object.entries(detail.mounts)
     .filter(([key]) => !mountFilter || key.endsWith(mountFilter))
     .map(([key, agg]) => ({ key, ...agg }))
@@ -727,6 +740,7 @@ app.get('/api/listener-detail', auth.requireAuth, (req, res) => {
 
   res.json({
     ...detail.meta,
+    period,
     enabled: monitor.LISTENER_DETAIL_ENABLED,
     everyCycles: monitor.LISTENER_DETAIL_EVERY,
     // Named so a reader can see WHICH server the credential covers, without the

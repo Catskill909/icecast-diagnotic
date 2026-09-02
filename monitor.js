@@ -1589,7 +1589,7 @@ const LISTENER_DETAIL_ENABLED = String(process.env.LISTENER_DETAIL_ENABLED ?? 't
 
 // Latest aggregate per "host+mount". Aggregates only — see listener-detail.js.
 let listenerDetail = {};
-let listenerDetailMeta = { lastRunAt: null, lastError: null, mounts: 0, host: null };
+let listenerDetailMeta = { lastRunAt: null, lastError: null, mounts: 0, host: null, distinctAddresses: null };
 
 /**
  * Collect per-listener aggregates for every mount on a host we hold a
@@ -1608,15 +1608,59 @@ async function collectListenerDetail(hosts) {
 
   const next = {};
   let lastError = null;
+  let hostDistinct = null;
   for (const h of withCreds) {
     const snap = snapshot?.byHost?.[h.host];
     const mountPaths = Object.keys(snap?.mounts || {});
     const base = h.statusUrl.replace(/\/[^/]*$/, '');
-    for (const mountPath of mountPaths) {
-      const agg = await listenerDetailModule.collectMount(base, mountPath, h.creds);
-      if (agg.ok) next[h.host + mountPath] = agg;
-      else lastError = `${mountPath}: ${agg.error}`;
+
+    /* Distinct addresses have to be unioned ACROSS mounts while the rows are in
+       hand. Summing each mount's own count would double-count anyone listening
+       to two mounts, and the per-mount counts cannot be merged afterwards for
+       the same reason a median cannot — the set is gone by then.
+
+       The addresses live in this Set and nowhere else; only its SIZE is kept. */
+    const seen = new Set();
+
+    /* Which CHANNEL each mount belongs to. Cume is a station-facing figure, so
+       it is recorded against the channel a listener would name — not against
+       /live_64, which is an implementation detail of the same channel. A device
+       on two bitrates of one channel is one device, and unioning per channel is
+       what makes that true. */
+    const channelOf = new Map();
+    for (const st of streams) {
+      let u; try { u = new URL(st.url); } catch { continue; }
+      if (u.host !== h.host) continue;
+      for (const mp of diagnose.channelMountPaths(st)) channelOf.set(mp, st.id);
     }
+
+    const salt = store.deviceSalt();
+    const perChannel = new Map();   // streamId -> [{id, cls}]
+
+    for (const mountPath of mountPaths) {
+      const res = await listenerDetailModule.fetchListClients(base, mountPath, h.creds);
+      if (!res.ok) { lastError = `${mountPath}: ${res.error}`; continue; }
+      for (const r of res.rows) if (r.ip) seen.add(r.ip);
+
+      const streamId = channelOf.get(mountPath);
+      if (streamId) {
+        const ids = listenerDetailModule.deviceIdentities(res.rows, salt);
+        const bag = perChannel.get(streamId) || [];
+        bag.push(...ids);
+        perChannel.set(streamId, bag);
+      }
+
+      next[h.host + mountPath] = {
+        ok: true, error: null, errorCode: null, responseTime: res.responseTime,
+        ...listenerDetailModule.aggregate(res.rows, { mount: mountPath, host: h.host }),
+      };
+    }
+
+    // Written once per channel per pass, after every mount on it has been read,
+    // so a channel's bitrate variants land in one bucket rather than racing.
+    const nowIso = new Date().toISOString();
+    for (const [streamId, ids] of perChannel) store.recordDevices(streamId, nowIso, ids);
+    hostDistinct = seen.size;
     listenerDetailMeta.host = h.host;
   }
 
@@ -1624,6 +1668,10 @@ async function collectListenerDetail(hosts) {
   listenerDetailMeta.lastRunAt = new Date().toISOString();
   listenerDetailMeta.lastError = lastError;
   listenerDetailMeta.mounts = Object.keys(next).length;
+  listenerDetailMeta.distinctAddresses = hostDistinct;
+  // Folds hours past the hourly window into days and drops days past retention.
+  // Cheap, and running it here keeps it on the same cadence as collection.
+  store.compactDevices();
 }
 
 function currentHosts() {
@@ -4055,5 +4103,6 @@ module.exports = {
   // because the audience breakdown is not something to publish by default.
   getListenerDetail: () => ({ meta: { ...listenerDetailMeta }, mounts: { ...listenerDetail } }),
   collectListenerDetail, adminCredsFor, adminHost,
+  getDistinctDevices: (ids, since, until) => store.getDistinctDevices(ids, since, until),
   LISTENER_DETAIL_EVERY, LISTENER_DETAIL_ENABLED,
 };

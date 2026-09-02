@@ -229,6 +229,32 @@
       ? `<div class="cc-partial">Counted from ${esc(since(iso))} — ${esc(what)} before then were not recorded, so this is a floor, not a total.</div>`
       : '');
 
+    /* CUME — distinct devices reached. Given its own block rather than a line in
+       the secondary list, because it answers a different question from
+       everything else on the card: the others count listening, this counts
+       PEOPLE. It is what underwriting is priced on and what a board asks for,
+       and it is the one audience figure that does not rise when the stream
+       breaks and everybody reconnects. */
+    const cumeRow = (d, p) => {
+      const meta = d.individualListenersMeta || {};
+      if (d.individualListeners == null) {
+        return `<div class="cc-cume pending">
+          <div class="cc-cume-v">—</div>
+          <div class="cc-cume-l">individual listeners — not recorded for this period yet</div>
+        </div>`;
+      }
+      return `<div class="cc-cume">
+        <div class="cc-cume-v">${esc(d.individualListeners.toLocaleString())}</div>
+        <div class="cc-cume-l">individual listeners — different devices reached</div>
+        ${d.individualListenersComparable === false
+          ? '<span class="cc-delta none">not enough recorded history to compare</span>'
+          : delta(d.changePct && d.changePct.individualListeners, p.vs, 'strong')}
+        ${meta.partial
+          ? `<div class="cc-partial">A floor: measuring began ${esc(since(meta.coveredFrom))}, inside this window.</div>`
+          : ''}
+      </div>`;
+    };
+
     const cards = PERIODS.map((p) => {
       const d = c[p.key] || {};
       const meta = d.totalListenersMeta || {};
@@ -255,6 +281,7 @@
           : delta(d.changePct && d.changePct.totalListeners, p.vs, 'strong')}
         ${recordedNote(from.arrivals, 'arrivals')}
         ${!from.arrivals && meta.hoursMissing ? `<div class="cc-partial">A floor for this period: ${esc(Number(meta.hoursMissing).toLocaleString())} channel-hour(s) predate tune-in recording and are not counted at all.</div>` : ''}
+        ${cumeRow(d, p)}
         <div class="cc-secondary">
           ${recordedNote(from.levels, 'audience levels')}
           <div class="cc-sec">
@@ -723,7 +750,7 @@
 
     let res;
     try {
-      res = await fetch('/api/listener-detail');
+      res = await fetch(`/api/listener-detail?days=${days}${scope()}`);
     } catch {
       panel.innerHTML = '<div class="muted">Could not reach the server.</div>';
       return;
@@ -770,14 +797,21 @@
       return;
     }
 
-    // Totals across the credentialed host.
-    const players = {}; const platforms = {};
+    // Live totals across the credentialed host — this instant only.
     let listeners = 0; let bots = 0; let connections = 0;
     for (const m of mounts) {
       listeners += m.listeners || 0; bots += m.bots || 0; connections += m.connections || 0;
-      for (const [k, v] of Object.entries(m.players || {})) players[k] = (players[k] || 0) + v;
-      for (const [k, v] of Object.entries(m.platforms || {})) platforms[k] = (platforms[k] || 0) + v;
     }
+
+    /* The MIX is drawn from the stored period record, not from the live
+       snapshot. A snapshot of this minute is a sample of whoever happens to be
+       connected; the period record is every device seen across the window, and
+       it is the one that answers "what do our listeners use". */
+    const per = d.period || {};
+    const players = per.players || {};
+    const platforms = per.platforms || {};
+    const cume = per.devices || 0;
+    const rangeName = rangeLabelFor(days).toLowerCase();
 
     // The longest-running mount's median is the most meaningful single session
     // figure; medians cannot be averaged across mounts, so one is SHOWN rather
@@ -797,8 +831,13 @@
 
     panel.innerHTML = `
       <div class="deep-tiles">
+        <div class="deep-tile primary">
+          <div class="deep-tile-label">Individual listeners · ${esc(rangeName)}</div>
+          <div class="deep-tile-value">${cume ? cume.toLocaleString() : '—'}</div>
+          <div class="deep-tile-note">different devices reached${per.partial ? ' — a floor, measuring began inside this window' : ''}</div>
+        </div>
         <div class="deep-tile">
-          <div class="deep-tile-label">Listeners</div>
+          <div class="deep-tile-label">Listening right now</div>
           <div class="deep-tile-value">${listeners}</div>
           <div class="deep-tile-note">${connections} connections, ${bots} machine${bots === 1 ? '' : 's'} excluded</div>
         </div>
@@ -813,6 +852,11 @@
           <div class="deep-tile-note">of a real listener, machines removed</div>
         </div>
         <div class="deep-tile">
+          <div class="deep-tile-label">Distinct addresses</div>
+          <div class="deep-tile-value">${d.distinctAddresses == null ? '—' : d.distinctAddresses}</div>
+          <div class="deep-tile-note">connected right now. <strong>Not a headcount</strong> — a household shares one address, and an aggregator can hide hundreds behind one.</div>
+        </div>
+        <div class="deep-tile">
           <div class="deep-tile-label">Mounts measured</div>
           <div class="deep-tile-value">${mounts.length}</div>
           <div class="deep-tile-note">on ${esc(d.credentialedHost)}</div>
@@ -821,16 +865,16 @@
 
       <div class="deep-split">
         <div>
-          <div class="deep-sub">Player / app</div>
-          ${bars(players, listeners, 9)}
+          <div class="deep-sub">Player / app · ${esc(rangeName)}</div>
+          ${bars(players, cume, 9)}
         </div>
         <div>
-          <div class="deep-sub">Platform</div>
-          ${bars(platforms, listeners, 6)}
+          <div class="deep-sub">Platform · ${esc(rangeName)}</div>
+          ${bars(platforms, cume, 6)}
         </div>
       </div>
 
-      <div class="deep-sub">Per mount</div>
+      <div class="deep-sub">Per mount · right now</div>
       <div class="table-scroll">
         <table class="aud-table">
           <thead><tr>
@@ -843,9 +887,43 @@
 
     if (hint) {
       hint.textContent = d.lastRunAt
-        ? `measured ${fmtWhen(d.lastRunAt)} · live, not a stored average`
+        ? `mix over ${rangeName} · session and per-mount figures read ${fmtWhen(d.lastRunAt)}`
         : '';
     }
+  }
+
+  /* ── Range echo ───────────────────────────────────────────────────────
+     Six sections scroll past below the range selector and every one of them
+     obeys it, but by the third a reader cannot tell whether a chart covers a
+     day or three months without scrolling back up. So the active range is
+     repeated on each section it governs. "Who Is Listening" carries it too now
+     that its headline and device mix are measured over the window; the figures
+     inside it that remain a reading of this instant say so on their own face,
+     because one panel showing two clocks has to label both. */
+  function rangeLabelFor(d) {
+    if (d <= 1) return 'Last 24 hours';
+    if (d <= 7) return 'Last 7 days';
+    if (d <= 30) return 'Last 30 days';
+    if (d <= 90) return 'Last 90 days';
+    return `Last ${Math.round(d)} days`;
+  }
+
+  function syncRangeEcho() {
+    const bar = document.querySelector('.range-bar');
+    if (!bar) return;
+    const label = rangeLabelFor(days);
+    document.querySelectorAll('.section-title').forEach((t) => {
+      // Only the sections BELOW the selector are governed by it.
+      const below = bar.compareDocumentPosition(t) & Node.DOCUMENT_POSITION_FOLLOWING;
+      if (!below || t.hasAttribute('data-live-section')) return;
+      let chip = t.querySelector(':scope > .range-echo');
+      if (!chip) {
+        chip = document.createElement('span');
+        chip.className = 'range-echo';
+        t.appendChild(chip);
+      }
+      chip.textContent = label;
+    });
   }
 
   /* ── Boot ────────────────────────────────────────────────────────────── */
@@ -856,13 +934,16 @@
     document.querySelectorAll('.range-pill').forEach((b) => b.classList.remove('active'));
     btn.classList.add('active');
     days = parseFloat(btn.dataset.days) || 7;
+    syncRangeEcho();
     load();
+    renderDeep().catch(() => {});
   });
 
   document.getElementById('export-btn').addEventListener('click', exportCsv);
 
   (async function boot() {
     await initStationPicker();
+    syncRangeEcho();
     await load();
     // Independent of load(): a failure here must not take the public page with
     // it, and it does not move with the date-range pills — it is a live reading.

@@ -34,6 +34,7 @@
    quietly changed meaning is worse than one that says what it excludes.
    ═══════════════════════════════════════════════════════════════════════════ */
 
+const crypto = require('crypto');
 const https = require('https');
 const http = require('http');
 
@@ -109,6 +110,12 @@ function parseListClients(xml) {
    browser and library patterns they are built on. Sonos identifies itself
    before the Linux it runs on; the TuneIn app before the Android beneath it. */
 const PLAYER_RULES = [
+  /* Machines first. An Icecast or Shoutcast pulling our stream is a RELAY —
+     verified in the live data on 2026-09-02, where three `Icecast 2.4.3`
+     connections were sitting inside the published listener count as "Unknown".
+     A relay is not a person and must never enter cume or the royalty estimate;
+     the audience it serves is counted on ITS server, not ours. */
+  [/^icecast|icecast\/|shoutcast|streamcast|liquidsoap/i, 'Relay', 'bot'],
   [/sonos/i,                          'Sonos',            'smart-speaker'],
   [/chromecast|crkey|google ?home/i,  'Chromecast',       'smart-speaker'],
   [/alexa|echo/i,                     'Alexa',            'smart-speaker'],
@@ -121,18 +128,47 @@ const PLAYER_RULES = [
   [/vlc/i,                            'VLC',              'desktop-player'],
   [/winamp/i,                         'Winamp',           'desktop-player'],
   [/foobar/i,                         'foobar2000',       'desktop-player'],
-  [/itunes|apple ?music|applecoremedia|coremedia/i, 'Apple Music / iTunes', 'desktop-player'],
+  /* AppleCoreMedia is the media framework EVERY iOS app and Safari audio
+     element streams through — it is not iTunes, and filing it as such hid the
+     station's whole iPhone audience under a desktop music player. Real iTunes
+     identifies itself as `iTunes/12.x`. Split by the device in the string. */
+  [/applecoremedia.*(iphone|ipad|ipod)/i, 'iOS app',      'app'],
+  [/applecoremedia|coremedia/i,       'Apple player',     'desktop-player'],
+  [/itunes\/|apple ?music/i,          'Apple Music / iTunes', 'desktop-player'],
   [/windows-?media-?player|nsplayer/i, 'Windows Media',   'desktop-player'],
   [/mpv|mplayer|audacious|rhythmbox|clementine/i, 'Desktop player', 'desktop-player'],
   [/spotify/i,                        'Spotify',          'app'],
   [/bot|crawler|spider|monitor|uptime|pingdom|zabbix|nagios|icecast-?check/i, 'Bot / monitor', 'bot'],
   [/curl|wget|python-?requests|go-?http|java\/|okhttp|libwww|axios|node-?fetch/i, 'Script / library', 'library'],
   [/lavf|ffmpeg|gstreamer|libmpg123/i, 'Media library',   'library'],
-  [/dalvik|android/i,                 'Android app',      'app'],
+  /* NATIVE ANDROID APP vs ANDROID BROWSER — a real distinction, and the agent
+     carries it cleanly. Verified against live traffic 2026-09-02:
+
+       Dalvik/2.1.0 (Linux; U; Android 16; SM-S928U ...)          native
+       just_audio/1.0.5 (Linux;Android 16) ExoPlayerLib/2.18.7    native
+       RadioService/1.4 (Linux;Android 12) ExoPlayerLib/2.9.6     native
+       Mozilla/5.0 (Linux; Android 10; K) AppleWebKit ... Chrome  BROWSER
+
+     ExoPlayer, Media3 and Dalvik are Android's own playback stack and never
+     appear in a browser agent; `Mozilla/…AppleWebKit` is the browser tell.
+     Matching the bare word "android" conflated the two — it labelled every
+     Chrome-on-Android user a native app. Matching Dalvik ALONE then went too
+     far the other way and lost the five apps built on ExoPlayer/Media3, which
+     is how most Android radio apps are written now. */
+  [/dalvik|exoplayer|androidxmedia3/i, 'Android app',     'app'],
   [/cfnetwork|darwin/i,               'iOS app',          'app'],
-  // Browsers last: nearly every agent above also contains a browser token.
+  /* Browsers last: nearly every agent above also contains a browser token.
+     And WITHIN browsers, iOS is the trap — Apple requires every iOS browser to
+     use WebKit, so Chrome, Firefox, Edge and the Google app ALL ship
+     "Safari/604.1" in their agent and are indistinguishable from Safari unless
+     their own token is matched FIRST. Verified in live traffic 2026-09-02:
+     CriOS and GSA connections were being reported as Safari. */
+  [/crios/i,                          'Chrome',           'browser'],
+  [/fxios/i,                          'Firefox',          'browser'],
+  [/edgios|edga\/|edg\//i,            'Edge',             'browser'],
+  [/opr\/|opera/i,                    'Opera',            'browser'],
+  [/\bgsa\//i,                        'Google app',       'browser'],
   [/firefox/i,                        'Firefox',          'browser'],
-  [/edg\//i,                          'Edge',             'browser'],
   [/chrome|chromium/i,                'Chrome',           'browser'],
   [/safari/i,                         'Safari',           'browser'],
   [/mozilla/i,                        'Browser',          'browser'],
@@ -173,6 +209,46 @@ function classifyAgent(ua) {
   }
 
   return { family, kind, platform, bot: kind === 'bot' };
+}
+
+// ── Device identity, for cume ───────────────────────────────────────────────
+
+/* A device is (IP + user agent). Neither is stored: they are hashed together
+   with a secret salt and truncated, and only the hash is kept. The hash exists
+   for exactly one question — "have we counted this one already this period" —
+   and is useless for any other.
+
+   THE SALT MUST BE STABLE ACROSS RESTARTS. A new salt makes every returning
+   listener look new, which would inflate cume on every deploy and quietly turn
+   the most important number in the product into a deploy counter. The caller
+   supplies it and is responsible for persisting it.
+
+   12 hex characters is 48 bits. At the tens of thousands of devices a station
+   sees in a month, the chance of any collision is far below the error already
+   introduced by NAT, and a collision only ever UNDER-counts by one. */
+function deviceId(ip, userAgent, salt) {
+  return crypto
+    .createHash('sha256')
+    .update(`${salt}\u0000${ip || ''}\u0000${userAgent || ''}`)
+    .digest('hex')
+    .slice(0, 12);
+}
+
+/**
+ * Hashed, classified device identities for a set of listener rows.
+ *
+ * Machines are excluded here rather than at the far end, so a relay that sits
+ * connected for a week can never enter the audience-reach figure. Cume is a
+ * count of people reached; a scraper was never reached.
+ */
+function deviceIdentities(rows, salt) {
+  const out = [];
+  for (const r of Array.isArray(rows) ? rows : []) {
+    const cls = classifyAgent(r.userAgent);
+    if (cls.bot || (r.connectedSec != null && r.connectedSec >= BOT_SESSION_SECONDS)) continue;
+    out.push({ id: deviceId(r.ip, r.userAgent, salt), cls: `${cls.family}|${cls.platform}` });
+  }
+  return out;
 }
 
 // ── Aggregation ─────────────────────────────────────────────────────────────
@@ -388,6 +464,7 @@ async function collectMount(baseUrl, mountPath, creds) {
 
 module.exports = {
   parseListClients,
+  deviceId, deviceIdentities,
   classifyAgent,
   aggregate,
   mergeAggregates,

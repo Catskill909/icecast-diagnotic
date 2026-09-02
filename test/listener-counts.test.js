@@ -274,10 +274,33 @@ test('individual listeners stay a declared headline, not a fabricated one', () =
   const c = store.getListenerCounts(['a'], TZ, NOW);
   const u = c.unavailable.individualListeners;
   assert.equal(u.value, null);
-  assert.match(u.reason, /admin/i);
   assert.notEqual(u.label, undefined);
   // It must never be conflated with the tune-in count sitting beside it.
   assert.notEqual(u.value, c.day.totalListeners);
+
+  // The REASON has to name the current blocker, and the blocker moved on
+  // 2026-09-02: an Icecast admin credential now exists, so "needs admin access"
+  // would send a reader hunting for something they already have. What is still
+  // missing is collection ACROSS the period — Icecast reports who is connected
+  // now, and distinct people over a day is the union of every poll.
+  assert.ok(u.reason && u.reason.length > 20, 'an empty slot must explain itself');
+  assert.match(u.reason, /collect|stored|period|poll/i, 'the reason must name the real blocker');
+  assert.doesNotMatch(
+    u.reason, /needs Icecast admin access/i,
+    'the credential exists now — this reason is stale and misdirects',
+  );
+});
+
+test('a live distinct-address count is never presented as a distinct-people count', () => {
+  // THE TRAP THIS PINS: a snapshot of who is connected right now is easy to
+  // reach for and answers a DIFFERENT question than the card asks. Filling the
+  // period card with a concurrent figure is precisely what store.js warns
+  // against, and it would misdescribe the number under a headline label.
+  const c = store.getListenerCounts(['a'], TZ, NOW);
+  assert.equal(
+    c.unavailable.individualListeners.value, null,
+    'a now-figure must not be promoted into the over-the-period slot',
+  );
 });
 
 test('a reach comparison is withheld when the earlier window is under-recorded', () => {

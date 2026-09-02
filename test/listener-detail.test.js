@@ -216,3 +216,112 @@ test('a merged median is withheld rather than invented', () => {
   assert.equal(m.session.meanSec, a.session.meanSec);
   assert.equal(m.session.maxSec, a.session.maxSec, 'a max merges by taking the larger');
 });
+
+/* ── Classifications caught in live traffic, 2026-09-02 ─────────────────────
+   Every case below is a REAL agent string from Pacifica's server that the first
+   version of the table got wrong. They are pinned individually because each one
+   moved a whole category of listener into the wrong bucket, and the only way
+   the error surfaced at all was an operator reading the breakdown and saying
+   "where are the iPhones". A rule table cannot be verified by inspection —
+   only against traffic. */
+
+test('AppleCoreMedia on an iPhone is an iOS app, NOT iTunes', () => {
+  // The framework every iOS app and Safari audio element streams through.
+  // Filing it as iTunes hid the station's entire iPhone audience under a
+  // desktop music player.
+  const c = ld.classifyAgent('AppleCoreMedia/1.0.0.23G83 (iPhone; U; CPU OS 26_6_1 like Mac OS X)');
+  assert.equal(c.family, 'iOS app');
+  assert.equal(c.platform, 'iOS');
+});
+
+test('real iTunes is still iTunes', () => {
+  const c = ld.classifyAgent('iTunes/12.12.4 (Macintosh; OS X 10.15.7)');
+  assert.equal(c.family, 'Apple Music / iTunes');
+});
+
+test('an Icecast relay is a machine, not a listener', () => {
+  // Three of these were sitting in the published listener count as "Unknown".
+  // A relay serves its own audience on its own server; counting it here both
+  // inflates reach and adds a phantom to the royalty estimate.
+  const c = ld.classifyAgent('Icecast 2.4.3');
+  assert.equal(c.bot, true, 'a relay must never enter the audience');
+  assert.equal(c.family, 'Relay');
+  assert.equal(ld.aggregate([{ ip: '1.1.1.1', userAgent: 'Icecast 2.4.3', connectedSec: 60, id: '1' }]).listeners, 0);
+});
+
+test('Chrome on Android is a browser, not a native app', () => {
+  // "Android" appears in every Android BROWSER agent, so matching the bare OS
+  // token labelled Chrome-on-Android a native app and emptied the browser
+  // breakdown. Only Dalvik means a native app.
+  const c = ld.classifyAgent('Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120 Mobile Safari/537.36');
+  assert.equal(c.family, 'Chrome');
+  assert.equal(c.platform, 'Android', 'the platform is still reported — it moved, it did not vanish');
+});
+
+test('a genuine Android native app is still an Android app', () => {
+  const c = ld.classifyAgent('Dalvik/2.1.0 (Linux; U; Android 13; SM-G991B)');
+  assert.equal(c.family, 'Android app');
+});
+
+test('an Amazon Echo is identified — the scope doc expected this to be unanswerable', () => {
+  const c = ld.classifyAgent('Echo/1.0(APNG)');
+  assert.equal(c.family, 'Alexa');
+  assert.equal(c.kind, 'smart-speaker');
+});
+
+test('the TuneIn app wins over the iOS beneath it', () => {
+  const c = ld.classifyAgent('TuneIn Radio/42.3.0; iPhone14,7; iOS/26.6.1');
+  assert.equal(c.family, 'TuneIn', 'distribution channel matters more than the OS carrying it');
+  assert.equal(c.platform, 'iOS');
+});
+
+/* ── Native app vs browser, and browser identity on iOS ─────────────────────
+   TWO SIDES OF ONE CLASS: a platform token that appears in BOTH a native app
+   and a browser agent. Match it too broadly and every browser user becomes an
+   app user; match it too narrowly and the real apps disappear. The first
+   version of this table did both, in opposite directions, on the same platform.
+   Every string below is real traffic from 2026-09-02. */
+
+test('a native Android app is told apart from Chrome on Android', () => {
+  // ExoPlayer and Media3 are Android's own playback stack and never appear in a
+  // browser agent. Dalvik alone caught only 3 of the 8 real apps — most Android
+  // radio apps are built on ExoPlayer now.
+  for (const ua of [
+    'Dalvik/2.1.0 (Linux; U; Android 16; SM-S928U Build/BP4A.251205.006)',
+    'just_audio/1.0.5 (Linux;Android 16) ExoPlayerLib/2.18.7',
+    'RadioService/1.4 (Linux;Android 12) ExoPlayerLib/2.9.6',
+    'just_audio/1.0.1 (Linux;Android 11) AndroidXMedia3/1.4.1',
+  ]) {
+    assert.equal(ld.classifyAgent(ua).family, 'Android app', ua);
+  }
+  // ...while the browser stays a browser, with Android still named as platform.
+  const c = ld.classifyAgent('Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.0.0 Mobile Safari/537.36');
+  assert.equal(c.family, 'Chrome');
+  assert.equal(c.platform, 'Android');
+});
+
+test('an aggregator still wins over the Android stack it is built on', () => {
+  // TuneIn's agent contains AndroidXMedia3. Distribution channel is the more
+  // important fact about that listener than the toolkit underneath.
+  assert.equal(ld.classifyAgent('TuneIn Radio/42.3 (Linux;Android 16) AndroidXMedia3/1.10.1').family, 'TuneIn');
+});
+
+test('iOS browsers are not all Safari', () => {
+  // Apple requires every iOS browser to use WebKit, so Chrome, Firefox, Edge
+  // and the Google app all ship "Safari/604.1". Without their own token first,
+  // every one of them is reported as Safari — which is what was happening.
+  const ios = (token) => `Mozilla/5.0 (iPhone; CPU iPhone OS 26_6_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) ${token} Mobile/15E148 Safari/604.1`;
+  assert.equal(ld.classifyAgent(ios('CriOS/152.0.7977.64')).family, 'Chrome');
+  assert.equal(ld.classifyAgent(ios('FxiOS/130.0')).family, 'Firefox');
+  assert.equal(ld.classifyAgent(ios('EdgiOS/131.0')).family, 'Edge');
+  assert.equal(ld.classifyAgent(ios('GSA/436.4.969249353')).family, 'Google app');
+  // Real Safari has no third-party token and must still land on Safari.
+  assert.equal(ld.classifyAgent(ios('Version/18.7.5')).family, 'Safari');
+});
+
+test('desktop browser identity still resolves correctly', () => {
+  const win = (t) => `Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) ${t} Safari/537.36`;
+  assert.equal(ld.classifyAgent(win('Chrome/120.0.0.0 Edg/120.0.2210.91')).family, 'Edge');
+  assert.equal(ld.classifyAgent(win('Chrome/120.0.0.0')).family, 'Chrome');
+  assert.equal(ld.classifyAgent('Mozilla/5.0 (X11; Linux x86_64; rv:121.0) Gecko/20100101 Firefox/121.0').family, 'Firefox');
+});
