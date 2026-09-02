@@ -648,6 +648,28 @@ body::before {
   background: var(--surface-3);
   color: var(--text-secondary);
   white-space: nowrap;
+  /* Chips are <button>s — each one plays its own mount. The reset keeps them
+     looking like the static chips they replaced. */
+  margin: 0;
+  border: 0;
+  appearance: none;
+  cursor: pointer;
+  transition: background var(--transition), color var(--transition), box-shadow var(--transition);
+}
+
+.mount:hover:not(:disabled) {
+  background: var(--surface-4);
+  color: var(--text-primary);
+}
+
+.mount:focus-visible {
+  outline: 2px solid var(--primary-light);
+  outline-offset: 2px;
+}
+
+/* Nothing is being served here, so there is nothing to play. */
+.mount:disabled {
+  cursor: default;
 }
 
 /* The mount the health check actually asks. Worth distinguishing: it is the one
@@ -656,6 +678,22 @@ body::before {
   color: var(--text-primary);
   background: var(--surface-4);
 }
+
+/* The mount the preview player below is pointed at. Defaults to the probed one,
+   so a card at rest reads the way it always has; clicking another chip moves the
+   highlight with the audio. */
+.mount.selected {
+  color: var(--primary-light);
+  background: var(--primary-surface);
+  box-shadow: inset 0 0 0 1px var(--primary);
+}
+
+.mount.selected:hover:not(:disabled) {
+  color: var(--primary-light);
+  background: rgba(124, 106, 239, 0.16);
+}
+
+.mount.selected .mount-n { border-left-color: rgba(124, 106, 239, 0.4); }
 
 /* Amber, not red, for both faults: the channel is still playing for the rest of
    its audience, and a red chip beside a green ONLINE badge reads as a
@@ -885,6 +923,13 @@ body::before {
   align-items: center;
   gap: 6px;
   margin-top: 2px;
+}
+
+/* Which mount is playing, shown in place of the bitrate when the preview is
+   pointed at a variant — the configured bitrate only describes the probed one. */
+.player-mount {
+  font-family: 'SF Mono', 'Fira Code', monospace;
+  color: var(--primary-light);
 }
 
 .bullet-dot {

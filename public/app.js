@@ -223,9 +223,15 @@
     });
   }
 
-  // Player state tracking: { [streamId]: 'stopped' | 'buffering' | 'playing' }
-  const playerStates = {};
-  const activePlayers = {};
+  // The card previews: which mount each is pointed at, what it is doing, and the
+  // one-at-a-time rule. The state lives out here rather than in the cards, so
+  // the choice survives the re-render that every poll performs.
+  const players = PreviewPlayer.createPreviewPlayers({
+    createAudio: (url) => new Audio(url),
+    onChange: () => {
+      if (lastStatus) renderStreamCards(lastStatus);
+    },
+  });
 
   // ── Stream Cards ────────────────────────────────────────────────────────
   // ── Filter and sort ───────────────────────────────────────────────────────
@@ -400,7 +406,7 @@
       const uptimePercent = getStreamUptime(stream.id);
       const uptimeClass = uptimePercent >= 99 ? 'good' : uptimePercent >= 95 ? 'warn' : 'bad';
       const uptimeBar = renderUptimeBar(stream.id);
-      const state = playerStates[stream.id] || 'stopped';
+      const state = players.state(stream.id);
 
       let statusLabel = stream.status === 'up' ? 'Online' : stream.status === 'down' ? 'Offline' : 'Unknown';
       let dotClass = stream.status;
@@ -453,16 +459,31 @@
       const impaired = new Map(
         (stream.icecastReachable ? stream.impairedMounts || [] : []).map((m) => [m.path, m.reason]),
       );
+      // Each chip is also the play control for its own mount. The probed mount
+      // is the default, so a card with nothing playing looks exactly as it did
+      // when the chips were inert — the highlight simply now means "this is what
+      // the player below is pointed at" rather than "this is the probed one".
+      //
+      // A MISSING mount is not selectable: Icecast is not serving it, so there is
+      // nothing to point a player at. If the selected mount goes missing while
+      // playing, selection falls back rather than leaving the card highlighting
+      // something unplayable.
+      const playableMounts = mounts.filter((p) => impaired.get(p) !== 'missing');
+      const selectedMount = players.selectionFor(stream.id, playableMounts);
+      const selectedUrl = selectedMount ? mountUrl(stream, selectedMount) : stream.url;
+
       const mountsHtml = mounts.length
         ? `<div class="stream-mounts">${mounts.map((path, i) => {
             const fault = impaired.get(path);
             const title = fault === 'missing'
               ? 'Icecast is not listing this mount — nobody can play it'
               : fault === 'stalled'
-              ? 'Icecast lists this mount but it is not serving audio'
+              ? 'Icecast lists this mount but it is not serving audio — click to hear it anyway'
+              : path === selectedMount
+              ? (i === 0 ? 'Probed for health — click to play or stop' : 'Click to play or stop')
               : i === 0
-              ? 'Probed for health'
-              : 'Served by Icecast, checked every few minutes';
+              ? 'Probed for health — click to listen'
+              : 'Served by Icecast, checked every few minutes — click to listen';
             // The listener count for this mount specifically. This is the whole
             // point of listing mounts rather than counting them: on this host
             // /live_64 regularly carries a third of the channel's audience, and
@@ -471,7 +492,8 @@
             const count = fault == null && typeof n === 'number'
               ? `<span class="mount-n">${n}</span>`
               : '';
-            return `<span class="mount${i === 0 ? ' primary' : ''}${fault ? ' ' + fault : ''}" title="${escapeHtml(title)}">${escapeHtml(path)}${count}</span>`;
+            const classes = `mount${i === 0 ? ' primary' : ''}${path === selectedMount ? ' selected' : ''}${fault ? ' ' + fault : ''}`;
+            return `<button type="button" class="${classes}"${fault === 'missing' ? ' disabled' : ''} data-stream-id="${escapeHtml(stream.id)}" data-mount-path="${escapeHtml(path)}" data-mount-url="${escapeHtml(mountUrl(stream, path))}" title="${escapeHtml(title)}">${escapeHtml(path)}${count}</button>`;
           }).join('')}</div>`
         : '';
 
@@ -496,13 +518,18 @@
 
         <!-- Live Audio Preview Player -->
         <div class="audio-player-box">
-          <button class="play-btn" data-stream-id="${escapeHtml(stream.id)}" data-stream-url="${escapeHtml(stream.url)}" title="Toggle Preview Audio">
+          <button class="play-btn" data-stream-id="${escapeHtml(stream.id)}" data-stream-url="${escapeHtml(selectedUrl)}" title="Toggle Preview Audio">
             ${playBtnContent}
           </button>
           <div class="player-info">
             <div class="player-title" title="${escapeHtml(stream.title || stream.name + ' Stream')}">${escapeHtml(stream.title || stream.name + ' Stream')}</div>
             <div class="player-subtitle">
-              <span>${stream.bitrate || 128} kbps</span>
+              <!-- The configured bitrate describes the PROBED mount only. Beside
+                   /kpfa_64 it would be a plain lie, so a variant names itself
+                   instead and lets the chip above say the rest. -->
+              ${selectedMount && selectedMount !== mounts[0]
+                ? `<span class="player-mount">${escapeHtml(selectedMount)}</span>`
+                : `<span>${stream.bitrate || 128} kbps</span>`}
               <span class="bullet-dot">●</span>
               <span>Audio Preview</span>
               <div class="visualizer-waves ${state === 'playing' ? 'playing' : ''}">
@@ -554,73 +581,18 @@
 
     // Attach audio player click listeners
     $$('.play-btn').forEach((btn) => {
-      btn.onclick = () => toggleAudioPlayer(btn.dataset.streamId, btn.dataset.streamUrl);
+      btn.onclick = () => players.toggle(btn.dataset.streamId, btn.dataset.streamUrl);
+    });
+
+    // A mount chip is the play control for its own mount.
+    $$('.mount[data-mount-url]').forEach((chip) => {
+      chip.onclick = () =>
+        players.selectMount(chip.dataset.streamId, chip.dataset.mountPath, chip.dataset.mountUrl);
     });
 
     // A card added by this render has to be filtered and ordered like the rest,
     // so this runs on every pass rather than only on user input.
     applyFilterSort();
-  }
-
-  function toggleAudioPlayer(streamId, streamUrl) {
-    // Stop all other playing audio
-    Object.keys(activePlayers).forEach((id) => {
-      if (id !== streamId && activePlayers[id]) {
-        activePlayers[id].pause();
-        activePlayers[id] = null;
-        playerStates[id] = 'stopped';
-      }
-    });
-
-    let audio = activePlayers[streamId];
-
-    if (audio && (playerStates[streamId] === 'playing' || playerStates[streamId] === 'buffering')) {
-      audio.pause();
-      activePlayers[streamId] = null;
-      playerStates[streamId] = 'stopped';
-      if (lastStatus) renderStreamCards(lastStatus);
-    } else {
-      playerStates[streamId] = 'buffering';
-      if (lastStatus) renderStreamCards(lastStatus);
-
-      audio = new Audio(streamUrl);
-      activePlayers[streamId] = audio;
-
-      audio.addEventListener('playing', () => {
-        playerStates[streamId] = 'playing';
-        if (lastStatus) renderStreamCards(lastStatus);
-      });
-
-      audio.addEventListener('waiting', () => {
-        playerStates[streamId] = 'buffering';
-        if (lastStatus) renderStreamCards(lastStatus);
-      });
-
-      audio.addEventListener('pause', () => {
-        playerStates[streamId] = 'stopped';
-        activePlayers[streamId] = null;
-        if (lastStatus) renderStreamCards(lastStatus);
-      });
-
-      audio.addEventListener('ended', () => {
-        playerStates[streamId] = 'stopped';
-        activePlayers[streamId] = null;
-        if (lastStatus) renderStreamCards(lastStatus);
-      });
-
-      audio.addEventListener('error', () => {
-        playerStates[streamId] = 'stopped';
-        activePlayers[streamId] = null;
-        if (lastStatus) renderStreamCards(lastStatus);
-      });
-
-      audio.play().catch((err) => {
-        console.error('Audio playback error:', err);
-        playerStates[streamId] = 'stopped';
-        activePlayers[streamId] = null;
-        if (lastStatus) renderStreamCards(lastStatus);
-      });
-    }
   }
 
   function renderUptimeBar(streamId) {
@@ -838,6 +810,23 @@
       // An unparseable URL still has whatever the config listed.
     }
     return [...new Set([primary, ...(stream.mounts || [])].filter(Boolean))];
+  }
+
+  /**
+   * The channel's URL with its path swapped for one of its other mounts.
+   *
+   * Everything else about the stream — host, port, scheme — is shared across the
+   * channel's mounts, so only the path differs.
+   */
+  function mountUrl(stream, path) {
+    try {
+      const u = new URL(stream.url);
+      u.pathname = path;
+      return u.href;
+    } catch {
+      // An unparseable URL is not made better by guessing at a path.
+      return stream.url;
+    }
   }
 
   function escapeHtml(str) {
