@@ -14,8 +14,9 @@
 
 ## Where the project actually is
 
-**Live and healthy.** 5 stations, 10 channels, 3 Icecast hosts, 390 tests,
-99.99% audio uptime over 7 days, data volume intact since 2026-08-04.
+**Live and healthy.** 5 stations, 10 channels, 3 Icecast hosts, 440 tests,
+99.63% audio uptime over 7 days, data volume intact since 2026-08-04.
+(Figures re-verified against production 2026-09-02.)
 
 Build-order items 1–8 of `HANDOFF.md` §6 are shipped. Per-station alert
 recipients — the item that had been "next" for four days — shipped 2026-08-31

@@ -2,7 +2,7 @@
 
 > **Purpose.** Everything a new session, a new developer, or another model needs
 > to pick this up without reading the conversation it came from. Written
-> 2026-08-27, current as of commit `679eef1` (2026-09-01).
+> 2026-08-27, current as of commit `54fbc4f` (2026-09-02).
 >
 > Read this first, then [`README.md`](README.md) for behaviour,
 > [`docs/DIAGNOSTICS.md`](docs/DIAGNOSTICS.md) for the classifier, and
@@ -18,7 +18,7 @@ shortest path to being useful.
 **Orient yourself (2 minutes).**
 
 ```bash
-npm test                                   # 390 tests, all should pass
+npm test                                   # 440 tests, all should pass
 curl -s https://kpft-icecast.supersoul.top/api/stations | jq   # what it monitors
 curl -s https://kpft-icecast.supersoul.top/api/status   | jq   # how it is doing
 ```
@@ -36,6 +36,7 @@ read when you need it.
 | Renaming a channel id | Orphans its history rather than moving it. §8 |
 | Adding a module without updating the Dockerfile | Container dies on startup. CI catches it |
 | Assuming a push deployed | Deploys are manual, always |
+| Gating a RECORD on whether it was emailed | Muting a station then edits its history. §5g |
 | Thinking a station is a server | A card is a CHANNEL; a station only groups them. §5d, §8 |
 | Putting calendar periods back on the audience cards | A month-to-date card is a few hours old on the 1st and reads as data loss. §5e |
 | Dividing a per-minute window by an hourly one | Fabricates growth from nothing. Raw lasts 7 days, then compacts. §8 |
@@ -82,9 +83,16 @@ regression, however green the tests are.**
 ## 2. Current state
 
 - **Live and healthy.** 5 stations (KPFT Houston, WPFW Washington DC, KPFK Los
-  Angeles, WBAI New York, KPFA Berkeley), 10 channels, **3 Icecast hosts**, 476
-  events retained since 2026-08-04. Station list and audience figures re-verified
-  against production 2026-09-01.
+  Angeles, WBAI New York, KPFA Berkeley), 10 channels, **3 Icecast hosts**, 510
+  events retained since 2026-08-04 (523 once the recovery backfill in §5g runs).
+  Re-verified against production 2026-09-02: 10/10 channels up, no impaired
+  mounts, `oldestEvent` still `2026-08-04T17:52:53.123Z` after that day's
+  deploy.
+- **A recovery is recorded whether or not it is emailed** as of 2026-09-02.
+  Muting a station decides who gets mail and nothing else. §5g.
+- **Every mount on a card is playable from its chip** as of 2026-09-02 — the
+  preview player is pointed at the probed mount and clicking another chip moves
+  it. §5f.
 - **The audience headline cards are ROLLING windows** — last 24 hours / 7 days /
   30 days — as of 2026-09-01. They were calendar periods and that was reported as
   data loss on the 1st of a month. §5e, and the traps in §8.
@@ -101,7 +109,7 @@ regression, however green the tests are.**
   so the host-as-shared-pool design (§3.6) is now carrying real traffic rather
   than being argued for. One snapshot fetch per host per cycle serves every
   station on it.
-- **390 tests**, `npm test`, Node's built-in runner, no test framework dependency.
+- **440 tests**, `npm test`, Node's built-in runner, no test framework dependency.
 - **Dependencies: express, nodemailer 9, dotenv.** That is the whole list, and it
   is deliberate. Crypto, testing and HTTP are all Node built-ins. Adding a
   dependency should require an argument.
@@ -184,18 +192,19 @@ silently alters what lands in someone's inbox.
 
 | File | Lines | What it owns |
 |---|---|---|
-| `store.js` | 2709 | Persistence, retention, audience model, rollups, **station config** |
-| `monitor.js` | 3094 | Check cycle, episode state, email composition, weekly roundup |
+| `store.js` | 2926 | Persistence, retention, audience model, rollups, **station config** |
+| `monitor.js` | 3474 | Check cycle, episode state, email composition, weekly roundup |
 | `diagnose.js` | 1255 | Probe, Icecast snapshot, **the classifier and the alert gate** |
 | `server.js` | 815 | HTTP API |
 | `auth.js` | ~290 | Admin session gate: scrypt, signed cookie, rate limiting |
 | `redact.js` | ~130 | **Public projections.** What anonymous callers may see |
 | `safe-url.js` | ~150 | **SSRF guard** for fetching user-supplied URLs |
 | `discover.js` | 822 | Station discovery: mount → channel grouping, validation |
-| `public/app.js` | 863 | Dashboard |
+| `public/app.js` | 852 | Dashboard |
 | `public/history.js` | 1537 | History page, station picker, charts |
 | `public/listeners.js` | 694 | **Audience page**: rendering only — ATH, charts, tables, CSV export |
 | `public/audience-stats.js` | 231 | **Audience arithmetic**, deliberately separate so Node can test it. Loads as `window.AudienceStats` in the browser and `require()`s in tests |
+| `public/preview-player.js` | 130 | **The cards' audio previews**: selected mount, play state, one at a time. Separate for the same reason as `audience-stats.js`. `window.PreviewPlayer` in the browser, `require()`d in tests |
 | `public/admin.js` | 1389 | Admin panel: add, edit, remove stations |
 | `public/guide.js` | 359 | In-app guide (content lives here as data) — 12 topics |
 | `public/login.js` | ~90 | Two-step sign-in |
@@ -545,6 +554,109 @@ spends most of its life partly elapsed, and looks broken while it does.*
   are separate because they fail for different reasons and either can be true
   while the other is false. Collapsing them back into one flag reintroduces the
   original bug.
+
+---
+
+## 5f. What changed on 2026-09-02: the mount chips became play controls
+
+The chips listing each channel's mounts were inert labels, and the card's single
+preview player could only ever play the probed mount. So the one mount an
+operator most wants to hear — the amber one Icecast still lists but will not
+serve — was the one mount the dashboard would not play.
+
+| Change | Why |
+|---|---|
+| Chips are `<button>`s that point the card's preview at their own mount | Hearing a variant was impossible from the dashboard, and "is this mount actually serving audio" is a question only the ear settles. Clicking the mount that is playing stops it, so a chip behaves like the play button beside it |
+| The highlight follows the SELECTED mount, defaulting to the probed one | A card at rest looks exactly as it did. `.primary` keeps its own quieter treatment, so the probed mount is still identifiable when the selection has moved off it |
+| A `missing` mount is `disabled` | Icecast is not serving it. Offering a play control for it would promise audio that cannot arrive |
+| Selection falls back when its mount stops being playable | A card must never highlight a mount nobody can play. `selectionFor()` re-picks on every render, which is also what makes the choice survive the 10s poll |
+| The player subtitle names a variant instead of showing `bitrate` | The configured bitrate describes the PROBED mount only. Printed beside `/kpfa_64` it is simply false |
+| **Player state moved to `public/preview-player.js`** | Same split, and the same reason, as `audience-stats.js`: the race below was untestable while it lived inside the page's IIFE |
+
+### Corrections worth inheriting
+
+- **Audio event handlers must be scoped to their own element, not to the stream
+  id.** `pause` is delivered asynchronously, so when a card tears one element
+  down and builds another in the same gesture, the old element's `pause` arrives
+  *after* the new one has started — and a handler keyed by stream alone reports
+  it as the card's state, stopping the mount the operator just asked for. The
+  handlers had always been written that way; nothing had ever replaced a stream's
+  element, so the path was unreachable until clickable chips made it the common
+  case. Every handler now returns early unless it is still the current player.
+  `test/preview-player.test.js` delivers `pause` on flush rather than on call, so
+  the ordering under test is the real one.
+- **A latent bug and a shipped bug look identical in the diff.** This one was
+  introduced by no commit — it was made reachable by a feature. Reviewing "what
+  did I change" would never have found it; reviewing "what is now possible that
+  was not before" did.
+- **A mount path is only meaningful against its own channel's host.** `mountUrl()`
+  swaps the pathname on `stream.url` and changes nothing else, which is the same
+  assumption `mountListeners` already makes — the per-mount counts are read from
+  that host's snapshot. If a channel is ever allowed to carry mounts from a second
+  server, both break together, and both must be fixed together.
+- **Audio previews are listeners.** Clicking a chip opens a real connection that
+  Icecast counts, exactly like the monitor's own variant probes (§5b). It is worth
+  saying in the guide, because an operator sampling seven mounts of a quiet
+  channel can move its number visibly.
+
+---
+
+## 5g. Also 2026-09-02: the recoveries that were never recorded
+
+**Reported from the dashboard:** WPFW went down at 09:46 and came back four
+minutes later, and the incident feed showed the outage — carrying *"lasted 4m"*,
+so the recovery had plainly been observed and measured — with no RECOVERED row
+anywhere. Across the whole 512-event production record the split was exact: the
+three KPFT channels had 107 outages and 115 recoveries; the two stations whose
+alerts are switched off had **5 outages and 0 recoveries**.
+
+**The mechanism.** Writing the `up` event was gated on `episode.alerted`, and
+that flag is set in one place only — inside the branch of `dispatchNotifications`
+that sends mail, over a list already filtered by `alertsEnabledFor()`. So the
+record was a side effect of the email. A muted station could never set it.
+
+It was never only about muted stations: **8 of the 13 lost recoveries were on
+KPFT, where alerts are on.** A confirmed outage that the listener-impact gate
+declines to email does not set `alerted` either, so it lost its recovery the same
+way. Any reason not to send mail was a reason to lose history.
+
+| Change | Why |
+|---|---|
+| The recovery is queued for every **confirmed** episode, not every alerted one | Recording is decoupled from notifying — the failure branch says so in a comment, twelve lines above the code that did the opposite. An episode that never reached `outage` still gets none: an all-clear for a one-check blip is noise in a feed that has to stay readable |
+| `dispatchNotifications` records first, then decides mail | The recovery event is now written for every recovery it is handed. Emailing needs the outage to have been alerted AND the station to be enabled, and neither condition can reach the record |
+| Muted recoveries no longer filtered out at the top | They were split into a `mutedUp` list that could not have saved them anyway: that loop opens `if (!m.eventId) continue`, and a recovery carries its outage's id as `episode.eventId`. Filtering a recovery out before its event exists does not mute it, it erases it |
+| The event says which silence it was | `alerts are switched off for station "wpfw"` versus `no all-clear sent — the outage it ends was not emailed`. Two different reasons for the same blank |
+| `isSelfCleared(episode)` replaces `!episode.alerted` | Same conflation, one field along. WPFW's event carried `confirmed: true` and `selfCleared: true` at once, and the detail panel rendered *"Self-cleared before confirmation"* on a confirmed four-minute outage |
+| `store.backfillRecoveries()` at load | 13 outages had already lost theirs. Rehearsed against a copy of the production record: 13 written, 0 on a second run, 0 confirmed-and-resolved outages left without one |
+
+### Corrections worth inheriting
+
+- **The guide already promised what the code did not do.** *"Switching a station
+  off stops its email without stopping its monitoring: the outages are still
+  recorded in full."* That sentence shipped months before this bug was found. When
+  a doc and the code disagree, the doc is sometimes the specification — read it
+  as evidence, not as prose to be updated to match.
+- **A gate on the wrong side of a decision is invisible in the diff that adds
+  it.** Nothing here was written carelessly: the rule "no all-clear for an alert
+  nobody received" is correct, and the comment defending it is correct. It was
+  applied one step too early, where it decided the record instead of the mail.
+  The question to ask of any gate is not "is this rule right" but "what else is
+  downstream of it".
+- **Backfilling from `resolvedAt` is a repair, not an invention.** The recovery
+  WAS observed — a check saw the stream serving again and wrote the timestamp and
+  the duration. Only the event was missing. That is the exact distinction
+  `abandonEpisode()` draws when it refuses to write one, and the backfill skips
+  abandoned and unresolved outages for that reason. Reconstructed rows carry
+  `reconstructed: true` and are badged in the UI.
+- **The rehearsal mattered more than the unit tests.** The tests prove the rule;
+  loading a copy of the production record proved the blast radius — 13 events,
+  which streams, which dates, idempotent on the second boot. Do that before
+  shipping anything that writes to the permanent record.
+- **Order matters when inserting into the event record.** `findOpenOutage()`
+  walks the array backwards and stops at the first `up` for a stream, so a
+  backfilled recovery appended at the end would hide a later, still-open outage
+  and report a stream that is off the air as healthy. The backfill re-sorts by
+  timestamp, and `test/recovery-recording.test.js` builds exactly that shape.
 
 ---
 
@@ -1003,7 +1115,7 @@ Reviewed end to end on 2026-08-27; findings and reasoning in
 ## 9. Verifying a change
 
 ```bash
-npm test                                             # 390 tests
+npm test                                             # 440 tests
 node --check server.js monitor.js store.js diagnose.js auth.js
 
 # Against production

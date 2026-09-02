@@ -242,6 +242,23 @@ function seedAlertsFromEnv(config, env = {}) {
 }
 
 /** Why nothing was sent, in the words of whichever rule actually withheld it. */
+/**
+ * Did this episode clear before it was ever confirmed as an outage?
+ *
+ * A predicate rather than an expression at the call site because it was written
+ * there as `!episode.alerted` — "nobody was emailed" — which is a different
+ * question with a different answer. A confirmed outage on a station with alerts
+ * switched off answered TRUE to that one, so the history called a four-minute
+ * confirmed outage "self-cleared before confirmation" while carrying
+ * `confirmed: true` on the same event.
+ *
+ * An episode reaches severity 'outage' only at confirmation (FAILURE_THRESHOLD
+ * consecutive failures); it starts as a brief outage or a probe anomaly.
+ */
+function isSelfCleared(episode) {
+  return episode?.severity !== 'outage';
+}
+
 function mutedReasonFor(stream) {
   return `alerts are switched off for station "${stream?.stationId || 'unknown'}"`;
 }
@@ -1533,7 +1550,7 @@ async function runChecksInner() {
           durationMs,
           durationLabel: diagnose.fmtDuration(durationMs),
           sourceOutage,
-          selfCleared: !episode.alerted,
+          selfCleared: isSelfCleared(episode),
           audience,
         };
 
@@ -1553,10 +1570,26 @@ async function runChecksInner() {
           console.log(`[Monitor] 📉 ${stream.name} — ${audience.listenersBefore} listener(s) lost audio for ${diagnose.fmtDuration(durationMs)} (${audience.confidence})`);
         }
 
-        if (episode.alerted) {
+        // Every CONFIRMED outage records its recovery. Whether an all-clear is
+        // emailed is decided in dispatchNotifications(), and is not a condition
+        // for writing the event.
+        //
+        // This was gated on `episode.alerted` until 2026-09-02, which tied the
+        // record to the mail: a station with alerts switched off recorded going
+        // down and never recorded coming back, and so did every confirmed outage
+        // the listener-impact gate suppressed on a station that does email.
+        // Recording is decoupled from notifying — the failure branch above says
+        // so explicitly, and this is the same rule at the other end of an
+        // episode.
+        //
+        // An episode that never reached `outage` is a brief outage or a probe
+        // anomaly. Its own event already carries `resolvedAt` and a duration, and
+        // it is deliberately given no recovery event: an all-clear for a
+        // one-check blip is noise in a feed that has to stay readable.
+        if (episode.severity === 'outage') {
           recoveries.push({ stream, result, diagnosis: dg, episode, durationMs, sourceOutage, audience });
         } else {
-          console.log(`[Monitor] ✓ ${stream.name} self-cleared after ${diagnose.fmtDuration(durationMs)} (no alert was sent)`);
+          console.log(`[Monitor] ✓ ${stream.name} cleared after ${diagnose.fmtDuration(durationMs)} — never confirmed as an outage`);
         }
         delete episodes[stream.id];
       }
@@ -1587,14 +1620,20 @@ async function runChecksInner() {
  * server-level event produces one email rather than one per mount.
  */
 async function dispatchNotifications(newlyNotable, recoveries, ctx) {
-  // Split rather than filter: the muted ones still need their event updated, or
-  // the record would not say why nothing was sent.
+  // Split rather than filter: a muted DOWN event already exists by the time it
+  // reaches here, and still needs its record updated to say why nothing was
+  // sent.
+  //
+  // Recoveries are deliberately NOT split the same way. Their event has not been
+  // written yet — it is written below — so filtering a muted recovery out here
+  // did not mute it, it erased it. The muted loop could not have saved one
+  // either: a recovery carries its outage's id as `episode.eventId`, never as
+  // `eventId`, so it fell straight through the guard on the next line. Every
+  // recovery is recorded below; only the mail is decided by muting.
   const mutedDown = newlyNotable.filter((n) => !alertsEnabledFor(n.stream));
-  const mutedUp = recoveries.filter((r) => !alertsEnabledFor(r.stream));
   newlyNotable = newlyNotable.filter((n) => alertsEnabledFor(n.stream));
-  recoveries = recoveries.filter((r) => alertsEnabledFor(r.stream));
 
-  for (const m of [...mutedDown, ...mutedUp]) {
+  for (const m of mutedDown) {
     if (!m.eventId) continue;
     store.updateEvent(m.eventId, {
       email: {
@@ -1632,19 +1671,45 @@ async function dispatchNotifications(newlyNotable, recoveries, ctx) {
     }
   }
 
+  // Every recovery handed to this function is RECORDED. Emailing is a separate
+  // decision with two conditions, and neither may reach the record:
+  //
+  //   · the outage it ends was itself emailed — an all-clear for an alert nobody
+  //     received trains people to ignore the next one, and
+  //   · the station has alerts enabled at all.
+  //
+  // Both used to decide whether the event was written. Muting a station is a
+  // statement about who gets mail, never about what happened.
   if (recoveries.length > 0) {
-    const entries = recoveries.map((r) => ({
-      stream: r.stream, result: r.result, diagnosis: r.diagnosis,
-      audience: r.audience, durationMs: r.durationMs,
-    }));
+    const emailable = recoveries.filter((r) => r.episode.alerted && alertsEnabledFor(r.stream));
 
-    const byStream = await sendGroupedAlert({
-      kind: 'recovery',
-      entries,
-      scope: recoveries.length > 1 ? 'server' : recoveries[0].diagnosis.scope,
-    });
+    let byStream = new Map();
+    if (emailable.length > 0) {
+      byStream = await sendGroupedAlert({
+        kind: 'recovery',
+        entries: emailable.map((r) => ({
+          stream: r.stream, result: r.result, diagnosis: r.diagnosis,
+          audience: r.audience, durationMs: r.durationMs,
+        })),
+        scope: emailable.length > 1 ? 'server' : emailable[0].diagnosis.scope,
+      });
+    }
 
     for (const r of recoveries) {
+      const email = emailable.includes(r)
+        ? byStream.get(r.stream.id) || { attempted: false, sent: false, reason: 'no message covered this stream' }
+        : {
+            attempted: false,
+            sent: false,
+            // Two different silences, and the record says which. A muted station
+            // sends nothing at either end of the episode; an unalerted outage on
+            // a station that does email has no all-clear because there was no
+            // alarm to clear.
+            reason: alertsEnabledFor(r.stream)
+              ? 'no all-clear sent — the outage it ends was not emailed'
+              : mutedReasonFor(r.stream),
+          };
+
       const event = store.addEvent({
         timestamp: ctx.timestamp,
         streamId: r.stream.id,
@@ -1659,7 +1724,7 @@ async function dispatchNotifications(newlyNotable, recoveries, ctx) {
         durationLabel: diagnose.fmtDuration(r.durationMs),
         sourceOutage: r.sourceOutage,
         diagnosis: r.diagnosis,
-        email: byStream.get(r.stream.id) || { attempted: false, sent: false, reason: 'no message covered this stream' },
+        email,
       });
       console.log(`[RECOVERY] ${event.message}`);
     }
@@ -3390,7 +3455,7 @@ module.exports = {
   getStationConfig: () => store.getStationConfig(),
   getStations, streamIdsFor,
   reloadConfig,
-  alertsEnabledFor, recipientsFor, mutedReasonFor, describeAlertRouting, groupEntriesByStation,
+  alertsEnabledFor, recipientsFor, mutedReasonFor, isSelfCleared, describeAlertRouting, groupEntriesByStation,
   seedAlertsFromEnv,
   saveStationConfig,
   abandonEpisode,
@@ -3402,5 +3467,8 @@ module.exports = {
   _setTransporter: (t) => { transporter = t; },
   normaliseStreams, normaliseMounts, buildDefaultConfig, flattenChannels,
   trackVariantDegradation, runChecks, probeVariants,
+  // Test seam. Recording a recovery must not depend on whether it was emailed,
+  // and that is only provable by driving this directly.
+  dispatchNotifications,
   getVariantHealth: (streamId) => variantHealth[streamId] || {},
 };

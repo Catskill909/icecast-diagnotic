@@ -199,9 +199,88 @@ function load(streamIds = []) {
   applySeed();
   repairTuneIns();
   repairMountCollisions();
+  backfillRecoveries();
   // Must run BEFORE prune(): compaction destroys the raw samples this reads.
   backfillAudience();
   prune();
+}
+
+/**
+ * Writes the recovery event for a confirmed outage that ended without one.
+ *
+ * Until 2026-09-02, monitor.js only created an `up` event for an outage that had
+ * been EMAILED. So every station with alerts switched off recorded going down
+ * and never recorded coming back, and so did every confirmed outage the
+ * listener-impact gate suppressed on a station that does email. The dashboard
+ * showed a confirmed outage carrying a duration, with no end.
+ *
+ * This is not inventing an observation. `resolvedAt` and `durationMs` were
+ * written by the check that saw the stream serving again — the recovery WAS
+ * observed and measured, and only the event was missing. That is exactly the
+ * difference between this and abandonEpisode(), which refuses to write a
+ * recovery precisely because nothing was observed: an abandoned episode is
+ * skipped here for the same reason.
+ *
+ * Flagged `reconstructed: true`, so the UI badges it rather than presenting a
+ * backfilled row as a live observation.
+ *
+ * Idempotent, and safe on every boot: an outage whose recovery already exists is
+ * skipped on a set lookup, so a complete history costs one check per event and
+ * writes nothing.
+ */
+function backfillRecoveries() {
+  const alreadyRecorded = new Set();
+  for (const e of events) {
+    if (e.type === 'up' && e.relatedTo) alreadyRecorded.add(e.relatedTo);
+  }
+
+  const added = [];
+  for (const e of events) {
+    // Confirmed outages only. A brief outage or probe anomaly never had a
+    // recovery event by design, and manufacturing one now would fill the history
+    // with all-clears for faults that cost nobody anything.
+    if (e.type !== 'down' || e.severity !== 'outage') continue;
+    // No resolution observed: either still open, or abandoned when its channel
+    // stopped being monitored. Neither is a recovery.
+    if (!e.resolvedAt || e.abandoned) continue;
+    if (alreadyRecorded.has(e.id)) continue;
+
+    added.push({
+      id: makeEventId(e.resolvedAt, e.streamId || 'all'),
+      timestamp: e.resolvedAt,
+      streamId: e.streamId,
+      streamName: e.streamName,
+      type: 'up',
+      severity: 'recovery',
+      confirmed: true,
+      scope: e.scope || 'stream',
+      message: `${e.streamName} has RECOVERED${e.durationLabel ? ` after ${e.durationLabel}` : ''}`,
+      relatedTo: e.id,
+      durationMs: e.durationMs != null ? e.durationMs : null,
+      durationLabel: e.durationLabel || null,
+      // The response time and the recovery-side diagnosis were never recorded
+      // for these. Absent is honest; a plausible number would not be.
+      diagnosis: null,
+      reconstructed: true,
+      email: {
+        attempted: false,
+        sent: false,
+        reason: 'reconstructed from the outage record — no all-clear was sent at the time',
+      },
+    });
+  }
+
+  if (!added.length) return 0;
+
+  // Re-sorted rather than appended: the array is chronological, and
+  // findOpenOutage() walks it backwards trusting that. A stable sort leaves
+  // events sharing a timestamp in the order they were recorded.
+  events = [...events, ...added].sort(
+    (a, b) => new Date(a.timestamp) - new Date(b.timestamp),
+  );
+  dirtyEvents = true;
+  console.log(`[Store] Backfilled ${added.length} missing recovery event(s)`);
+  return added.length;
 }
 
 /**
@@ -2832,6 +2911,7 @@ module.exports = {
   getStatusCache, setStatusCache, getStorageInfo, getMeta, setMeta,
   ensureStreams, getStationConfig, setStationConfig,
   backfillAudience,
+  backfillRecoveries,
   isUnconfirmedSeverity, settledImpact, costListeners, isFailureEvent,
   getAudienceContext, getHourOfDayProfile, buildAudienceImpact, deriveListenerImpact,
   getListenerSeries, getAudienceSummary, chooseBucketMs,

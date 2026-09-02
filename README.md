@@ -80,6 +80,7 @@ If you are an AI assistant or developer picking up this project, here is the ess
 - **`diagnose.js`**: Root-cause diagnosis engine. Instrumented stream probe (DNS/TCP/TLS/TTFB timings), Icecast mount-inventory snapshot, and the classifier that turns a transport error into an actionable cause.
 - **`store.js`**: Persistence. Splits the long-term event record from rolling telemetry; handles atomic writes, hourly compaction, and legacy migration.
 - **`public/index.html` / `app.js`**: Live dashboard.
+- **`public/preview-player.js`**: The stream cards' audio previews — which mount each card is pointed at, what it is doing, and the one-preview-at-a-time rule. Separate from the page for the same reason as `audience-stats.js`: so Node can test it. Loads as `window.PreviewPlayer` in the browser and `require()`s in tests.
 - **`public/history.html` / `history.js` / `history.css`**: Long-term incident history — heatmap, listener-audience chart, filters, per-event drill-down.
 - **`public/audience-stats.js`**: The audience arithmetic — concurrent peaks, floors, per-mount averages, daily grouping. Separate from the page so Node can test it; loads as `window.AudienceStats` in the browser and `require()`s in tests.
 - **`public/listeners.html` / `listeners.js` / `listeners.css`**: Audience analytics — listening hours (ATH) against the SoundExchange allowance, every channel on one scale, the per-mount split that every other figure sums away, hour-of-day profile, and CSV export. Station-scoped like the history page.
@@ -103,7 +104,16 @@ An *episode* runs from a stream's first failed check to its recovery. Within one
 |---|---|---|
 | Failure #1 | event, severity `brief_outage` or `probe_error` | no |
 | Failure #`FAILURE_THRESHOLD` | same event promoted to `outage` | **only if listeners were affected** |
-| Recovery | event resolved with true duration | yes, if an alert was sent |
+| Recovery | outage event resolved with true duration, **plus its own `recovery` event** | yes, if an alert was sent |
+
+**Recording a recovery does not depend on emailing one.** Every confirmed outage
+gets a `recovery` event when it ends, whatever the station's alert settings and
+whatever the listener-impact verdict decided about mail. Until 2026-09-02 the
+event was written inside the branch that sent the all-clear, so muting a station
+did not mute it — it erased half of its history, and the dashboard showed
+confirmed outages with a duration and no end. An episode that never reached
+`outage` still gets no recovery event: its own record carries the duration, and
+an all-clear for a one-check blip is noise.
 
 **The bar for an email is listener impact, not probe failure.** The monitor watches from
 outside Pacifica's network, so a failed probe alone proves only that *our* connection broke.
@@ -517,7 +527,7 @@ Three levels, and which one something belongs to decides where it appears.
 
 | Level | What it is | Where it shows up |
 |---|---|---|
-| **Mount** | One address on one Icecast server, usually one bitrate | A chip on the dashboard card, with its own listener count |
+| **Mount** | One address on one Icecast server, usually one bitrate | A chip on the dashboard card, with its own listener count. Click it to hear that mount |
 | **Channel** | One stream as a listener thinks of it. **Probed independently** | **One dashboard card**, its own uptime bar, its own alert history |
 | **Station** | A grouping of channels | Alert recipients, weekly roundup, timezone, and the Audience page's dropdown |
 
@@ -557,6 +567,14 @@ Samples carry `variantsPresent` / `variantsTotal` and a per-mount
 `0 < present < total` is a degraded channel still playing for most of its
 audience. The breakdown is the only per-mount history there is — the summed
 count can hold steady while one variant's audience collapses inside it.
+
+**Every mount is playable from its chip.** The card's audio preview is pointed at
+the probed mount by default, and clicking another chip moves it — which is the
+only way to hear a variant, and the only way to confirm by ear that a mount
+Icecast still lists is serving nothing. Clicking the mount that is playing stops
+it; a mount Icecast has dropped is not clickable, because there is nothing to
+play. A preview is an ordinary listener and shows up in that mount's count while
+it runs.
 
 **The Icecast snapshot is fetched before any probe connection is opened.**
 Icecast counts every connection as a listener, ours included: opening one

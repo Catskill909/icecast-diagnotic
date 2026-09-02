@@ -77,7 +77,10 @@
          stopped serving without opening a connection to every mount every minute.
          Each connection both pulls audio from the station's own server and registers
          as a listener on that mount, so they are not spent freely.`,
-        `Press play on any stream card to confirm by ear what the monitor is reporting.`,
+        `Press play on any stream card to confirm by ear what the monitor is reporting,
+         or click one of the mount chips to hear that bitrate specifically. Your
+         preview is a listener like any other: it appears in that mount's own count
+         while it plays.`,
       ],
     },
     {
@@ -136,7 +139,8 @@
          weekly report. A station with nobody on its list emails nobody.`,
         `Switching a station off there stops its email without stopping its
          monitoring: the outages are still recorded in full, still diagnosed, and
-         still appear on every page.`,
+         still appear on every page — <strong>and so is every recovery</strong>, so
+         a muted station's history still shows what came back and when.`,
         `Alerts lead with the root cause, the listener reach, and specific things to
          check. Every event records whether its alert actually sent.`,
         `A <strong>degraded channel</strong> — still playing, but missing one of its
@@ -236,6 +240,11 @@
          listener count. A failing one turns amber: <strong>struck through</strong> if
          Icecast has stopped listing it at all, <strong>underlined</strong> if it is
          still listed but serving no audio.`,
+        `The chips are also the card's play controls. Click one to point the preview
+         player at that mount — which is how you hear an underlined mount for
+         yourself, where the connection opens and no audio arrives. Clicking the mount
+         that is already playing stops it. A struck-through mount cannot be clicked:
+         Icecast is not serving it, so there is nothing to play.`,
         `A degradation is recorded as its own incident and is deliberately
          <em>not</em> counted as downtime — the channel never went off air. You are
          emailed about one only if it lasts (thirty minutes by default) <em>and</em>

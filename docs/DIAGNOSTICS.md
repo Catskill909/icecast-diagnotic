@@ -156,4 +156,6 @@ In the UI, the History page groups by day, filters by cause/severity/stream/deli
 
 ## 9. Provenance
 
+Recovery events can also be reconstructed, by `store.backfillRecoveries()` at startup: a confirmed outage that carries a `resolvedAt` but has no `recovery` event beside it gets one written from its own record. That is a repair, not an inference — `resolvedAt` was written by the check that saw the stream serving again. An outage with no `resolvedAt`, or one closed as `abandoned`, is left alone: nothing was observed there.
+
 Events flagged `reconstructed: true` were backfilled from raw telemetry rather than observed live. Their timestamps, statuses and error strings are real recorded values; the diagnosis was inferred afterwards from those errors plus cross-stream correlation. They render with a *Reconstructed* badge and an explanatory note. Do not cite them as live measurements.
