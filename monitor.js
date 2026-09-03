@@ -48,6 +48,8 @@ const listenerDetailModule = require('./listener-detail');
    returns `unknown` and the distribution-channel figures fall back to the
    user-agent signal alone, labelled as a floor. Nothing here requires it. */
 const geo = require('./geo');
+// Read only for its status — the download itself is kicked off by server.js.
+const geoUpdate = require('./geo-update');
 
 // ── Default Streams ─────────────────────────────────────────────────────────
 const DEFAULT_STREAMS = [
@@ -3620,7 +3622,12 @@ function getConfig() {
     geo: (() => {
       const g = geo.available();
       const pub = (x) => ({ loaded: x.loaded, vendor: x.vendor, builtAt: x.builtAt });
-      return { asn: pub(g.asn), city: pub(g.city) };
+      /* `update` says whether a licence key is even in this process. A key typed
+         into a hosting panel does not reach a container that has not been
+         restarted since, and without this the page reports that identically to
+         no key at all — which is the difference between "redeploy" and "go and
+         configure something". Reasons only; the key itself never appears. */
+      return { asn: pub(g.asn), city: pub(g.city), update: geoUpdate.status() };
     })(),
     alertPolicy: ALERT_ON_HARMLESS_OUTAGE ? 'all confirmed outages' : 'confirmed outages with listener impact',
     alertStations: ALERT_STATIONS.length ? ALERT_STATIONS : 'all',

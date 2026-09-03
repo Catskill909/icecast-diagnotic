@@ -155,6 +155,32 @@ test('country shares are of all located connections', () => {
 
 // ── Readiness: three different blanks ───────────────────────────────────────
 
+test('NO KEY, KEY-BUT-NO-RESTART and DOWNLOAD-FAILED are three messages', () => {
+  /* The confusion this removes. An operator who has typed a key into a hosting
+     panel and not restarted sees exactly what an operator who has configured
+     nothing sees, and the actions differ completely: one redeploys, one goes
+     and creates a key, one reads a log. */
+  const noKey = GeoMap.readiness({ usStates: {} }, { city: { loaded: false }, update: { licenceKeyConfigured: false, attempted: false, results: {} } });
+  assert.equal(noKey.code, 'no-licence-key');
+  assert.match(noKey.note, /RESTART|redeploy/i, 'must say the variable needs a restart to take effect');
+
+  const notRun = GeoMap.readiness({ usStates: {} }, { city: { loaded: false }, update: { licenceKeyConfigured: true, attempted: false, results: {} } });
+  assert.equal(notRun.code, 'not-attempted');
+
+  const failed = GeoMap.readiness({ usStates: {} }, {
+    city: { loaded: false },
+    update: { licenceKeyConfigured: true, attempted: true, results: { city: { ok: false, reason: 'MaxMind rejected the licence key (401)' } } },
+  });
+  assert.equal(failed.code, 'download-failed');
+  assert.match(failed.note, /401/, 'the actual reason must reach the reader');
+
+  for (const a of [noKey, notRun, failed]) {
+    for (const b of [noKey, notRun, failed]) {
+      if (a !== b) assert.notEqual(a.title, b.title, 'each situation needs its own title');
+    }
+  }
+});
+
 test('NO DATABASE and WRONG DATABASE are different messages', () => {
   /* The one that matters most. A deployment with no database and a deployment
      with DB-IP City installed both show no states — but one operator needs to
@@ -162,7 +188,7 @@ test('NO DATABASE and WRONG DATABASE are different messages', () => {
      and the fix differs. */
   const none = GeoMap.readiness({ usStates: {} }, { city: { loaded: false } });
   assert.equal(none.ok, false);
-  assert.equal(none.code, 'no-city-database');
+  assert.equal(none.code, 'no-licence-key');
 
   const wrong = GeoMap.readiness(
     { usStates: {}, placed: 40, reasons: { 'no-accuracy-radius': 40 } },

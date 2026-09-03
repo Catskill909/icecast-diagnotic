@@ -168,10 +168,38 @@
     if (hasStates) return { ok: true };
 
     if (!geoStatus?.city?.loaded) {
+      /* THREE SITUATIONS, THREE SENTENCES. "No database" is the same screen
+         whether nobody configured a key, a key was typed into a hosting panel
+         but the container has not restarted since, or MaxMind refused it — and
+         those need three different actions from the reader. Reported apart
+         because guessing between them is what wasted an afternoon. */
+      const upd = geoStatus?.update || {};
+      const failure = (upd.results || {}).city;
+      if (failure && failure.ok === false && failure.reason) {
+        return {
+          ok: false, code: 'download-failed',
+          title: 'The location database could not be downloaded',
+          note: `MaxMind was asked and the download did not succeed: ${failure.reason}`,
+        };
+      }
+      if (upd.licenceKeyConfigured && !upd.attempted) {
+        return {
+          ok: false, code: 'not-attempted',
+          title: 'A licence key is set but no download has run',
+          note: 'The key is present and the app has not yet tried to use it. Restart the container.',
+        };
+      }
+      if (!upd.licenceKeyConfigured) {
+        return {
+          ok: false, code: 'no-licence-key',
+          title: 'No location database installed',
+          note: 'Country and state figures need a city-level database. Set MAXMIND_LICENSE_KEY, then RESTART or redeploy — a variable added in a hosting panel does not reach a container that is already running.',
+        };
+      }
       return {
         ok: false, code: 'no-city-database',
         title: 'No location database installed',
-        note: 'Country and state figures need a city-level database. Set MAXMIND_LICENSE_KEY and the app will download GeoLite2 City on its next start.',
+        note: 'A licence key is configured. If this persists after a restart, check the container logs for a line beginning [Geo].',
       };
     }
     if ((places?.reasons || {})['no-accuracy-radius']) {

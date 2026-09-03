@@ -180,6 +180,7 @@ function needsUpdate(kind, dataDir) {
  */
 async function updateAll({ dataDir, editions = ['city'], log = console.log } = {}) {
   const results = {};
+  lastRun = { at: new Date().toISOString(), attempted: !!licenceKey(), results: {} };
   if (!licenceKey()) return results;
 
   for (const kind of editions) {
@@ -220,10 +221,32 @@ async function updateAll({ dataDir, editions = ['city'], log = console.log } = {
       results[kind] = { ok: false, reason: e.message };
     }
   }
+  lastRun.results = results;
   return results;
 }
 
+/* The last outcome, for the panel. WITHOUT THIS THE PAGE CANNOT TELL THREE
+   SITUATIONS APART — no licence key configured, a key that MaxMind rejected,
+   and a download that failed — and all three render as "no database", which
+   sends an operator to check the wrong thing. Observed on 2026-09-02: a key was
+   set in the hosting panel, the container had not been restarted so the
+   variable was not in the process, and the page could only say "not installed". */
+let lastRun = { at: null, attempted: false, results: {} };
+
+function status() {
+  return {
+    licenceKeyConfigured: !!licenceKey(),
+    lastRunAt: lastRun.at,
+    attempted: lastRun.attempted,
+    // Reasons only — never the key, and never a URL, which embeds it.
+    results: Object.fromEntries(
+      Object.entries(lastRun.results).map(([k, v]) => [k, { ok: !!v.ok, reason: v.reason || null }]),
+    ),
+  };
+}
+
 module.exports = {
+  status,
   updateAll,
   fetchEdition,
   needsUpdate,
