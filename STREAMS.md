@@ -105,3 +105,31 @@ curl -s "$B/api/stats?days=1" | jq -r .storage.oldestEvent
 
 - **KPFB 89.3** — `/kpfb` on KPFA's server. Currently no source connected.
 - `/pacifica_one` — a network feed on KPFA's server.
+
+---
+
+## Open questions for Pacifica — config reality vs. what is configured
+
+Found by the monitor itself on 2026-09-02, from outside. **None of these are
+bugs and none block anything** — they are things to settle when the tool is
+actually put to use with Pacifica, at which point dormant mounts, ownership and
+naming all get tightened together. Recorded here so they are not lost.
+
+| # | What the app found | Question |
+|---|---|---|
+| 1 | `streaming.wbai.org/wpfw_128` carries **WPFW's audio** — identical ICY headers to Pacifica's copy, including genre "Jazz and Justice" and the same `icy-url: url` placeholder typo. It is filed here under **station WBAI**, so its ~3 listeners count as WBAI's. | Is this relay wanted? If so it belongs to **WPFW** (one station, two servers — the same shape as KPFA). |
+| 2 | `streaming.wbai.org/wbai_spectrum` has **0 listeners** and has for as long as we have watched. | Live, or dormant and worth retiring? |
+| 3 | `streaming.wbai.org` is **WBAI's own box** — AWS, `chris@wbai.org`, Icecast 2.4.4, up since 2025-06-15, `location` never set. Pacifica's is a different machine entirely. | Who maintains it, and is the WPFW relay on it deliberate? |
+| 4 | Every KPFT and sister mount on Pacifica's server reports `source_ip 127.0.0.1` and `user_agent pontifistreamer 3.1.2` — a process on Pacifica's own host. **The Barix is not what connects to Icecast**; the chain is `Barix → pontifistreamer → Icecast`. | When a mount drops, which hop failed? The app can only see the last one, so its "check the encoder" wording names one of two hypotheses. |
+| 5 | `/padma` on **Pacifica's** server is named "WBAI (Verizon)" — the mirror of #1. | Cross-relaying between stations is clearly normal; is there a map of which relay is authoritative for whom? |
+
+**Why these are being left alone for now.** Attributing a stream to the wrong
+station changes whose audience figures it lands in, so it is worth getting
+right — but getting it right means knowing which relays Pacifica intends to
+keep, and that is a conversation, not a code change. A guess made now would
+have to be undone.
+
+**The one code change these argue for**, when the time comes: the app already
+reads a call sign from each mount's `server_name` and could warn *"this channel
+identifies as WPFW — add it to WBAI anyway?"* at the moment a host is added.
+That catches the class rather than correcting instances.
