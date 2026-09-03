@@ -202,12 +202,19 @@ server-side rather than shipping rows to the page.
 | 5.1 | **Read `listclients` raw** — the field shape is undocumented |
 | 5.2 | **Storage and retention decision** — ~630k rows/day; this is where "SQLite not needed yet" expires |
 | 5.3 | Session collection at 5-minute cadence, aggregated on arrival |
-| 5.4 | **Distribution channel + ASN classification** — TuneIn and friends |
+| 5.4 | **Distribution channel + ASN classification** — TuneIn and friends. **DONE 2026-09-02** (`geo.js`, `listener-detail.js`) |
 | 5.5 | Bot filtering; exclude our own probes |
 | 5.6 | TSL, session distribution, player and device breakdown |
 | 5.7 | Exact tune-ins; real ATH |
 | 5.8 | Audience retained through an outage |
 | 5.9 | Geography — in-market share, then country, then US state |
+
+**5.4 landed after the session figures it was supposed to precede.** The build
+order says the proxied share must ship *before* anything derived from sessions,
+so that the correction does not land publicly afterwards. TSL, session
+distribution and the player mix went out first, and the qualifier followed on
+2026-09-02. It is now rendered at the top of the section it qualifies rather
+than as one tile among six.
 
 **5.2 and 5.4 are the load-bearing ones.** 5.2 because migrating a schema with a
 month of rows in it is the expensive path. 5.4 because the proxied share is the

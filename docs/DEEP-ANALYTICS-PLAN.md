@@ -101,12 +101,30 @@ Three signals, none conclusive alone, strong together:
 | Signal | Reads as an aggregator when |
 |---|---|
 | **User agent** | it names one — `TuneIn`, `iHeart`, `Radio Garden`, `Streema` |
-| **ASN** (`GeoLite2 ASN`, free, separate database) | the address belongs to a **hosting provider**, not a consumer ISP |
+| **ASN** (a free ASN database) | the AS **organisation name** matches a known hosting provider — see the correction below |
 | **Connection shape** | one address holding a very long session, reconnecting rarely — a relay stays up while any listener is on, which no person does |
 
-**`GeoLite2 ASN` is the quiet workhorse of this whole document.** The same free
-account, a much smaller file than the City database, and it separates datacenter
-from residential addresses. That single distinction powers aggregator detection,
+> **CORRECTED 2026-09-02, against a real database rather than the documentation.**
+> **No free ASN database carries a hosting flag.** `is_hosting_provider` belongs
+> to MaxMind's **paid** Anonymous IP database. GeoLite2 ASN and DB-IP ASN Lite
+> both return exactly two useful fields — an AS number and an organisation name.
+>
+> So datacenter detection is a **match against organisation names**, and is built
+> and labelled as the heuristic it is. It yields three outcomes, not two:
+> `hosting`, `unrecognised`, and `unknown` when no database is loaded.
+> **`unrecognised` is not "residential"** — it is the absence of a match, which
+> is also exactly what a small regional host looks like.
+>
+> **DB-IP ASN Lite needs no account at all** (CC BY 4.0, direct download, 9 MB,
+> same MMDB format). The accuracy argument that ruled DB-IP out in
+> [`ADMIN-ACCESS-SCOPE.md`](ADMIN-ACCESS-SCOPE.md) §2 is specifically about
+> **city** resolution and does not apply to ASN, which comes from the public
+> routing table. Verified against the real file: Google, Amazon and Cloudflare
+> classify as hosting; Comcast, Verizon and University of Houston do not.
+
+**A free ASN database is the quiet workhorse of this whole document.** A much
+smaller file than the City database — 9 MB against ~70 MB — and it separates
+datacenter from consumer addresses well enough to be worth having. That single distinction powers aggregator detection,
 bot filtering, VPN identification, **and** it explains a geography anomaly that
 would otherwise be reported as a finding: a datacenter IP geolocates to the
 datacenter, so proxied listening piles up wherever the relay is hosted.

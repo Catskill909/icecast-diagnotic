@@ -60,6 +60,33 @@ also destroy the incident history.
 Secrets stay in the environment, where they never need a UI and so never
 conflict with the stored settings.
 
+### The geo database (optional)
+
+**Relay detection needs a local ASN database, and the image fetches its own.**
+DB-IP ASN Lite (CC BY 4.0, ~9 MB) is downloaded during the Docker build and
+lands at `/app/geo/dbip-asn.mmdb`, which `GEOIP_ASN_DB` already points at. A
+standard build therefore needs **no configuration at all** for this.
+
+**Why it is in the image rather than on the volume.** A managed panel gives you
+a deploy button and no shell — no `docker cp`, no way to put a 9 MB binary into
+a named volume. The image is the only route in for the person deploying it.
+
+| Situation | What to do |
+|---|---|
+| Normal build | nothing — it is fetched automatically |
+| Air-gapped or you dislike build-time downloads | build with `--build-arg SKIP_GEODB=1`, then supply your own file and set `GEOIP_ASN_DB` |
+| You want MaxMind GeoLite2 instead | put the file on the persistent volume and set `GEOIP_ASN_DB` to it — **do not bake GeoLite2 into an image**, its EULA restricts redistributing the database |
+| You want no lookups at all | set `GEOIP_ASN_DB=` (empty) |
+
+**The build never fails over this.** If the download does not succeed the image
+still ships; `geo.js` reports the file as missing and the proxied share falls
+back to its user-agent floor, saying so on the page.
+
+**It goes stale.** DB-IP publishes monthly and keeps about three months, so the
+database is as fresh as your last deploy. The Who Is Listening panel shows the
+build date. For ASN this ages slowly — organisation names change rarely — so a
+few months old is not a problem the way a stale *city* database would be.
+
 ---
 
 ## 3. Docker Compose

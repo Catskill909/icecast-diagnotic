@@ -12,6 +12,7 @@
   "dependencies": {
     "dotenv": "^16.4.0",
     "express": "^4.21.0",
+    "maxmind": "^5.0.7",
     "nodemailer": "^9.0.5"
   },
   "engines": {

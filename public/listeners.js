@@ -818,6 +818,58 @@
     // than a blended number invented from several.
     const busiest = mounts.slice().sort((a, b) => (b.session?.count || 0) - (a.session?.count || 0))[0];
 
+    /* ── How the audience arrives, and why it qualifies everything else ──────
+       An aggregator that PROXIES carries an unknown number of listeners behind
+       one connection. Every other figure in this panel — the headcount, the
+       device mix, the session medians, and the ATH estimate further up the page
+       — then understates the real audience by a factor only this number can
+       bound. So it is rendered as a QUALIFIER at the top of the section, not as
+       one more tile among six, and the copy says plainly that a proxied
+       listener is an uncounted one rather than a lost one. Read the other way,
+       a station sees a high proxied share as an audience decline. */
+    const dist = d.distribution || {};
+    const prox = dist.proxied || {};
+    const proxPct = prox.connectionShare == null ? null : Math.round(prox.connectionShare * 100);
+    const namedAggs = Object.entries(dist.aggregators || {}).sort((a, b) => b[1] - a[1]);
+    const relays = Object.entries(dist.relayNetworks || {}).sort((a, b) => b[1] - a[1]);
+    const asnLoaded = !!d.geo?.asn?.loaded;
+
+    /* The confidence vocabulary from DEEP-ANALYTICS-PLAN.md §2, rendered so the
+       qualification travels WITH the figure rather than sitting in a footnote.
+       `floor` is the important one: with no ASN database only aggregators that
+       name themselves are caught, so the true share is at least this. */
+    const proxQual = prox.confidence === 'floor'
+      ? { prefix: 'at least ', note: 'Only services that name themselves are counted — no network database is loaded, so unnamed relays are invisible. The real share is at least this.' }
+      : prox.confidence === 'estimated'
+        ? { prefix: '', note: 'Estimated. No free database flags hosting providers, so datacenter traffic is identified by network operator name.' }
+        : { prefix: '', note: '' };
+
+    const distributionBlock = prox.confidence === 'unavailable' || proxPct == null ? '' : `
+      <div class="deep-qualifier${proxPct >= 20 ? ' high' : ''}">
+        <div class="deep-qualifier-fig">
+          <div class="deep-qualifier-value">${proxQual.prefix}${proxPct}%</div>
+          <div class="deep-qualifier-label">of connections arrive via a relay</div>
+        </div>
+        <div class="deep-qualifier-body">
+          <p><strong>A proxied listener is an uncounted listener, not a lost one.</strong>
+          An aggregator can carry many people behind a single connection, so every
+          headcount on this page &mdash; and the listening-hours estimate above &mdash;
+          understates the real audience by an unknown factor. This figure bounds that error;
+          it is not an audience decline.</p>
+          ${proxQual.note ? `<p class="deep-qualifier-note">${esc(proxQual.note)}</p>` : ''}
+          ${namedAggs.length ? `<p class="deep-qualifier-note">Named services: ${esc(namedAggs.map(([k, v]) => `${k} ${v}`).join(', '))}.</p>` : ''}
+          ${relays.length ? `<p class="deep-qualifier-note">Relay networks: ${esc(relays.slice(0, 4).map(([k, v]) => `${k} ${v}`).join(', '))}.</p>` : ''}
+          ${asnLoaded ? '' : '<p class="deep-qualifier-note">Set <code>GEOIP_ASN_DB</code> to a local ASN database to identify unnamed relays. DB-IP ASN Lite is free and needs no account.</p>'}
+        </div>
+      </div>`;
+
+    /* CC BY REQUIRES this credit wherever the data is shown; it is a licence
+       obligation, not a courtesy. Derived from the file actually loaded, so a
+       page cannot credit a vendor whose data it is not displaying. */
+    const attribution = (d.attribution || []).length
+      ? `<div class="deep-attribution">${(d.attribution || []).map((a) => `<a href="${esc(a.url)}" target="_blank" rel="noopener noreferrer">${esc(a.text)}</a>`).join(' · ')}</div>`
+      : '';
+
     const rows = mounts.map((m) => `
       <tr>
         <td class="mono">${esc(m.mount)}</td>
@@ -830,6 +882,7 @@
       </tr>`).join('');
 
     panel.innerHTML = `
+      ${distributionBlock}
       <div class="deep-tiles">
         <div class="deep-tile primary">
           <div class="deep-tile-label">Individual listeners · ${esc(rangeName)}</div>
@@ -883,7 +936,8 @@
           </tr></thead>
           <tbody>${rows}</tbody>
         </table>
-      </div>`;
+      </div>
+      ${attribution}`;
 
     if (hint) {
       hint.textContent = d.lastRunAt

@@ -322,6 +322,28 @@ listener share.
 > resolution that answers a question anyone here is asking**, so the city-grade
 > database is a requirement, not an upgrade.
 
+### Correction, 2026-09-02: this section is about the CITY database only
+
+**The comparison below decides the *city* database and nothing else.** It was
+written as though one choice covered all geo work, and the ASN database — which
+is what the distribution-channel build (5.4) actually needs — is a separate file
+with a separate answer:
+
+| | City | ASN |
+|---|---|---|
+| Answers | in-market share, the map | which connections are relays |
+| Accuracy argument below applies | **yes** | **no** — an AS number comes from the public routing table |
+| DB-IP Lite viable | weakest tier, so no | **yes, and it needs no account** |
+| Size | ~70 MB | 9 MB |
+
+So **5.4 was built on DB-IP ASN Lite**: CC BY 4.0, direct download, no account,
+no licence key, same MMDB format. Verified against the real file on 2026-09-02.
+The city question below stays open until the map is built, and because both
+vendors ship MMDB it is an env path rather than a code change.
+
+**Also corrected: no free database carries a hosting flag.** See
+[`DEEP-ANALYTICS-PLAN.md`](DEEP-ANALYTICS-PLAN.md) §3.
+
 ### Which database — recommended: MaxMind GeoLite2 City
 
 **Because the required resolution is state/metro, accuracy decides this, not

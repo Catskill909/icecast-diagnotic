@@ -272,6 +272,48 @@ function tally(map, key) {
   map[key] = (map[key] || 0) + 1;
 }
 
+// ── Distribution channel ────────────────────────────────────────────────────
+
+/* HOW THE AUDIENCE REACHES THE STATION, and — the reason this is load-bearing
+   rather than a nice breakdown — HOW WRONG EVERY OTHER FIGURE IS.
+
+   An aggregator that PROXIES relays one connection on behalf of many listeners.
+   Every count this app publishes (concurrent, tune-ins, ATH, the royalty
+   estimate) then understates the real audience by an unknown factor. Knowing
+   the proxied share is what tells you the size of that error, which is why
+   `DEEP-ANALYTICS-PLAN.md` §7 puts it BEFORE publishing anything derived from
+   sessions.
+
+   Two signals, applied in this order:
+
+     1. THE USER AGENT names an aggregator (TuneIn, iHeart, Radio Garden). This
+        needs no database and works today.
+     2. THE AS ORGANISATION is a known hosting provider. A person listens from a
+        consumer ISP; a relay listens from a datacenter.
+
+   User agent wins, because it NAMES the service and the ASN only says
+   "somewhere in AWS". A connection matching neither is `direct`.
+
+   `DEEP-ANALYTICS-PLAN.md` §3 lists a third signal — connection shape, an
+   address holding a very long session and reconnecting rarely. The long-session
+   half of that is already applied as the bot rule above. The rest needs history
+   across polls, which is a later build.
+
+   A PROXIED LISTENER IS NOT A LOST LISTENER. It is an uncounted one. Every
+   caller rendering this must say so, or a station reads a high proxied share as
+   an audience decline. */
+function classifyChannel(cls, net) {
+  if (cls.kind === 'aggregator') return { channel: 'aggregator', name: cls.family };
+  if (net && net.network === 'hosting') return { channel: 'datacenter', name: net.org || null };
+  if (net && net.resolved) return { channel: 'direct', name: null };
+  return { channel: 'unknown', name: null };
+}
+
+/* No geo database configured: every connection resolves as unknown, so the
+   user-agent signal still works and nothing throws. Injected rather than
+   required at module load so tests can drive the rules directly. */
+const NO_GEO = { lookupNetwork: () => ({ resolved: false, reason: 'no-database', network: 'unknown', asn: null, org: null }) };
+
 /**
  * Turn listener rows into publishable aggregates.
  *
@@ -282,7 +324,7 @@ function tally(map, key) {
  * excluded 3 non-human connections" is itself a finding — it is the difference
  * between the published listener count and the real audience.
  */
-function aggregate(rows, { mount = '', host = '', fetchedAt = new Date().toISOString() } = {}) {
+function aggregate(rows, { mount = '', host = '', fetchedAt = new Date().toISOString(), geo = NO_GEO } = {}) {
   const list = Array.isArray(rows) ? rows : [];
 
   const players = {};
@@ -290,6 +332,11 @@ function aggregate(rows, { mount = '', host = '', fetchedAt = new Date().toISOSt
   const kinds = {};
   const buckets = {};
   for (const [label] of DURATION_BUCKETS) buckets[label] = 0;
+
+  const channels = { direct: 0, aggregator: 0, datacenter: 0, unknown: 0 };
+  const aggregators = {};
+  const relayNetworks = {};
+  let networkResolved = 0;
 
   const distinctIps = new Set();
   const humanDurations = [];
@@ -310,6 +357,21 @@ function aggregate(rows, { mount = '', host = '', fetchedAt = new Date().toISOSt
     tally(players, cls.family);
     tally(platforms, cls.platform);
     tally(kinds, cls.kind);
+
+    /* The IP is used here and discarded with the row. It never enters any
+       accumulator above: `channels` counts, `aggregators` holds service names
+       from the user agent, and `relayNetworks` holds AS organisations. */
+    const net = geo.lookupNetwork(r.ip);
+    if (net.resolved) networkResolved += 1;
+    const ch = classifyChannel(cls, net);
+    tally(channels, ch.channel);
+    if (ch.channel === 'aggregator') tally(aggregators, ch.name || 'Unknown');
+    /* NAME THE NETWORKS THAT ARE MACHINES; NEVER NAME THE NETWORKS THAT ARE
+       PEOPLE. Which relay a station's audience arrives through is the finding.
+       A tally of CONSUMER ISPs answers no question anyone here is asking, and
+       at this audience size a count of one would say something about a person
+       — "1 listener at a named university" is not an aggregate. */
+    if (ch.channel === 'datacenter' && ch.name) tally(relayNetworks, ch.name);
 
     if (r.connectedSec == null) { unknownDuration += 1; continue; }
     humanDurations.push(r.connectedSec);
@@ -346,6 +408,49 @@ function aggregate(rows, { mount = '', host = '', fetchedAt = new Date().toISOSt
     players,
     platforms,
     kinds,
+    channels,
+    aggregators,
+    relayNetworks,
+    proxied: proxiedSummary(channels, networkResolved, list.length - bots),
+  };
+}
+
+/**
+ * The proxied share, with the confidence that belongs to it.
+ *
+ * THIS IS A SHARE OF CONNECTIONS, NOT OF LISTENING, and the two differ by
+ * exactly the factor nobody can measure: one proxied connection may carry one
+ * listener or four hundred. A 10% proxied connection share is therefore
+ * compatible with 60% of actual listening arriving that way. The field is named
+ * `connectionShare` so no caller can shorten it to "share" and mean listening.
+ *
+ * The confidence vocabulary is `DEEP-ANALYTICS-PLAN.md` §2:
+ *
+ *   `floor`     — no ASN database, so only user agents that NAME an aggregator
+ *                 are caught. Unnamed relays are invisible, so the true share
+ *                 is at least this and possibly far more.
+ *   `estimated` — an ASN database is answering, but "is this a hosting
+ *                 provider" is a match against organisation names, not a flag
+ *                 any free database carries. See geo.js.
+ *
+ * There is deliberately no `measured`. Nothing available here measures this.
+ */
+function proxiedSummary(channels, networkResolved, considered) {
+  const proxiedConnections = (channels.aggregator || 0) + (channels.datacenter || 0);
+  if (!considered) {
+    return {
+      connections: 0, connectionShare: null, confidence: 'unavailable',
+      reason: 'no-connections', networkCoverage: null,
+    };
+  }
+  return {
+    connections: proxiedConnections,
+    connectionShare: proxiedConnections / considered,
+    confidence: networkResolved > 0 ? 'estimated' : 'floor',
+    reason: networkResolved > 0 ? null : 'no-asn-database',
+    // How much of the audience the ASN signal could speak to at all. A low
+    // number means the figure rests almost entirely on user agents.
+    networkCoverage: networkResolved / considered,
   };
 }
 
@@ -364,15 +469,32 @@ function mergeAggregates(parts, { mount = '', host = '', fetchedAt = new Date().
     connections: 0, listeners: 0, bots: 0, distinctAddresses: null,
     session: { count: 0, unknown: 0, meanSec: null, medianSec: null, p90Sec: null, maxSec: null, buckets: {} },
     players: {}, platforms: {}, kinds: {},
+    channels: { direct: 0, aggregator: 0, datacenter: 0, unknown: 0 },
+    aggregators: {}, relayNetworks: {},
     merged: list.length,
   };
   for (const [label] of DURATION_BUCKETS) out.session.buckets[label] = 0;
 
   let weighted = 0;
+  /* Recomputed from the merged counts rather than averaged from the parts. A
+     share is not additive: averaging two mounts' shares weights a mount with
+     three listeners equally against one with three hundred. */
+  let networkResolved = 0;
+  let weakestConfidence = null;
   for (const p of list) {
     out.connections += p.connections || 0;
     out.listeners += p.listeners || 0;
     out.bots += p.bots || 0;
+    for (const [k, v] of Object.entries(p.channels || {})) out.channels[k] = (out.channels[k] || 0) + v;
+    for (const [k, v] of Object.entries(p.aggregators || {})) out.aggregators[k] = (out.aggregators[k] || 0) + v;
+    for (const [k, v] of Object.entries(p.relayNetworks || {})) out.relayNetworks[k] = (out.relayNetworks[k] || 0) + v;
+    if (p.proxied?.networkCoverage != null) {
+      networkResolved += p.proxied.networkCoverage * ((p.connections || 0) - (p.bots || 0));
+    }
+    /* A merged figure inherits the WEAKEST confidence of its parts — the §2
+       rule that the tune-in comparison violated. One mount read without an ASN
+       database makes the whole channel's share a floor, not an estimate. */
+    if (p.proxied?.confidence === 'floor') weakestConfidence = 'floor';
     out.session.count += p.session?.count || 0;
     out.session.unknown += p.session?.unknown || 0;
     if (p.session?.meanSec != null) weighted += p.session.meanSec * (p.session.count || 0);
@@ -386,6 +508,12 @@ function mergeAggregates(parts, { mount = '', host = '', fetchedAt = new Date().
   }
   // A mean IS mergeable when weighted by its own count; a median is not.
   out.session.meanSec = out.session.count ? Math.round(weighted / out.session.count) : null;
+
+  out.proxied = proxiedSummary(out.channels, networkResolved, out.connections - out.bots);
+  if (weakestConfidence === 'floor' && out.proxied.confidence !== 'unavailable') {
+    out.proxied.confidence = 'floor';
+    out.proxied.reason = 'no-asn-database';
+  }
   return out;
 }
 
@@ -466,6 +594,7 @@ module.exports = {
   parseListClients,
   deviceId, deviceIdentities,
   classifyAgent,
+  classifyChannel,
   aggregate,
   mergeAggregates,
   fetchListClients,

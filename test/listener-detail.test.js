@@ -325,3 +325,190 @@ test('desktop browser identity still resolves correctly', () => {
   assert.equal(ld.classifyAgent(win('Chrome/120.0.0.0')).family, 'Chrome');
   assert.equal(ld.classifyAgent('Mozilla/5.0 (X11; Linux x86_64; rv:121.0) Gecko/20100101 Firefox/121.0').family, 'Firefox');
 });
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   Distribution channel and the proxied share
+
+   WHY THIS IS TESTED HARDER THAN IT LOOKS. The proxied share is not another
+   breakdown — it is the qualifier that says how wrong every other audience
+   figure on the page is. An aggregator that proxies carries an unknown number
+   of listeners behind one connection, so concurrent counts, tune-ins, ATH and
+   the royalty estimate all understate the audience by a factor only this
+   number can bound.
+
+   `DEEP-ANALYTICS-PLAN.md` §7 therefore puts it BEFORE publishing anything
+   derived from sessions. It was not, and the session figures shipped first, so
+   these tests exist partly to stop the qualifier drifting back out.
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+// A stub standing in for geo.js. Two networks: one datacenter, one consumer ISP.
+const GEO = {
+  lookupNetwork: (ip) => (
+    String(ip).startsWith('192.0.2.')
+      ? { resolved: true, reason: null, network: 'hosting', asn: 16509, org: 'AMAZON-02' }
+      : { resolved: true, reason: null, network: 'unrecognised', asn: 7922, org: 'Comcast Cable Communications, LLC' }
+  ),
+};
+
+const CH_ROWS = [
+  { ip: '203.0.113.7',  userAgent: 'Mozilla/5.0 (iPhone) Safari/604.1',   connectedSec: 2208, id: '1' },
+  { ip: '203.0.113.8',  userAgent: 'VLC/3.0.20 LibVLC/3.0.20',            connectedSec: 45,   id: '2' },
+  { ip: '198.51.100.9', userAgent: 'TuneIn Radio/26.1; Android',          connectedSec: 600,  id: '3' },
+  { ip: '192.0.2.44',   userAgent: 'okhttp/4.9.0',                        connectedSec: 90,   id: '4' },
+];
+
+test('a named aggregator is caught by its user agent, with no database at all', () => {
+  // The signal that works today. TuneIn names itself; nothing else is needed.
+  const a = ld.aggregate(CH_ROWS, { mount: '/live_128' });
+  assert.equal(a.channels.aggregator, 1);
+  assert.deepEqual(a.aggregators, { TuneIn: 1 });
+});
+
+test('an unnamed relay is caught ONLY by its network', () => {
+  /* `okhttp/4.9.0` is the giveaway case: a bare HTTP library that names no
+     service. Without an ASN database it is indistinguishable from a listener
+     using an obscure app; with one, it is plainly a machine in AWS. */
+  const without = ld.aggregate(CH_ROWS, { mount: '/live_128' });
+  const with_ = ld.aggregate(CH_ROWS, { mount: '/live_128', geo: GEO });
+  assert.equal(without.channels.datacenter, 0);
+  assert.equal(with_.channels.datacenter, 1);
+  assert.deepEqual(with_.relayNetworks, { 'AMAZON-02': 1 });
+});
+
+test('the user agent wins over the network when both fire', () => {
+  // TuneIn runs in a datacenter too. It should be reported as TuneIn, which
+  // names the service, rather than as an anonymous datacenter connection.
+  const a = ld.aggregate(
+    [{ ip: '192.0.2.5', userAgent: 'TuneIn Radio/26.1; Android', connectedSec: 100, id: '1' }],
+    { mount: '/m', geo: GEO },
+  );
+  assert.equal(a.channels.aggregator, 1);
+  assert.equal(a.channels.datacenter, 0);
+  assert.deepEqual(a.aggregators, { TuneIn: 1 });
+});
+
+test('CONFIDENCE: with no ASN database the proxied share is a FLOOR, not a value', () => {
+  /* The distinction that keeps this honest. Without the network signal only
+     aggregators that NAME themselves are counted, so the true share is at
+     least this and possibly much more. Publishing it as a measurement would
+     understate the error in every other figure on the page. */
+  const p = ld.aggregate(CH_ROWS, { mount: '/live_128' }).proxied;
+  assert.equal(p.confidence, 'floor');
+  assert.equal(p.reason, 'no-asn-database');
+  assert.equal(p.networkCoverage, 0);
+  assert.equal(p.connections, 1);
+  assert.equal(p.connectionShare, 0.25);
+});
+
+test('CONFIDENCE: with an ASN database it is ESTIMATED, never measured', () => {
+  /* Still not a measurement: no free database carries a hosting flag, so the
+     datacenter half is a match against organisation names. See geo.js. */
+  const p = ld.aggregate(CH_ROWS, { mount: '/live_128', geo: GEO }).proxied;
+  assert.equal(p.confidence, 'estimated');
+  assert.notEqual(p.confidence, 'measured');
+  assert.equal(p.connections, 2);
+  assert.equal(p.connectionShare, 0.5);
+  assert.equal(p.networkCoverage, 1);
+});
+
+test('the share is named connectionShare, because it is not a share of listening', () => {
+  /* One proxied connection may carry one listener or four hundred. A field
+     called `share` would be read as "23% of our listening", which this cannot
+     support in either direction. */
+  const p = ld.aggregate(CH_ROWS, { mount: '/m', geo: GEO }).proxied;
+  assert.ok('connectionShare' in p);
+  assert.ok(!('share' in p), 'a bare `share` invites exactly the wrong reading');
+});
+
+test('an empty mount reports unavailable rather than a 0% proxied share', () => {
+  // 0% asserts that nothing arrives via a relay. Nothing arrived at all.
+  const p = ld.aggregate([], { mount: '/m', geo: GEO }).proxied;
+  assert.equal(p.confidence, 'unavailable');
+  assert.equal(p.reason, 'no-connections');
+  assert.equal(p.connectionShare, null);
+});
+
+test('bots are outside the proxied denominator, having already been removed', () => {
+  const rows = [
+    ...CH_ROWS,
+    { ip: '203.0.113.99', userAgent: 'Icecast 2.4.3', connectedSec: 340388, id: '9' },
+  ];
+  const a = ld.aggregate(rows, { mount: '/m', geo: GEO });
+  assert.equal(a.bots, 1);
+  // Four non-bot connections, two of them proxied — the relay is not counted twice.
+  assert.equal(a.proxied.connectionShare, 0.5);
+});
+
+test('CONSUMER ISPs ARE NEVER NAMED, only datacenters are', () => {
+  /* The privacy line inside the aggregate. Which relay a station's audience
+     arrives through is the finding; a tally of consumer ISPs answers nothing
+     anyone asked, and at this audience size a count of one would say something
+     about a person rather than about a population. */
+  const a = ld.aggregate(CH_ROWS, { mount: '/m', geo: GEO });
+  const json = JSON.stringify(a);
+  assert.ok(!json.includes('Comcast'), `a consumer ISP was named: ${json}`);
+  assert.deepEqual(Object.keys(a.relayNetworks), ['AMAZON-02']);
+});
+
+test('THE BOUNDARY: no IP survives the network-classification path either', () => {
+  /* The new path reads r.ip for every row. The existing boundary tests ran
+     without a geo resolver, so they never exercised it. */
+  const a = ld.aggregate(CH_ROWS, { mount: '/live_128', geo: GEO });
+  const json = JSON.stringify(a);
+  for (const ip of ['203.0.113.7', '203.0.113.8', '198.51.100.9', '192.0.2.44']) {
+    assert.ok(!json.includes(ip), `${ip} leaked through the channel classifier`);
+  }
+});
+
+test('merging recomputes the proxied share rather than averaging it', () => {
+  /* A share is not additive. Averaging 100% on a mount with one listener
+     against 0% on a mount with ninety-nine gives 50%, which is wrong by a
+     factor of fifty. */
+  const big = ld.aggregate(
+    Array.from({ length: 99 }, (_, i) => ({ ip: `203.0.113.${i}`, userAgent: 'VLC/3.0.20', connectedSec: 60, id: String(i) })),
+    { mount: '/a', geo: GEO },
+  );
+  const small = ld.aggregate(
+    [{ ip: '192.0.2.1', userAgent: 'okhttp/4.9.0', connectedSec: 60, id: 'x' }],
+    { mount: '/b', geo: GEO },
+  );
+  assert.equal(big.proxied.connectionShare, 0);
+  assert.equal(small.proxied.connectionShare, 1);
+
+  const m = ld.mergeAggregates([big, small], { mount: 'channel' });
+  assert.equal(m.channels.datacenter, 1);
+  assert.equal(m.channels.direct, 99);
+  assert.equal(m.proxied.connections, 1);
+  assert.equal(m.proxied.connectionShare, 0.01, 'one relay in a hundred is 1%, not 50%');
+});
+
+test('a merged share inherits the WEAKEST confidence of its parts', () => {
+  /* The §2 rule the tune-in comparison broke: a `measured` period compared
+     against a `partial` one produced a percentage that was pure artefact. One
+     mount read without an ASN database makes the whole channel a floor. */
+  const withDb = ld.aggregate(CH_ROWS, { mount: '/a', geo: GEO });
+  const withoutDb = ld.aggregate(CH_ROWS, { mount: '/b' });
+  assert.equal(withDb.proxied.confidence, 'estimated');
+  assert.equal(withoutDb.proxied.confidence, 'floor');
+
+  const m = ld.mergeAggregates([withDb, withoutDb], { mount: 'channel' });
+  assert.equal(m.proxied.confidence, 'floor');
+  assert.equal(m.proxied.reason, 'no-asn-database');
+});
+
+test('merged aggregator and relay tallies sum across mounts', () => {
+  const a = ld.aggregate(CH_ROWS, { mount: '/a', geo: GEO });
+  const b = ld.aggregate(CH_ROWS, { mount: '/b', geo: GEO });
+  const m = ld.mergeAggregates([a, b], { mount: 'channel' });
+  assert.deepEqual(m.aggregators, { TuneIn: 2 });
+  assert.deepEqual(m.relayNetworks, { 'AMAZON-02': 2 });
+});
+
+test('classifyChannel falls back to unknown when nothing is known', () => {
+  // No database and an uninformative agent. Honest absence, not a guess at direct.
+  const ch = ld.classifyChannel(
+    { family: 'Script / library', kind: 'library', platform: 'Unknown', bot: false },
+    { resolved: false, reason: 'no-database', network: 'unknown', asn: null, org: null },
+  );
+  assert.equal(ch.channel, 'unknown');
+});

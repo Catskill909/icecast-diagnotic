@@ -44,6 +44,10 @@ const nodemailer = require('nodemailer');
 const diagnose = require('./diagnose');
 const store = require('./store');
 const listenerDetailModule = require('./listener-detail');
+/* Local geo/ASN databases, both optional. With neither configured every lookup
+   returns `unknown` and the distribution-channel figures fall back to the
+   user-agent signal alone, labelled as a floor. Nothing here requires it. */
+const geo = require('./geo');
 
 // ── Default Streams ─────────────────────────────────────────────────────────
 const DEFAULT_STREAMS = [
@@ -1709,7 +1713,7 @@ async function collectListenerDetail(hosts) {
 
       next[h.host + mountPath] = {
         ok: true, error: null, errorCode: null, responseTime: res.responseTime,
-        ...listenerDetailModule.aggregate(res.rows, { mount: mountPath, host: h.host }),
+        ...listenerDetailModule.aggregate(res.rows, { mount: mountPath, host: h.host, geo }),
       };
     }
 
@@ -3603,6 +3607,21 @@ function getConfig() {
         reason: routing.reason || null,
       };
     }),
+    /* Whether the geo databases are loaded — a CAPABILITY flag, like
+       `emailConfigured` above, and the field a deploy is verified against:
+       without it, confirming that a build shipped with relay detection means
+       signing in, because everything else about it is behind the admin gate.
+
+       PROJECTED, NOT FORWARDED. `available()` also returns the file's basename
+       and, on a misconfiguration, an error string containing a filesystem path.
+       Neither is a secret, and neither answers a question an anonymous caller
+       is asking, so neither is here. The authenticated listener-detail response
+       carries the full object for whoever is actually fixing it. */
+    geo: (() => {
+      const g = geo.available();
+      const pub = (x) => ({ loaded: x.loaded, vendor: x.vendor, builtAt: x.builtAt });
+      return { asn: pub(g.asn), city: pub(g.city) };
+    })(),
     alertPolicy: ALERT_ON_HARMLESS_OUTAGE ? 'all confirmed outages' : 'confirmed outages with listener impact',
     alertStations: ALERT_STATIONS.length ? ALERT_STATIONS : 'all',
     alertOnHarmlessOutage: ALERT_ON_HARMLESS_OUTAGE,
@@ -4162,4 +4181,10 @@ module.exports = {
   collectListenerDetail, adminCredsFor, adminHost,
   getDistinctDevices: (ids, since, until) => store.getDistinctDevices(ids, since, until),
   LISTENER_DETAIL_EVERY, LISTENER_DETAIL_ENABLED,
+  /* Which geo databases are loaded, and the attribution owed for them. Both are
+     configuration rather than data, and the CC-licensed databases REQUIRE the
+     credit to be displayed wherever their data is shown — so the page that
+     renders the figures has to be able to read it. */
+  geoAvailable: () => geo.available(),
+  geoAttribution: () => geo.attribution(),
 };

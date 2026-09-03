@@ -814,3 +814,113 @@
   background: var(--primary-surface);
   border-color: var(--primary-dark);
 }
+
+/* ── The proxied-share qualifier ────────────────────────────────────────────
+   Deliberately NOT a tile. It sits above the tiles and spans the panel because
+   it qualifies every figure below it: an aggregator can carry many listeners
+   behind one connection, so the headcounts understate the audience by a factor
+   only this number bounds. A seventh tile in the grid would read as one more
+   metric of equal weight, which is exactly the misreading to avoid. */
+
+.deep-qualifier {
+  display: flex;
+  gap: 20px;
+  align-items: flex-start;
+  background: var(--info-surface, rgba(56, 189, 248, 0.07));
+  border: 1px solid rgba(56, 189, 248, 0.22);
+  border-left: 3px solid var(--info);
+  border-radius: var(--radius-md);
+  padding: 16px 18px;
+  margin: 4px 0 18px;
+}
+
+/* Above a fifth of connections the error in every other figure stops being a
+   footnote, so the qualifier takes the warning colour. It is still not an
+   alarm — a high proxied share is a distribution fact, not a fault. */
+.deep-qualifier.high {
+  background: var(--warn-surface);
+  border-color: rgba(245, 158, 11, 0.28);
+  border-left-color: var(--warn);
+}
+
+.deep-qualifier-fig {
+  flex: 0 0 auto;
+  min-width: 128px;
+  text-align: center;
+  padding-right: 18px;
+  border-right: 1px solid var(--border);
+}
+
+.deep-qualifier-value {
+  font-size: 30px;
+  font-weight: 700;
+  line-height: 1.05;
+  color: var(--info);
+}
+
+.deep-qualifier.high .deep-qualifier-value { color: var(--warn); }
+
+.deep-qualifier-label {
+  margin-top: 5px;
+  font-size: 11px;
+  color: var(--text-secondary);
+  line-height: 1.4;
+}
+
+.deep-qualifier-body { flex: 1 1 auto; min-width: 0; }
+
+.deep-qualifier-body p {
+  margin: 0 0 6px;
+  font-size: 12px;
+  line-height: 1.55;
+  color: var(--text-secondary);
+}
+
+.deep-qualifier-body p:last-child { margin-bottom: 0; }
+.deep-qualifier-body strong { color: var(--text-primary); }
+
+.deep-qualifier-note {
+  font-size: 11px !important;
+  color: var(--text-tertiary) !important;
+}
+
+.deep-qualifier-note code {
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: 10px;
+  background: var(--surface-2);
+  border-radius: 4px;
+  padding: 1px 5px;
+}
+
+@media (max-width: 640px) {
+  .deep-qualifier { flex-direction: column; gap: 12px; }
+  .deep-qualifier-fig {
+    min-width: 0;
+    text-align: left;
+    padding-right: 0;
+    border-right: none;
+    border-bottom: 1px solid var(--border);
+    padding-bottom: 10px;
+    width: 100%;
+  }
+}
+
+/* ── Database attribution ───────────────────────────────────────────────────
+   A LICENCE OBLIGATION, not a courtesy. CC BY requires a visible credit with a
+   link wherever the data is displayed, so this renders whenever a CC-licensed
+   database is loaded and is derived from the file actually read. */
+.deep-attribution {
+  margin-top: 14px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border);
+  font-size: 10px;
+  color: var(--text-tertiary);
+}
+
+.deep-attribution a {
+  color: var(--text-tertiary);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.deep-attribution a:hover { color: var(--text-secondary); }

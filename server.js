@@ -4,6 +4,9 @@ const path = require('path');
 const monitor = require('./monitor');
 const auth = require('./auth');
 const redact = require('./redact');
+// For mergeAggregates only — the merge rules for a share and its confidence
+// live with the aggregation they belong to, not in a route or in a chart.
+const listenerDetail = require('./listener-detail');
 const discover = require('./discover');
 const safeUrl = require('./safe-url');
 const diagnose = require('./diagnose');
@@ -746,11 +749,33 @@ app.get('/api/listener-detail', auth.requireAuth, (req, res) => {
     // Named so a reader can see WHICH server the credential covers, without the
     // credential itself ever being in a response.
     credentialedHost: monitor.adminHost() || null,
+    /* WHICH SIGNALS WERE ACTUALLY AVAILABLE. The proxied share means something
+       different with an ASN database than without one — a floor rather than an
+       estimate — so the page cannot render the figure honestly without knowing
+       which it is looking at. `attribution` is a licence obligation for the
+       CC-licensed databases, not a courtesy, and is shown wherever the data is. */
+    geo: monitor.geoAvailable(),
+    attribution: monitor.geoAttribution(),
     totals: {
       connections: mounts.reduce((n, m) => n + (m.connections || 0), 0),
       listeners: mounts.reduce((n, m) => n + (m.listeners || 0), 0),
       bots: mounts.reduce((n, m) => n + (m.bots || 0), 0),
     },
+    /* HOW THE AUDIENCE REACHES THE STATION, merged HERE rather than in the
+       browser. The merge carries two rules that must not be reimplemented in a
+       chart: a share is recomputed from the summed counts rather than averaged
+       across mounts (averaging weights a mount with three listeners equally
+       against one with three hundred), and the result inherits the WEAKEST
+       confidence of its parts. Both are in listener-detail.js with tests. */
+    distribution: (() => {
+      const m = listenerDetail.mergeAggregates(mounts, { host: monitor.adminHost() || '' });
+      return {
+        channels: m.channels,
+        aggregators: m.aggregators,
+        relayNetworks: m.relayNetworks,
+        proxied: m.proxied,
+      };
+    })(),
     mounts,
   });
 });

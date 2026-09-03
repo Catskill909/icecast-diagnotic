@@ -78,6 +78,7 @@ If you are an AI assistant or developer picking up this project, here is the ess
 - **`server.js`**: Express server entrypoint. Serves static files from `public/` and the API.
 - **`monitor.js`**: Check engine. Owns the check cycle, the episode/event lifecycle, the silence engine, and Nodemailer alerts.
 - **`diagnose.js`**: Root-cause diagnosis engine. Instrumented stream probe (DNS/TCP/TLS/TTFB timings), Icecast mount-inventory snapshot, and the classifier that turns a transport error into an actionable cause.
+- **`geo.js`**: Local MMDB lookups — IP to network (relay detection) and IP to place. An IP goes in; a place and a network class come out, never coordinates. Both databases optional and supplied by the deployer.
 - **`store.js`**: Persistence. Splits the long-term event record from rolling telemetry; handles atomic writes, hourly compaction, and legacy migration.
 - **`public/index.html` / `app.js`**: Live dashboard.
 - **`public/preview-player.js`**: The stream cards' audio previews — which mount each card is pointed at, what it is doing, and the one-preview-at-a-time rule. Separate from the page for the same reason as `audience-stats.js`: so Node can test it. Loads as `window.PreviewPlayer` in the browser and `require()`s in tests.
@@ -311,6 +312,47 @@ means little alone; "2.2% of all listening" is a number a station manager can ac
 
 A probe anomaly is charged **zero** loss even though it recorded a failure: Icecast was
 reachable and the mount kept serving, so nobody lost a second of audio.
+
+### How the audience reaches the station
+
+**This is the qualifier on every other audience figure, not another breakdown.**
+An aggregator that *proxies* carries an unknown number of listeners behind one
+connection, so every count the app publishes — concurrent listeners, tune-ins,
+ATH, the royalty estimate — understates the real audience by a factor only this
+number can bound.
+
+Two signals, applied in order:
+
+| | Catches | Needs |
+|---|---|---|
+| **User agent** names a service — TuneIn, iHeart, Radio Garden | named aggregators | nothing |
+| **AS organisation** matches a known hosting provider | **unnamed relays** — a bare `okhttp/4.9.0` in AWS | `GEOIP_ASN_DB` |
+
+Each non-bot connection is classified `direct`, `aggregator`, `datacenter` or
+`unknown`, and the proxied share carries the confidence that belongs to it:
+
+| `confidence` | When | Reads as |
+|---|---|---|
+| `floor` | no ASN database — only self-naming services are caught | **at least** *n*% |
+| `estimated` | an ASN database is loaded | *n*% |
+| `unavailable` | no connections | the reason, not 0% |
+
+**There is deliberately no `measured`.** No free ASN database carries a hosting
+flag — `is_hosting_provider` is in MaxMind's *paid* Anonymous IP database — so
+the datacenter half is a match against organisation **names**, and a non-match
+means *unrecognised*, never *residential*.
+
+**A proxied listener is an uncounted listener, not a lost one.** The copy says so
+wherever the figure appears, because a station reading a high proxied share as an
+audience decline is the obvious misreading.
+
+**Machines are named; people are not.** `relayNetworks` tallies the AS
+organisations behind *datacenter* connections — which relay a station's audience
+arrives through is the finding. Consumer ISPs are never tallied: at this audience
+size a count of one would say something about a person rather than a population.
+
+Shares are merged across mounts by recomputing from summed counts, never by
+averaging — and a merged figure inherits the **weakest** confidence of its parts.
 
 ### Diagnosis
 
@@ -744,6 +786,18 @@ ICECAST_STATUS_URL=https://streams.pacifica.org:9000/status-json.xsl
 SIBLING_MOUNTS=/live_128,/live_64,/HD3,/HD3_128,/HD3_64,/classic_country
 STATION_LABEL=KPFT              # Station name used in operator-facing evidence text
 
+# ── Geo / network databases — OPTIONAL, supplied by the deployer ─────────────
+# Local MMDB files. Both optional; with neither set the app degrades to an
+# honest "not available" and never guesses. A LOCAL DATABASE, NEVER A LOOKUP
+# API — an API means sending every listener's IP to a third party.
+#
+# Two vendors, one format, so switching is a path and not a code change:
+#   DB-IP Lite       CC BY 4.0, NO ACCOUNT, 9 MB (ASN)  https://db-ip.com/db/lite.php
+#   MaxMind GeoLite2 free, but needs an account + licence key + EULA
+GEOIP_ASN_DB=                    # identifies relays and aggregators (5.4)
+GEOIP_CITY_DB=                   # in-market share and the map (5.9, not built)
+GEOIP_MAX_ACCURACY_RADIUS_KM=200 # wider than this is a CENTROID, not a place
+
 # Optional JSON array replacing the three default streams. Include `mounts` to
 # list a channel every bitrate variant, so listener counts cover the whole
 # channel rather than the probed mount alone. Entries may be pathnames or full
@@ -923,6 +977,13 @@ Live Icecast server state — the full mount inventory including other Pacifica 
 
 ### `GET /api/config`
 Returns public monitor settings (check interval, recipient counts, SMTP status, retention policy).
+
+Also carries `geo` — whether the ASN and city databases are loaded, the vendor,
+and the build date. It is a **capability flag**, like `emailConfigured`, and it
+is the field a deploy is verified against: without it, confirming that a build
+shipped with relay detection would mean signing in, since everything else about
+it is behind the admin gate. Filesystem paths and error strings are **not** in
+it — those stay in the authenticated `/api/listener-detail` response.
 
 ### `GET /api/test-alert?to=user@example.com`
 Sends a formatted test email alert to the requested address for deliverability verification.

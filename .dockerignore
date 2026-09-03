@@ -11,3 +11,8 @@ docs/
 WORKING-NOTES.md
 icecast-app-future-dev.md
 incidents-backup.json
+
+# Geo databases: large licensed binaries, never part of the build context.
+# The image fetches its own in a dedicated stage.
+*.mmdb
+*.mmdb.gz

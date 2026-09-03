@@ -205,6 +205,9 @@ silently alters what lands in someone's inbox.
 | `redact.js` | ~130 | **Public projections.** What anonymous callers may see |
 | `safe-url.js` | ~150 | **SSRF guard** for fetching user-supplied URLs |
 | `discover.js` | 822 | Station discovery: mount → channel grouping, validation |
+| `listener-detail.js` | 605 | `/admin/listclients`: parsing, agent + **channel classification**, **the privacy boundary** — IPs go in, aggregates come out |
+| `geo.js` | 435 | **Local MMDB lookups.** IP → network (relay detection) and IP → place. No coordinates ever leave it. Databases optional, deployer-supplied |
+| `device-store.js` | 297 | SQLite device records behind cume |
 | `public/app.js` | 852 | Dashboard |
 | `public/history.js` | 1537 | History page, station picker, charts |
 | `public/listeners.js` | 694 | **Audience page**: rendering only — ATH, charts, tables, CSV export |
@@ -724,6 +727,70 @@ nothing was comparing them.
 - **Test counts move for reasons other than new tests.** The suite went 298 → 548.
   Not because 250 tests were written, but because the SQLite tests had been
   quietly skipping themselves and started actually running.
+
+---
+
+## 5i. Also 2026-09-02: how the audience arrives, and two documented facts that were wrong
+
+**What was built:** Phase 5.4 — distribution channel and ASN classification.
+`geo.js` is new; `listener-detail.js` classifies each connection; the proxied
+share renders as a qualifier at the top of the Who Is Listening panel.
+
+**Why it was urgent rather than next.** `DEEP-ANALYTICS-PLAN.md` §7 puts the
+proxied share **before** publishing anything derived from sessions, so that the
+correction does not land in public afterwards. TSL, session distribution and the
+player mix had already shipped without it. That ordering rule had been crossed,
+and this closes it.
+
+**The idea.** An aggregator that *proxies* carries an unknown number of people
+behind one connection. Every audience number in the product then understates
+reality by a factor nothing else can bound. So this is not a seventh tile — it
+is a banner above the six, and the copy says **a proxied listener is uncounted,
+not lost**, because the obvious misreading is "our audience is falling".
+
+**Two things the planning documents asserted that turned out to be false.** Both
+were found by fetching the real artefact instead of trusting its documentation —
+the same discipline `ADMIN-ACCESS-SCOPE.md` §7 step 0 applies to the Icecast API.
+
+| Documented | Actually |
+|---|---|
+| GeoLite2 ASN "separates datacenter from residential" | **No free ASN database has a hosting flag.** `is_hosting_provider` is in MaxMind's PAID Anonymous IP database. The free tiers give an AS number and an organisation NAME |
+| DB-IP Lite is too inaccurate | True **at city level only**. For ASN it is equivalent — an AS number comes from the public routing table — and **it needs no account**: CC BY 4.0, 9 MB, direct download, same MMDB format |
+
+So datacenter detection is a **name heuristic**, labelled as one, with three
+outcomes: `hosting`, `unrecognised`, `unknown`. **`unrecognised` is not
+`residential`** — it is the absence of a match, which is also what a small
+regional host looks like.
+
+**A bug this caught, worth recording as a class.** `buildEpoch` in MMDB metadata
+is Unix *seconds* per the file-format spec, so `new Date(epoch * 1000)` is the
+obvious reading — and it is wrong, because `mmdb-lib` has already converted it
+and returns a `Date`. The result was a build date in the year **58636**. The
+damage was not cosmetic: that field exists to reveal a **stale** database, which
+misplaces listeners silently, and a date 56,000 years out reads as impossibly
+fresh — the bug disabled exactly the check the field provides. `buildDate()` now
+accepts either form and rejects anything outside plausible reality. A sweep for
+the same unit assumption elsewhere in the codebase found nothing.
+
+**Traps this adds:**
+
+| | |
+|---|---|
+| Tallying consumer ISPs alongside datacenters | At this audience size "1 listener at University of Houston" is not an aggregate. Only *datacenter* orgs are named |
+| Averaging a proxied share across mounts | A share is not additive. Recompute from summed counts, or a mount with 3 listeners outweighs one with 300 |
+| Letting a merged figure keep the STRONGER confidence | It inherits the **weakest**. One mount read with no ASN database makes the whole channel a floor |
+| Calling the share `share` | It is `connectionShare`. It is a share of *connections*, not of listening, and the two differ by the factor nobody can measure |
+| Adding `measured` to its confidence vocabulary | Nothing available measures this |
+
+**Geo databases are optional and supplied by the deployer** (`GEOIP_ASN_DB`,
+`GEOIP_CITY_DB` — filesystem paths). Nothing is bundled and nothing is
+downloaded. A **local database, never a lookup API**: an API means sending every
+listener's IP to a third party, one request per listener, for ever.
+
+**5.9, the map, is NOT built.** `geo.js` has `lookupPlace()` with the US-state /
+country-only rule and the centroid gate, both tested, but no aggregation, no API
+and no page. It also needs a **city** database, which is where the accuracy
+argument genuinely bites and where a MaxMind account may earn its keep.
 
 ---
 
