@@ -827,6 +827,13 @@
        one more tile among six, and the copy says plainly that a proxied
        listener is an uncounted one rather than a lost one. Read the other way,
        a station sees a high proxied share as an audience decline. */
+    /* SEPARATE WITH A MIDDOT, NOT A COMMA, AND MARK THE COUNT WITH A MULTIPLIER.
+       These are company names and company names contain commas — "Google LLC 8,
+       Amazon.com, Inc. 8, Fastly, Inc. 6" gives a reader no way to see where one
+       network ends and the next begins, and the bare trailing number reads as
+       part of the name. Seen on the live page before it was fixed. */
+    const nameCounts = (pairs) => pairs.map(([k, v]) => `${k} \u00d7${v}`).join('  \u00b7  ');
+
     const dist = d.distribution || {};
     const prox = dist.proxied || {};
     const proxPct = prox.connectionShare == null ? null : Math.round(prox.connectionShare * 100);
@@ -857,8 +864,8 @@
           understates the real audience by an unknown factor. This figure bounds that error;
           it is not an audience decline.</p>
           ${proxQual.note ? `<p class="deep-qualifier-note">${esc(proxQual.note)}</p>` : ''}
-          ${namedAggs.length ? `<p class="deep-qualifier-note">Named services: ${esc(namedAggs.map(([k, v]) => `${k} ${v}`).join(', '))}.</p>` : ''}
-          ${relays.length ? `<p class="deep-qualifier-note">Relay networks: ${esc(relays.slice(0, 4).map(([k, v]) => `${k} ${v}`).join(', '))}.</p>` : ''}
+          ${namedAggs.length ? `<p class="deep-qualifier-note">Named services: ${esc(nameCounts(namedAggs))}</p>` : ''}
+          ${relays.length ? `<p class="deep-qualifier-note">Relay networks: ${esc(nameCounts(relays.slice(0, 4)))}</p>` : ''}
           ${asnLoaded ? '' : '<p class="deep-qualifier-note">Set <code>GEOIP_ASN_DB</code> to a local ASN database to identify unnamed relays. DB-IP ASN Lite is free and needs no account.</p>'}
         </div>
       </div>`;
