@@ -122,6 +122,7 @@ class DeviceStore {
       getMeta: this.db.prepare('SELECT value FROM meta WHERE key = ?'),
       setMeta: this.db.prepare('INSERT INTO meta (key,value) VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value'),
       count: this.db.prepare('SELECT COUNT(*) AS n FROM devices'),
+      byTier: this.db.prepare('SELECT tier, COUNT(*) AS n FROM devices GROUP BY tier'),
     };
   }
 
@@ -269,6 +270,18 @@ class DeviceStore {
   }
 
   rowCount() { return this.stmt.count.get().n; }
+
+  /** Rows per tier — how compaction is actually behaving, for tests and stats. */
+  tierCounts() {
+    const out = { hour: 0, day: 0, month: 0 };
+    for (const r of this.stmt.byTier.all()) {
+      out[['hour', 'day', 'month'][r.tier]] = r.n;
+    }
+    return out;
+  }
+
+  /** Test seam. Empties the table without touching the file or the schema. */
+  reset() { this.db.exec('DELETE FROM devices'); }
 
   sizeBytes() {
     let total = 0;

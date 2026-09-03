@@ -115,18 +115,27 @@ test('compaction into daily buckets preserves the count exactly', () => {
   store.compactDevices(NOW);
   const after = store.getDistinctDevices(['a'], NOW - 90 * 24 * HOUR, NOW).devices;
   assert.equal(after, before, 'compaction must not lose or duplicate a person');
-  assert.equal(Object.keys(store._deviceHours().a || {}).length, 0, 'old hours folded away');
-  assert.ok(Object.keys(store._deviceDays().a || {}).length > 0, 'and landed in days');
+  const tiers = store._deviceTiers();
+  assert.equal(tiers.hour, 0, 'old hours folded away');
+  assert.ok(tiers.day > 0, 'and landed in days');
 });
 
 test('a device active every hour costs one row per day after compaction', () => {
   reset();
   for (let h = 50; h < 74; h++) store.recordDevices('a', at(h), [dev(1)]);
   store.compactDevices(NOW);
-  const days = store._deviceDays().a || {};
-  for (const bucket of Object.values(days)) {
-    assert.equal(Object.keys(bucket).length, 1, 'the daily bucket dedupes the regular listener');
-  }
+  // THE PROPERTY: a listener present every hour costs one row PER DAY, not one
+  // per hour. The window below spans more than one UTC day, so the count is the
+  // number of days touched — asserting a flat 1 would be asserting the calendar,
+  // not the deduplication.
+  const daysTouched = new Set();
+  for (let h = 50; h < 74; h++) daysTouched.add(at(h).slice(0, 10));
+  assert.equal(
+    store._deviceTiers().day, daysTouched.size,
+    `24 hourly observations of one device became ${daysTouched.size} daily row(s)`,
+  );
+  assert.ok(daysTouched.size < 24, 'and that is far fewer than the 24 hours it was seen in');
+  assert.equal(store.getDistinctDevices(['a'], 0, NOW).devices, 1, 'still one person');
 });
 
 test('OLD DATA IS NOT DROPPED — the day tier empties into months, nobody is lost', () => {
@@ -139,7 +148,7 @@ test('OLD DATA IS NOT DROPPED — the day tier empties into months, nobody is lo
   store.compactDevices(NOW);
 
   assert.equal(
-    Object.keys(store._deviceDays().a || {}).length, 0,
+    store._deviceTiers().day, 0,
     'the day-level bucket is gone — that is the resolution being released',
   );
   assert.equal(
@@ -147,7 +156,7 @@ test('OLD DATA IS NOT DROPPED — the day tier empties into months, nobody is lo
     'but the listener is still counted, 400 days later',
   );
   assert.ok(
-    Object.keys(store._deviceMonths().a || {}).length > 0,
+    store._deviceTiers().month > 0,
     'because they were folded into the permanent month tier',
   );
 });
@@ -258,19 +267,17 @@ test('hours fold to days fold to months, and the count never changes', () => {
     store.getDistinctDevices(['a'], 0, NOW + 200 * 24 * HOUR).devices, before,
     'day->month loses nobody either',
   );
-  assert.ok(Object.keys(store._deviceMonths().a || {}).length > 0, 'and it landed in the month tier');
+  assert.ok(store._deviceTiers().month > 0, 'and it landed in the month tier');
 });
 
 test('compaction shrinks storage without shrinking the answer', () => {
   reset();
   const audience = Array.from({ length: 20 }, (_, i) => dev(i));
   for (let h = 1; h <= 96; h++) store.recordDevices('a', at(h), audience);
-  const rowsBefore = Object.values(store._deviceHours().a || {})
-    .reduce((n, b) => n + Object.keys(b).length, 0);
+  const rowsBefore = store._deviceRows();
 
   store.compactDevices(NOW + 200 * 24 * HOUR);
-  const rowsAfter = Object.values(store._deviceMonths().a || {})
-    .reduce((n, b) => n + Object.keys(b).length, 0);
+  const rowsAfter = store._deviceRows();
 
   assert.equal(store.getDistinctDevices(['a'], 0, NOW + 200 * 24 * HOUR).devices, 20);
   assert.ok(rowsAfter < rowsBefore, `stored rows fell ${rowsBefore} -> ${rowsAfter} for the same 20 people`);

@@ -157,12 +157,55 @@ const DEVICE_MONTH_RETENTION = Math.max(0, parseInt(process.env.DEVICE_MONTH_RET
 // Kept as an alias so an existing deployment's env var still means something.
 const DEVICE_RETENTION_DAYS = DEVICE_DAY_RETENTION_DAYS;
 
-// { [streamId]: { [hourKeyISO]: { [deviceHash]: "Family|Platform" } } }
-let deviceHours = {};
-// { [streamId]: { [YYYY-MM-DD]: { [deviceHash]: "Family|Platform" } } }
-let deviceDays = {};
-// { [streamId]: { [YYYY-MM]: { [deviceHash]: "Family|Platform" } } }  — PERMANENT
-let deviceMonths = {};
+/* Backed by SQLite rather than the JSON this module uses for everything else.
+   The device record is the only store here bounded by NOTHING — permanent by
+   design, and growing with the AUDIENCE rather than with time or station count
+   — so it is the only one that must not be held in memory. Measured over one
+   year of the Pacifica network: 16.7 MB resident as JSON, none on disk.
+
+   Opened lazily, so a process that never touches audience data does not create
+   a database file it will not use. */
+const { DeviceStore } = require('./device-store');
+let deviceDbInstance = null;
+
+function deviceDb() {
+  if (!deviceDbInstance) deviceDbInstance = new DeviceStore(path.join(DATA_DIR, 'devices.db'));
+  return deviceDbInstance;
+}
+
+/**
+ * One-time import of device records written before this moved to SQLite.
+ *
+ * Guarded by a marker in the DATABASE, not by "is the table empty" — a
+ * deployment that migrated and then legitimately aged every row out must not
+ * import the same JSON a second time.
+ */
+function migrateDevicesFromJson(sm) {
+  if (!sm) return;
+  const db = deviceDb();
+  if (db.getMeta('jsonImported')) return;
+
+  let imported = 0;
+  for (const [src, toIso] of [
+    [sm.deviceHours, (k) => k],
+    [sm.deviceDays, (k) => `${k}T00:00:00.000Z`],
+    [sm.deviceMonths, (k) => `${k}-01T00:00:00.000Z`],
+  ]) {
+    for (const [streamId, buckets] of Object.entries(src || {})) {
+      for (const [key, bucket] of Object.entries(buckets || {})) {
+        const entries = Object.entries(bucket || {}).map(([id, cls]) => ({ id, cls }));
+        if (!entries.length) continue;
+        // Imported into the HOUR tier at the bucket's own start; the next
+        // compaction folds it to where it belongs. A union cannot be harmed by
+        // being folded twice, so this is simpler than reconstructing tiers.
+        db.recordDevices(streamId, toIso(key), entries);
+        imported += entries.length;
+      }
+    }
+  }
+  db.setMeta('jsonImported', new Date().toISOString());
+  if (imported) console.log(`[Store] Imported ${imported} device observation(s) from JSON into devices.db`);
+}
 
 /**
  * The salt device hashes are built with, stable for the life of the install.
@@ -208,17 +251,7 @@ function monthKeyUTC(ts) {
  */
 function recordDevices(streamId, ts, entries) {
   if (!streamId || !Array.isArray(entries) || !entries.length) return;
-  const hk = hourKey(ts);
-  const forStream = (deviceHours[streamId] ||= {});
-  const bucket = (forStream[hk] ||= {});
-  for (const e of entries) {
-    if (!e || !e.id) continue;
-    // First classification seen wins. A device that changes how it identifies
-    // mid-hour is one device, and rewriting it would make the mix depend on
-    // poll order.
-    if (bucket[e.id] === undefined) bucket[e.id] = e.cls || '';
-  }
-  dirtySamples = true;
+  deviceDb().recordDevices(streamId, ts, entries);
 }
 
 /**
@@ -232,46 +265,11 @@ function recordDevices(streamId, ts, entries) {
  * tiered differently.
  */
 function compactDevices(now = Date.now()) {
-  const fold = (from, to, keyOf) => {
-    for (const [id, cls] of Object.entries(from)) if (to[id] === undefined) to[id] = cls;
-  };
-
-  // hours → days
-  const hourCutoff = now - DEVICE_HOUR_RETENTION_H * 60 * 60 * 1000;
-  for (const streamId of Object.keys(deviceHours)) {
-    for (const hk of Object.keys(deviceHours[streamId])) {
-      if (Date.parse(hk) >= hourCutoff) continue;
-      fold(deviceHours[streamId][hk], ((deviceDays[streamId] ||= {})[dayKeyUTC(hk)] ||= {}));
-      delete deviceHours[streamId][hk];
-      dirtySamples = true;
-    }
-    if (!Object.keys(deviceHours[streamId]).length) delete deviceHours[streamId];
-  }
-
-  // days → months
-  const dayCutoff = dayKeyUTC(now - DEVICE_DAY_RETENTION_DAYS * 24 * 60 * 60 * 1000);
-  for (const streamId of Object.keys(deviceDays)) {
-    for (const dk of Object.keys(deviceDays[streamId])) {
-      if (dk >= dayCutoff) continue;
-      fold(deviceDays[streamId][dk], ((deviceMonths[streamId] ||= {})[monthKeyUTC(`${dk}T00:00:00Z`)] ||= {}));
-      delete deviceDays[streamId][dk];
-      dirtySamples = true;
-    }
-    if (!Object.keys(deviceDays[streamId]).length) delete deviceDays[streamId];
-  }
-
-  // months: kept for ever unless a deployment explicitly asks otherwise.
-  if (DEVICE_MONTH_RETENTION > 0) {
-    const d = new Date(now);
-    d.setUTCMonth(d.getUTCMonth() - DEVICE_MONTH_RETENTION);
-    const dropBefore = monthKeyUTC(d);
-    for (const streamId of Object.keys(deviceMonths)) {
-      for (const mk of Object.keys(deviceMonths[streamId])) {
-        if (mk < dropBefore) { delete deviceMonths[streamId][mk]; dirtySamples = true; }
-      }
-      if (!Object.keys(deviceMonths[streamId]).length) delete deviceMonths[streamId];
-    }
-  }
+  deviceDb().compactDevices(now, {
+    hourRetentionH: DEVICE_HOUR_RETENTION_H,
+    dayRetentionDays: DEVICE_DAY_RETENTION_DAYS,
+    monthRetention: DEVICE_MONTH_RETENTION,
+  });
 }
 
 /**
@@ -285,55 +283,7 @@ function compactDevices(now = Date.now()) {
  * the rolling comparison cards already follow.
  */
 function getDistinctDevices(streamIds, sinceMs, untilMs = Date.now()) {
-  const ids = Array.isArray(streamIds) ? streamIds : [streamIds];
-  const seen = new Map();          // hash -> cls
-  let earliest = null;
-
-  const note = (tsMs) => { if (earliest == null || tsMs < earliest) earliest = tsMs; };
-
-  for (const streamId of ids) {
-    for (const [hk, bucket] of Object.entries(deviceHours[streamId] || {})) {
-      const t = Date.parse(hk);
-      if (!Number.isFinite(t) || t < sinceMs || t > untilMs) continue;
-      note(t);
-      for (const [id, cls] of Object.entries(bucket)) if (!seen.has(id)) seen.set(id, cls);
-    }
-    for (const [dk, bucket] of Object.entries(deviceDays[streamId] || {})) {
-      const t = Date.parse(`${dk}T00:00:00.000Z`);
-      // A day bucket is included when ANY of it falls inside the window; a
-      // partial day at the edge slightly over-counts rather than dropping real
-      // devices, and the alternative loses people entirely.
-      if (!Number.isFinite(t) || t + 24 * 60 * 60 * 1000 < sinceMs || t > untilMs) continue;
-      note(t);
-      for (const [id, cls] of Object.entries(bucket)) if (!seen.has(id)) seen.set(id, cls);
-    }
-    for (const [mk, bucket] of Object.entries(deviceMonths[streamId] || {})) {
-      const t = Date.parse(`${mk}-01T00:00:00.000Z`);
-      const end = Date.parse(`${mk}-01T00:00:00.000Z`) + 31 * 24 * 60 * 60 * 1000;
-      if (!Number.isFinite(t) || end < sinceMs || t > untilMs) continue;
-      note(t);
-      for (const [id, cls] of Object.entries(bucket)) if (!seen.has(id)) seen.set(id, cls);
-    }
-  }
-
-  const players = {};
-  const platforms = {};
-  for (const cls of seen.values()) {
-    const [fam, plat] = String(cls || '').split('|');
-    if (fam) players[fam] = (players[fam] || 0) + 1;
-    if (plat) platforms[plat] = (platforms[plat] || 0) + 1;
-  }
-
-  return {
-    devices: seen.size,
-    players,
-    platforms,
-    coveredFrom: earliest == null ? null : new Date(earliest).toISOString(),
-    // True when the window reaches back further than anything recorded, so the
-    // UI can say "since we started measuring" instead of quoting a short
-    // period as though it were a whole month.
-    partial: earliest == null ? true : earliest > sinceMs + 60 * 60 * 1000,
-  };
+  return deviceDb().getDistinctDevices(streamIds, sinceMs, untilMs);
 }
 
 function hourKey(ts) {
@@ -373,18 +323,12 @@ function load(streamIds = []) {
         rollups[id] = Array.isArray(sm.rollups[id]) ? sm.rollups[id] : [];
       }
     }
-    if (sm.deviceHours) deviceHours = sm.deviceHours;
-    if (sm.deviceDays) deviceDays = sm.deviceDays;
-    if (sm.deviceMonths) deviceMonths = sm.deviceMonths;
+    migrateDevicesFromJson(sm);
     const total = Object.values(samples).reduce((a, b) => a + b.length, 0);
     const rollTotal = Object.values(rollups).reduce((a, b) => a + b.length, 0);
     console.log(`[Store] Loaded ${total} raw sample(s), ${rollTotal} hourly rollup(s)`);
-    const devTotal = Object.values(deviceDays).reduce(
-      (a, d) => a + Object.values(d).reduce((x, b) => x + Object.keys(b).length, 0), 0,
-    ) + Object.values(deviceHours).reduce(
-      (a, d) => a + Object.values(d).reduce((x, b) => x + Object.keys(b).length, 0), 0,
-    );
-    if (devTotal) console.log(`[Store] Loaded ${devTotal} device observation(s) for cume`);
+    const devTotal = deviceDb().rowCount();
+    if (devTotal) console.log(`[Store] ${devTotal} device observation(s) on file for cume`);
   }
 
   // One-time migration off the old combined history.json. Its incidents are
@@ -2294,13 +2238,7 @@ function getTuneInRecordingStart(streamIds) {
  */
 function getMonthlyAudience(streamIds, { months = 24, now = Date.now() } = {}) {
   const ids = Array.isArray(streamIds) ? streamIds : [streamIds];
-  const keys = new Set();
-  for (const id of ids) {
-    for (const mk of Object.keys(deviceMonths[id] || {})) keys.add(mk);
-    for (const dk of Object.keys(deviceDays[id] || {})) keys.add(dk.slice(0, 7));
-    for (const hk of Object.keys(deviceHours[id] || {})) keys.add(hk.slice(0, 7));
-  }
-  const ordered = [...keys].sort().slice(-months);
+  const ordered = deviceDb().monthKeys().slice(-months);
 
   const rows = ordered.map((mk) => {
     const startMs = Date.parse(`${mk}-01T00:00:00.000Z`);
@@ -2332,12 +2270,8 @@ function getMonthlyAudience(streamIds, { months = 24, now = Date.now() } = {}) {
 
 /** Whether any device observation exists for these channels at all. */
 function hasDeviceData(streamIds) {
-  for (const id of streamIds || []) {
-    if (Object.keys(deviceHours[id] || {}).length) return true;
-    if (Object.keys(deviceDays[id] || {}).length) return true;
-    if (Object.keys(deviceMonths[id] || {}).length) return true;
-  }
-  return false;
+  if (!(streamIds || []).length) return false;
+  return deviceDb().getDistinctDevices(streamIds, 0, Date.now()).devices > 0;
 }
 
 function getListenerCountsAcross(groups, now = Date.now()) {
@@ -3176,7 +3110,7 @@ function saveSamples(force = false) {
     // roughly triple it for no operator benefit.
     atomicWrite(
       SAMPLES_FILE,
-      JSON.stringify({ version: 2, savedAt: new Date().toISOString(), samples, rollups, deviceHours, deviceDays, deviceMonths }),
+      JSON.stringify({ version: 2, savedAt: new Date().toISOString(), samples, rollups }),
     );
     dirtySamples = false;
   } catch (err) {
@@ -3210,8 +3144,9 @@ function getStorageInfo() {
 module.exports = {
   // Cume — distinct devices over a period. See the block above hourKey().
   recordDevices, getDistinctDevices, compactDevices, deviceSalt, getMonthlyAudience,
-  _deviceHours: () => deviceHours, _deviceDays: () => deviceDays, _deviceMonths: () => deviceMonths,
-  _resetDevices: () => { deviceHours = {}; deviceDays = {}; deviceMonths = {}; },
+  _deviceTiers: () => deviceDb().tierCounts(),
+  _deviceRows: () => deviceDb().rowCount(),
+  _resetDevices: () => { deviceDb().reset(); },
   DEVICE_RETENTION_DAYS, DEVICE_HOUR_RETENTION_H, DEVICE_DAY_RETENTION_DAYS, DEVICE_MONTH_RETENTION,
   load, save, saveEvents, saveSamples, prune,
   addEvent, updateEvent, getEvents, findOpenOutage,
