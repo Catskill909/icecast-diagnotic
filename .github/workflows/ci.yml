@@ -25,7 +25,12 @@ jobs:
       - uses: actions/checkout@v5
       - uses: actions/setup-node@v5
         with:
-          node-version: '20'
+          # Read the version from .nvmrc rather than repeating it here. This job
+          # was pinned to '20' and stayed there when the app moved to Node 24,
+          # so every test that loads store.js -> device-store.js died at require
+          # time on a `node:sqlite` that does not exist before 22.5. One
+          # declaration means a future bump cannot leave CI behind again.
+          node-version-file: '.nvmrc'
       - run: npm ci --omit=dev || npm install --omit=dev
       - run: npm test
 
