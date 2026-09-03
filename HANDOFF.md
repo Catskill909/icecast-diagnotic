@@ -2,7 +2,7 @@
 
 > **Purpose.** Everything a new session, a new developer, or another model needs
 > to pick this up without reading the conversation it came from. Written
-> 2026-08-27, current as of commit `54fbc4f` (2026-09-02).
+> 2026-08-27, current as of commit `d551742` (2026-09-02).
 >
 > Read this first, then [`README.md`](README.md) for behaviour,
 > [`docs/DIAGNOSTICS.md`](docs/DIAGNOSTICS.md) for the classifier, and
@@ -18,7 +18,7 @@ shortest path to being useful.
 **Orient yourself (2 minutes).**
 
 ```bash
-npm test                                   # 440 tests, all should pass
+npm test                                   # 548 tests, all should pass
 curl -s https://kpft-icecast.supersoul.top/api/stations | jq   # what it monitors
 curl -s https://kpft-icecast.supersoul.top/api/status   | jq   # how it is doing
 ```
@@ -35,6 +35,7 @@ read when you need it.
 | A new aggregate that isn't station-scoped | Reports one station's outages as another's. §8 |
 | Renaming a channel id | Orphans its history rather than moving it. §8 |
 | Adding a module without updating the Dockerfile | Container dies on startup. CI catches it |
+| Using a newer Node built-in than `.nvmrc` declares | Every test touching store.js dies at load. §5h |
 | Assuming a push deployed | Deploys are manual, always |
 | Gating a RECORD on whether it was emailed | Muting a station then edits its history. §5g |
 | Thinking a station is a server | A card is a CHANNEL; a station only groups them. §5d, §8 |
@@ -109,7 +110,11 @@ regression, however green the tests are.**
   so the host-as-shared-pool design (§3.6) is now carrying real traffic rather
   than being argued for. One snapshot fetch per host per cycle serves every
   station on it.
-- **440 tests**, `npm test`, Node's built-in runner, no test framework dependency.
+- **548 tests**, `npm test`, Node's built-in runner, no test framework dependency.
+- **Node 24 is required, not preferred.** `device-store.js` uses `node:sqlite`
+  (Node 22.5+) and `store.js` requires it at the top level, so an older runtime
+  does not degrade — it takes the whole process down at load. `.nvmrc` is the
+  single source of truth; CI and local shells both read it. §5h.
 - **Dependencies: express, nodemailer 9, dotenv.** That is the whole list, and it
   is deliberate. Crypto, testing and HTTP are all Node built-ins. Adding a
   dependency should require an argument.
@@ -661,6 +666,67 @@ way. Any reason not to send mail was a reason to lose history.
 
 ---
 
+## 5h. Also 2026-09-02: CI was testing on a Node the app had outgrown
+
+**Reported from GitHub:** the CI run on `b39481f` failed in 16 seconds. "Unit
+tests" red, "Image builds and boots" green beside it. The commit was documentation
+only and had touched no code, which is what made it confusing.
+
+**The mechanism.** Three commits earlier, `470bf7e` added `device-store.js` — it
+requires `node:sqlite`, a built-in that only exists from Node 22.5. On its own
+that changed nothing, because nothing imported it yet; that run was green. Then
+`dbd30cb` wired it in, and it did so at the TOP LEVEL of `store.js`:
+
+```js
+const { DeviceStore } = require('./device-store');   // store.js, module scope
+```
+
+So the SQLite requirement stopped being local to the audience code and became a
+requirement of loading `store.js` at all. **26 test files died at require time**,
+every one of them with the same error, none of them about the feature that had
+changed.
+
+The version had been raised everywhere it was declared — `.nvmrc`, the Dockerfile,
+`package.json` engines — except in `.github/workflows/ci.yml`, which still said
+`node-version: '20'` from weeks earlier. It had been harmless for exactly as long
+as nothing needed anything newer.
+
+**Why the image job stayed green, and why that mattered.** It builds from the
+Dockerfile, which says `FROM node:24-alpine`. So the job designed to prove
+deployability passed, while the job running the tests used a runtime the shipped
+artifact never uses. The two jobs disagreed about what Node this app runs on, and
+nothing was comparing them.
+
+| Change | Why |
+|---|---|
+| CI reads `node-version-file: '.nvmrc'` | The version is declared once. A future bump cannot leave CI behind. |
+| `test/runtime-version.test.js` | Checks `.nvmrc`, `engines`, every Dockerfile `FROM`, the workflow, and the running interpreter all agree. |
+| Dead skip guard removed from `device-store.test.js` | It caught the failed require and reported a skip — green while everything else burned. |
+| `nvm alias default 24` on the dev Mac | The default was 20, so a fresh terminal failed `npm test` for environment reasons. |
+
+**What to carry forward.**
+
+- **The bug was in the gap between two declarations, not in either one.** Both
+  the Dockerfile and the workflow were internally consistent and individually
+  defensible. Nothing checked they agreed, so a change to one silently made the
+  other wrong. `runtime-version.test.js` exists to be that check, and it
+  deliberately parses no application code so it still runs on a Node too old to
+  load the app — which is precisely when its answer is worth having.
+- **A top-level require changes the blast radius of a dependency.** Moving
+  `require('./device-store')` into module scope of `store.js` promoted a niche
+  requirement into a hard requirement for two thirds of the suite. If a new
+  module needs something the runtime may not have, where you require it decides
+  how much dies with it.
+- **The failing commit is not always the breaking commit.** `b39481f` was docs.
+  The break arrived in `dbd30cb` and was merely re-run by the next push. Read the
+  run history before reading the diff: `470bf7e` green, `dbd30cb` red is the whole
+  story, and the API gives it without a login.
+- **Test counts move for reasons other than new tests.** The suite went 298 → 548.
+  Not because 250 tests were written, but because the SQLite tests had been
+  quietly skipping themselves and started actually running.
+
+---
+
 ## 6. Where it is going
 
 > **Sequencing lives in [`docs/PHASE-PLAN.md`](docs/PHASE-PLAN.md)** — one
@@ -1110,13 +1176,18 @@ Reviewed end to end on 2026-08-27; findings and reasoning in
   is the whole requirement, and redirects must be re-checked the same way.
 - **Do not trust a green `npm test` as proof of deployability.** The tests pass
   on a machine where every file exists.
+- **A skip is not a pass, and a guard that hides a load error is worse than no
+  guard.** `device-store.test.js` used to catch a failed `require` and turn it
+  into a skip, so on Node 20 it reported green while 26 other files died on the
+  same missing module. If a module is mandatory, require it plainly and let it
+  throw. §5h.
 
 ---
 
 ## 9. Verifying a change
 
 ```bash
-npm test                                             # 440 tests
+npm test                                             # 548 tests, on Node 24 (`nvm use`)
 node --check server.js monitor.js store.js diagnose.js auth.js
 
 # Against production

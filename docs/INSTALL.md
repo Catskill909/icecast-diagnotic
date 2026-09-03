@@ -127,7 +127,14 @@ docker run -d --name icecast-monitor \
 
 ## 6. Bare Node
 
-No Docker required. Node 20 or newer.
+No Docker required. **Node 22.5 or newer** — `.nvmrc` pins 24, which is what
+the container runs and what CI tests against.
+
+This is a hard floor, not a recommendation. Device records are stored in
+SQLite via the built-in `node:sqlite`, which arrived in 22.5, and it is
+required at the top of `store.js` — so on an older Node the app does not run
+with reduced features, it exits at startup. If you use nvm, `nvm use` in the
+clone reads `.nvmrc` for you.
 
 ```bash
 git clone https://github.com/Catskill909/icecast-diagnotic.git
