@@ -14,7 +14,8 @@
    filter has to be in the SQL, and the cross-channel tests below are what say
    so.
 
-   SKIPPED on Node < 22.5, which has no `node:sqlite`. The container runs 24.
+   Needs Node 22.5+ for `node:sqlite`, which test/runtime-version.test.js now
+   enforces for the whole suite — so this file no longer guards for it itself.
    ═══════════════════════════════════════════════════════════════════════════ */
 
 const test = require('node:test');
@@ -23,13 +24,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 
-let DeviceStore;
-let unavailable = null;
-try {
-  ({ DeviceStore } = require('../device-store'));
-} catch (err) {
-  unavailable = `node:sqlite unavailable on ${process.version}`;
-}
+const { DeviceStore } = require('../device-store');
 
 const HOUR = 60 * 60 * 1000;
 const DAY = 24 * HOUR;
@@ -44,9 +39,9 @@ function freshStore() {
   return new DeviceStore(path.join(dir, `d${seq++}.db`));
 }
 
-/** Wraps a test so the whole file no-ops on a runtime without node:sqlite. */
+/** Runs a test against a fresh database, closed however the test ends. */
 function dbTest(name, fn) {
-  test(name, { skip: unavailable || false }, () => {
+  test(name, () => {
     const db = freshStore();
     try { fn(db); } finally { db.close(); }
   });
