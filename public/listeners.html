@@ -254,12 +254,50 @@
       <div id="deep-panel"></div>
     </div>
 
+    <!-- ── Where They Listen ─────────────────────────────────────────────
+         Geography is its own section rather than a tile inside Who Is
+         Listening, because it answers a different question for a different
+         reader: the device mix is an engineering question, and share of
+         audience outside the signal area is a fundraising and programming
+         one. -->
+    <div class="section-head">
+      <h2 class="section-title">
+        <span class="material-symbols-outlined">public</span>
+        Where They Listen
+      </h2>
+      <details class="section-help">
+        <summary>?</summary>
+        <div class="section-help-body">
+          Counted per <strong>state</strong> and per <strong>country</strong>, never
+          per person and never as a point on a map. No coordinate or city ever
+          reaches this page.
+          <br><br>
+          <strong>Relays are excluded.</strong> A connection from a datacenter
+          geolocates to the datacenter, so counting aggregators here would report
+          the hosting region as an audience.
+          <br><br>
+          A state is published only when the database says its answer is precise
+          enough to be a real place. When it cannot, the country is reported and
+          the state is left out &mdash; an unresolvable address otherwise lands on a
+          region centroid, which manufactures listeners somewhere nobody lives.
+          <br><br>
+          Outside the United States, country only: sub-national accuracy varies too
+          much to publish.
+        </div>
+      </details>
+      <span class="section-hint" id="geo-hint"></span>
+    </div>
+    <div class="panel fade-in">
+      <div id="geo-panel"></div>
+    </div>
+
   </div>
 </div>
 
 <!-- Statistics first: listeners.js reads window.AudienceStats at call time, but
      loading it up front keeps the dependency obvious rather than incidental. -->
 <script src="audience-stats.js?v=dev"></script>
+<script src="geo-map.js?v=dev"></script>
 <script src="listeners.js?v=dev"></script>
 </body>
 </html>

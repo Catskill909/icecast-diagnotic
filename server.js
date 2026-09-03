@@ -7,6 +7,10 @@ const redact = require('./redact');
 // For mergeAggregates only — the merge rules for a share and its confidence
 // live with the aggregation they belong to, not in a route or in a chart.
 const listenerDetail = require('./listener-detail');
+// Downloads GeoLite2 onto the data volume. Network code lives HERE and not in
+// geo.js: the rule geo.js enforces is "never send a listener's address to a
+// third party", and fetching a database file sends nobody's address anywhere.
+const geoUpdate = require('./geo-update');
 const discover = require('./discover');
 const safeUrl = require('./safe-url');
 const diagnose = require('./diagnose');
@@ -776,6 +780,17 @@ app.get('/api/listener-detail', auth.requireAuth, (req, res) => {
         proxied: m.proxied,
       };
     })(),
+    /* WHERE THEY LISTEN. Counts per country and per US state — never a
+       coordinate, never a city, never a row. `homeRegion` is the station's own
+       state, which is what turns a distribution into the figure a manager
+       actually wants: how much of the audience is outside the signal area. */
+    places: (() => {
+      const m = listenerDetail.mergeAggregates(mounts, { host: monitor.adminHost() || '' });
+      return {
+        ...m.places,
+        homeRegion: monitor.homeRegion(),
+      };
+    })(),
     mounts,
   });
 });
@@ -883,7 +898,23 @@ app.get('/health', (req, res) => {
 });
 
 // ── Start ───────────────────────────────────────────────────────────────────
-app.listen(PORT, '0.0.0.0', () => {
+app.listen(PORT, '0.0.0.0', async () => {
   console.log(`[Server] Dashboard running at http://0.0.0.0:${PORT}`);
+
+  /* GeoLite2 is fetched BEFORE the monitor starts, so the first collection pass
+     already has it. It is awaited rather than fired off because geo.js caches
+     its readers on first use, and a database that lands after that first read
+     would sit unused until the next restart.
+     
+     Nothing here can stop the monitor: updateAll never throws, and with no
+     licence key configured it returns immediately. The listen callback is
+     already async, so a slow mirror delays collection, not the HTTP server —
+     the dashboard and /health are answering throughout. */
+  try {
+    await geoUpdate.updateAll({ dataDir: process.env.DATA_DIR || path.join(__dirname, 'data'), editions: ['city'] });
+  } catch (e) {
+    console.log(`[Geo] update skipped: ${e.message}`);
+  }
+
   monitor.start();
 });

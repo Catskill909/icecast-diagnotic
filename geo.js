@@ -160,6 +160,31 @@ const HOSTING_PATTERNS = [
   /\bvps\b/i,
 ];
 
+/* US state NAME to ISO code. MaxMind's subdivision record carries `iso_code`
+   directly; DB-IP City Lite carries only `names.en`, so without this table
+   every US lookup against a DB-IP database would silently yield no state.
+
+   DC is included because it appears in both databases and is a jurisdiction
+   with listeners; the territories are included because a Pacifica affiliate
+   audience genuinely reaches them and reporting Puerto Rico as "no state"
+   would be wrong rather than merely incomplete. */
+const US_STATE_CODES = Object.fromEntries(Object.entries({
+  AL: 'Alabama', AK: 'Alaska', AZ: 'Arizona', AR: 'Arkansas', CA: 'California',
+  CO: 'Colorado', CT: 'Connecticut', DE: 'Delaware', FL: 'Florida', GA: 'Georgia',
+  HI: 'Hawaii', ID: 'Idaho', IL: 'Illinois', IN: 'Indiana', IA: 'Iowa',
+  KS: 'Kansas', KY: 'Kentucky', LA: 'Louisiana', ME: 'Maine', MD: 'Maryland',
+  MA: 'Massachusetts', MI: 'Michigan', MN: 'Minnesota', MS: 'Mississippi',
+  MO: 'Missouri', MT: 'Montana', NE: 'Nebraska', NV: 'Nevada',
+  NH: 'New Hampshire', NJ: 'New Jersey', NM: 'New Mexico', NY: 'New York',
+  NC: 'North Carolina', ND: 'North Dakota', OH: 'Ohio', OK: 'Oklahoma',
+  OR: 'Oregon', PA: 'Pennsylvania', RI: 'Rhode Island', SC: 'South Carolina',
+  SD: 'South Dakota', TN: 'Tennessee', TX: 'Texas', UT: 'Utah', VT: 'Vermont',
+  VA: 'Virginia', WA: 'Washington', WV: 'West Virginia', WI: 'Wisconsin',
+  WY: 'Wyoming', DC: 'District of Columbia',
+  PR: 'Puerto Rico', VI: 'U.S. Virgin Islands', GU: 'Guam',
+  AS: 'American Samoa', MP: 'Northern Mariana Islands',
+}).map(([code, name]) => [name.toLowerCase(), code]));
+
 /**
  * Classify an AS organisation name.
  *
@@ -375,7 +400,10 @@ function lookupNetwork(ip) {
  * function's own return.
  */
 function placeMiss(reason) {
-  return { resolved: false, reason, countryCode: null, region: null, isEU: false, accuracyRadius: null };
+  return {
+    resolved: false, reason, countryCode: null, region: null,
+    isEU: false, accuracyRadius: null, regionWithheld: null,
+  };
 }
 
 /**
@@ -393,18 +421,43 @@ function placeFromRecord(rec) {
   const accuracyRadius = rec.location?.accuracy_radius ?? null;
 
   let region = null;
+  let regionWithheld = null;
   if (countryCode === 'US') {
     const sub = Array.isArray(rec.subdivisions) ? rec.subdivisions[0] : null;
-    const code = sub?.iso_code || null;
-    /* BOTH conditions, not either. A subdivision with a 1000 km radius is the
-       database naming the state a country centroid happens to sit in, which is
-       precisely the artefact the gate exists to stop. */
-    if (code && accuracyRadius != null && accuracyRadius <= MAX_ACCURACY_RADIUS_KM) {
+    // MaxMind gives an ISO code. DB-IP City Lite gives only a NAME, so the name
+    // is mapped back to a code rather than the state being dropped.
+    const code = sub?.iso_code || US_STATE_CODES[String(sub?.names?.en || '').toLowerCase()] || null;
+
+    if (!code) {
+      regionWithheld = 'no-subdivision';
+    } else if (accuracyRadius == null) {
+      /* NO ACCURACY RADIUS MEANS NO CENTROID GUARD, AND THEREFORE NO STATE.
+         Verified against DB-IP City Lite on 2026-09-02: it ships latitude and
+         longitude and no `accuracy_radius` at all. Every geolocation database
+         falls back to a region centroid when it cannot resolve an address, and
+         `accuracy_radius` is the ONLY field that says a given answer is such a
+         fallback. Without it, a manufactured cluster is indistinguishable from
+         a finding — which is the single most dangerous artefact in this domain.
+
+         So a database that cannot report its own uncertainty is used at COUNTRY
+         resolution only. This is not a limitation to work around; publishing a
+         state map from it would be inventing the very confidence the field
+         exists to measure. */
+      regionWithheld = 'no-accuracy-radius';
+    } else if (accuracyRadius > MAX_ACCURACY_RADIUS_KM) {
+      regionWithheld = 'centroid';
+    } else {
       region = String(code);
     }
   }
 
-  return { resolved: true, reason: null, countryCode: String(countryCode), region, isEU, accuracyRadius };
+  return {
+    resolved: true, reason: null, countryCode: String(countryCode), region, isEU, accuracyRadius,
+    // WHY there is no state, when there is none. A map that is empty because
+    // the wrong database is installed must not look like a map of an audience
+    // that happens to be outside the US.
+    regionWithheld,
+  };
 }
 
 function lookupPlace(ip) {
@@ -427,6 +480,7 @@ module.exports = {
   // Exported for tests. Nothing else should need them.
   buildDate,
   classifyOrg,
+  US_STATE_CODES,
   isPrivateAddress,
   networkFromRecord,
   placeFromRecord,

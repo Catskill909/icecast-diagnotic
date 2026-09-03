@@ -312,7 +312,38 @@ function classifyChannel(cls, net) {
 /* No geo database configured: every connection resolves as unknown, so the
    user-agent signal still works and nothing throws. Injected rather than
    required at module load so tests can drive the rules directly. */
-const NO_GEO = { lookupNetwork: () => ({ resolved: false, reason: 'no-database', network: 'unknown', asn: null, org: null }) };
+const NO_GEO = {
+  lookupNetwork: () => ({ resolved: false, reason: 'no-database', network: 'unknown', asn: null, org: null }),
+  lookupPlace: () => ({ resolved: false, reason: 'no-database', countryCode: null, region: null, isEU: false, accuracyRadius: null, regionWithheld: null }),
+};
+
+// ── Geography ───────────────────────────────────────────────────────────────
+
+/* WHAT IS COUNTED, AND WHAT IS DELIBERATELY NOT.
+   Counts per country, and per US state. No coordinates, no cities, no rows —
+   geo.js drops those at the read, and nothing here could reintroduce them.
+
+   RELAYS ARE EXCLUDED FROM GEOGRAPHY, and this is not a detail. A datacenter
+   address geolocates to the DATACENTER, so a relay in AWS Virginia would report
+   as listeners in Virginia. On a map that is a finding: "our second-biggest
+   state is Virginia." It is an artefact of where a machine is hosted, and it
+   would be the largest single error on the page. Proxied connections are
+   counted separately as `relays` so the number is visible rather than hidden.
+
+   WHY MISSES ARE COUNTED BY REASON. "We could not place 14% of connections" is
+   itself a finding, and the reasons are different problems: `no-database` is a
+   deployment that never configured one, `no-accuracy-radius` is the WRONG
+   database installed, and `private` is a relay inside the server's own network.
+   Collapsing them would make a misconfiguration look like an audience fact. */
+function emptyPlaces() {
+  return {
+    countries: {}, usStates: {},
+    placed: 0, relays: 0, unplaced: 0,
+    // States withheld because the record could not clear the centroid guard.
+    stateWithheld: 0,
+    reasons: {},
+  };
+}
 
 /**
  * Turn listener rows into publishable aggregates.
@@ -327,6 +358,19 @@ const NO_GEO = { lookupNetwork: () => ({ resolved: false, reason: 'no-database',
 function aggregate(rows, { mount = '', host = '', fetchedAt = new Date().toISOString(), geo = NO_GEO } = {}) {
   const list = Array.isArray(rows) ? rows : [];
 
+  /* A RESOLVER MAY SUPPLY ONE LOOKUP AND NOT THE OTHER, and that is a real
+     state rather than a caller error: the ASN and city databases are configured
+     independently, and a deployment with only ASN is the expected first step.
+     Each missing lookup reports its own absence — with a DISTINCT reason, so
+     "no resolver was supplied" can be told apart from "a database is configured
+     and did not have this address" in the reasons tally. */
+  const lookupNetwork = typeof geo?.lookupNetwork === 'function'
+    ? (ip) => geo.lookupNetwork(ip)
+    : () => ({ resolved: false, reason: 'no-resolver', network: 'unknown', asn: null, org: null });
+  const lookupPlace = typeof geo?.lookupPlace === 'function'
+    ? (ip) => geo.lookupPlace(ip)
+    : () => ({ resolved: false, reason: 'no-resolver', countryCode: null, region: null, isEU: false, accuracyRadius: null, regionWithheld: null });
+
   const players = {};
   const platforms = {};
   const kinds = {};
@@ -336,6 +380,7 @@ function aggregate(rows, { mount = '', host = '', fetchedAt = new Date().toISOSt
   const channels = { direct: 0, aggregator: 0, datacenter: 0, unknown: 0 };
   const aggregators = {};
   const relayNetworks = {};
+  const places = emptyPlaces();
   let networkResolved = 0;
 
   const distinctIps = new Set();
@@ -361,7 +406,7 @@ function aggregate(rows, { mount = '', host = '', fetchedAt = new Date().toISOSt
     /* The IP is used here and discarded with the row. It never enters any
        accumulator above: `channels` counts, `aggregators` holds service names
        from the user agent, and `relayNetworks` holds AS organisations. */
-    const net = geo.lookupNetwork(r.ip);
+    const net = lookupNetwork(r.ip);
     if (net.resolved) networkResolved += 1;
     const ch = classifyChannel(cls, net);
     tally(channels, ch.channel);
@@ -372,6 +417,29 @@ function aggregate(rows, { mount = '', host = '', fetchedAt = new Date().toISOSt
        at this audience size a count of one would say something about a person
        — "1 listener at a named university" is not an aggregate. */
     if (ch.channel === 'datacenter' && ch.name) tally(relayNetworks, ch.name);
+
+    /* GEOGRAPHY — relays excluded. See emptyPlaces(): a datacenter address
+       geolocates to the datacenter, so counting relays would report the
+       hosting region as an audience. */
+    if (ch.channel === 'aggregator' || ch.channel === 'datacenter') {
+      places.relays += 1;
+    } else {
+      const pl = lookupPlace(r.ip);
+      if (!pl.resolved) {
+        places.unplaced += 1;
+        tally(places.reasons, pl.reason || 'unknown');
+      } else {
+        places.placed += 1;
+        tally(places.countries, pl.countryCode);
+        if (pl.countryCode === 'US') {
+          if (pl.region) tally(places.usStates, pl.region);
+          else {
+            places.stateWithheld += 1;
+            tally(places.reasons, pl.regionWithheld || 'no-region');
+          }
+        }
+      }
+    }
 
     if (r.connectedSec == null) { unknownDuration += 1; continue; }
     humanDurations.push(r.connectedSec);
@@ -412,6 +480,7 @@ function aggregate(rows, { mount = '', host = '', fetchedAt = new Date().toISOSt
     aggregators,
     relayNetworks,
     proxied: proxiedSummary(channels, networkResolved, list.length - bots),
+    places,
   };
 }
 
@@ -471,6 +540,7 @@ function mergeAggregates(parts, { mount = '', host = '', fetchedAt = new Date().
     players: {}, platforms: {}, kinds: {},
     channels: { direct: 0, aggregator: 0, datacenter: 0, unknown: 0 },
     aggregators: {}, relayNetworks: {},
+    places: emptyPlaces(),
     merged: list.length,
   };
   for (const [label] of DURATION_BUCKETS) out.session.buckets[label] = 0;
@@ -488,6 +558,17 @@ function mergeAggregates(parts, { mount = '', host = '', fetchedAt = new Date().
     for (const [k, v] of Object.entries(p.channels || {})) out.channels[k] = (out.channels[k] || 0) + v;
     for (const [k, v] of Object.entries(p.aggregators || {})) out.aggregators[k] = (out.aggregators[k] || 0) + v;
     for (const [k, v] of Object.entries(p.relayNetworks || {})) out.relayNetworks[k] = (out.relayNetworks[k] || 0) + v;
+    /* Places merge by simple addition: they are COUNTS of connections, and the
+       same listener appearing on two mounts of one channel is two connections
+       in both the numerator and the denominator, so the shares stay right. */
+    for (const key of ['countries', 'usStates', 'reasons']) {
+      for (const [k, v] of Object.entries(p.places?.[key] || {})) {
+        out.places[key][k] = (out.places[key][k] || 0) + v;
+      }
+    }
+    for (const key of ['placed', 'relays', 'unplaced', 'stateWithheld']) {
+      out.places[key] += p.places?.[key] || 0;
+    }
     if (p.proxied?.networkCoverage != null) {
       networkResolved += p.proxied.networkCoverage * ((p.connections || 0) - (p.bots || 0));
     }

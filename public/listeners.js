@@ -753,6 +753,7 @@
       res = await fetch(`/api/listener-detail?days=${days}${scope()}`);
     } catch {
       panel.innerHTML = '<div class="muted">Could not reach the server.</div>';
+      blankGeo('Could not reach the server.');
       return;
     }
 
@@ -772,12 +773,20 @@
           ${res.status === 401 ? '<a class="deep-signin" href="/login.html">Sign in</a>' : ''}
         </div>`;
       if (hint) hint.textContent = '';
+      blankGeo(res.status === 401 ? 'Sign in to see where the audience is.' : 'Protected sections are switched off.');
       return;
     }
 
-    if (!res.ok) { panel.innerHTML = '<div class="muted">Unavailable.</div>'; return; }
+    if (!res.ok) {
+      panel.innerHTML = '<div class="muted">Unavailable.</div>';
+      blankGeo('Unavailable.');
+      return;
+    }
 
     const d = await res.json();
+    // ONE PAYLOAD, TWO SECTIONS. Both are drawn from this single response so a
+    // map and the headcounts beside it cannot come from two different fetches.
+    renderGeo(d).catch(() => {});
     const mounts = (d.mounts || []).filter((m) => (m.connections || 0) > 0);
 
     if (!d.credentialedHost) {
@@ -951,6 +960,103 @@
         ? `mix over ${rangeName} · session and per-mount figures read ${fmtWhen(d.lastRunAt)}`
         : '';
     }
+  }
+
+  /* Every early return in renderDeep must also clear this panel. Leaving the
+     last successful map on screen after a sign-out would show one reader's
+     audience to the next. */
+  function blankGeo(msg) {
+    const panel = document.getElementById('geo-panel');
+    const hint = document.getElementById('geo-hint');
+    if (panel) panel.innerHTML = `<div class="muted">${esc(msg)}</div>`;
+    if (hint) hint.textContent = '';
+  }
+
+  /* ── Where They Listen ────────────────────────────────────────────────
+     Reads the SAME payload as renderDeep — /api/listener-detail carries the
+     places block — so the map and the audience figures beside it can never
+     describe two different moments. */
+  async function renderGeo(d) {
+    const panel = document.getElementById('geo-panel');
+    const hint = document.getElementById('geo-hint');
+    if (!panel || !window.GeoMap) return;
+
+    const places = d.places || {};
+    const ready = GeoMap.readiness(places, d.geo);
+    const market = GeoMap.inMarket(places);
+    const countryRows = GeoMap.countries(places);
+
+    const notPlaced = `
+      <div class="geo-foot">
+        <span><strong>${places.placed || 0}</strong> connections located</span>
+        <span><strong>${places.relays || 0}</strong> relays excluded</span>
+        <span><strong>${places.unplaced || 0}</strong> could not be placed</span>
+      </div>`;
+
+    // The map, or the reason there isn't one — never a blank grid, which would
+    // read as an audience that exists nowhere.
+    const mapBlock = ready.ok
+      ? `<div class="geo-grid" role="img" aria-label="Listeners by US state">
+           ${GeoMap.tiles(places).map((t) => `
+             <div class="geo-tile step-${t.step}${t.code === market.home ? ' home' : ''}"
+                  style="grid-column:${t.col + 1};grid-row:${t.row + 1}"
+                  title="${esc(t.name)} — ${t.listeners} listener${t.listeners === 1 ? '' : 's'}">
+               <span class="geo-tile-code">${t.code}</span>
+               ${t.listeners ? `<span class="geo-tile-n">${t.listeners}</span>` : ''}
+             </div>`).join('')}
+         </div>
+         <div class="geo-legend">
+           <span>fewer</span>
+           ${[1, 2, 3, 4, 5].map((n) => `<i class="step-${n}"></i>`).join('')}
+           <span>more</span>
+         </div>`
+      : `<div class="geo-blocked">
+           <span class="material-symbols-outlined">public_off</span>
+           <div>
+             <div class="geo-blocked-title">${esc(ready.title)}</div>
+             <div class="geo-blocked-note">${esc(ready.note)}</div>
+           </div>
+         </div>`;
+
+    /* The headline. Stated as a STATE share and never as "in our coverage
+       area": the licence area is a metro, this is a whole state, and the gap
+       between them is real listeners in Dallas. */
+    const marketBlock = market.available
+      ? `<div class="geo-tiles">
+           <div class="deep-tile primary">
+             <div class="deep-tile-label">In ${esc(market.homeName)}</div>
+             <div class="deep-tile-value">${Math.round(market.share * 100)}%</div>
+             <div class="deep-tile-note">${market.inside} of ${market.usPlaced} located US connections.
+               <strong>A state, not a signal area</strong> — a listener across the state counts as inside.</div>
+           </div>
+           <div class="deep-tile">
+             <div class="deep-tile-label">Outside ${esc(market.home)}</div>
+             <div class="deep-tile-value">${market.outside}</div>
+             <div class="deep-tile-note">US listeners the broadcast signal never reaches</div>
+           </div>
+         </div>`
+      : `<div class="geo-note-line">${
+        market.reason === 'no-home-region'
+          ? 'Set <code>STATION_REGION</code> to the station\u2019s state (e.g. <code>TX</code>) to see the in-market share.'
+          : 'No US states located in this window.'
+      }</div>`;
+
+    const countryBlock = countryRows.length
+      ? `<div class="deep-sub">Country</div>
+         ${countryRows.map((c) => `
+           <div class="deep-bar-row">
+             <div class="deep-bar-label">${esc(c.code)}</div>
+             <div class="deep-bar-track"><div class="deep-bar-fill" style="width:${Math.round(c.share * 100)}%"></div></div>
+             <div class="deep-bar-val">${c.listeners}<span class="deep-bar-pct">${Math.round(c.share * 100)}%</span></div>
+           </div>`).join('')}`
+      : '';
+
+    const attribution = (d.attribution || []).length
+      ? `<div class="deep-attribution">${(d.attribution || []).map((a) => `<a href="${esc(a.url)}" target="_blank" rel="noopener noreferrer">${esc(a.text)}</a>`).join(' \u00b7 ')}</div>`
+      : '';
+
+    panel.innerHTML = marketBlock + mapBlock + notPlaced + countryBlock + attribution;
+    if (hint) hint.textContent = d.lastRunAt ? `read ${fmtWhen(d.lastRunAt)}` : '';
   }
 
   /* ── Range echo ───────────────────────────────────────────────────────

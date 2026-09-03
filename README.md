@@ -78,6 +78,8 @@ If you are an AI assistant or developer picking up this project, here is the ess
 - **`server.js`**: Express server entrypoint. Serves static files from `public/` and the API.
 - **`monitor.js`**: Check engine. Owns the check cycle, the episode/event lifecycle, the silence engine, and Nodemailer alerts.
 - **`diagnose.js`**: Root-cause diagnosis engine. Instrumented stream probe (DNS/TCP/TLS/TTFB timings), Icecast mount-inventory snapshot, and the classifier that turns a transport error into an actionable cause.
+- **`geo-update.js`**: Downloads GeoLite2 onto the data volume at startup. The only network code in the geo path — deliberately outside `geo.js`, because that module's rule is *never send a listener's address anywhere*.
+- **`public/geo-map.js`**: The state cartogram and in-market arithmetic. Separate from the page so Node can test it; `window.GeoMap` in the browser.
 - **`geo.js`**: Local MMDB lookups — IP to network (relay detection) and IP to place. An IP goes in; a place and a network class come out, never coordinates. Both databases optional and supplied by the deployer.
 - **`store.js`**: Persistence. Splits the long-term event record from rolling telemetry; handles atomic writes, hourly compaction, and legacy migration.
 - **`public/index.html` / `app.js`**: Live dashboard.
@@ -353,6 +355,49 @@ size a count of one would say something about a person rather than a population.
 
 Shares are merged across mounts by recomputing from summed counts, never by
 averaging — and a merged figure inherits the **weakest** confidence of its parts.
+
+### Where the audience is
+
+**Counted per country and per US state — never a coordinate, never a city,
+never a point on a map.** The scope document ruled out a dot-per-listener map
+on three grounds: it implies precision the data lacks, it is the privacy-worst
+option, and it answers a worse question than "which states, and how much is
+outside the signal area".
+
+| Rule | Why |
+|---|---|
+| **US → state; everywhere else → country** | Sub-national accuracy outside the US, Canada, Western Europe and Australia is materially weaker, and a wrong region is worse than an admitted country |
+| **A state is published only if `accuracy_radius` clears the gate** | A wide radius is a region **centroid**, not a place. Ungated, it manufactures listeners where nobody lives |
+| **Relays are excluded from geography** | A datacenter address geolocates to the datacenter. On production this is 41 connections that would otherwise report as an audience in Virginia |
+| **In-market share is measured against US-located connections** | Any other denominator falls when the *database* gets worse, so a data-quality problem reads as an audience decline |
+
+**The in-market figure is a STATE, not a coverage area.** KPFT's licence covers
+Greater Houston; this counts everyone in Texas, so it overstates the audience
+inside the footprint and is labelled as a state share. Set `STATION_REGION`;
+without it the figure is withheld rather than guessed from the largest state.
+
+**The map is a tile grid, not a shaped map of the US.** Area is not audience: a
+geographic choropleth makes Montana sixty times the size of Rhode Island and
+hides Delaware, DC and Rhode Island entirely. Equal tiles match the published
+resolution and imply nothing more.
+
+#### The city database must report its own accuracy
+
+**`MAXMIND_LICENSE_KEY` is required for state-level figures**, and the app
+downloads GeoLite2 City onto the data volume itself. This is not a preference:
+
+| | GeoLite2 City | DB-IP City Lite |
+|---|---|---|
+| `accuracy_radius` | present | **absent entirely** |
+| Usable resolution here | **state** | country only |
+
+Without that field the centroid guard cannot run, so the app reports countries
+and **withholds every state on purpose**, saying which database is installed and
+what is missing. It never draws a blank map.
+
+GeoLite2 is free of charge but its EULA restricts redistribution, which is why
+it is downloaded per deployment rather than baked into the image the way the
+CC BY-licensed ASN database is.
 
 ### Diagnosis
 

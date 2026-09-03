@@ -67,6 +67,7 @@ COPY safe-url.js ./
 COPY discover.js ./
 COPY listener-detail.js ./
 COPY geo.js ./
+COPY geo-update.js ./
 COPY device-store.js ./
 COPY scripts/ ./scripts/
 COPY seed/ ./seed/

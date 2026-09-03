@@ -207,7 +207,7 @@ server-side rather than shipping rows to the page.
 | 5.6 | TSL, session distribution, player and device breakdown |
 | 5.7 | Exact tune-ins; real ATH |
 | 5.8 | Audience retained through an outage |
-| 5.9 | Geography — in-market share, then country, then US state |
+| 5.9 | Geography — in-market share, then country, then US state. **DONE 2026-09-02** — needs `MAXMIND_LICENSE_KEY`; DB-IP City cannot do states, see `HANDOFF.md` §5j |
 
 **5.4 landed after the session figures it was supposed to precede.** The build
 order says the proxied share must ship *before* anything derived from sessions,

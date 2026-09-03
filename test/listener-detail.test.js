@@ -512,3 +512,116 @@ test('classifyChannel falls back to unknown when nothing is known', () => {
   );
   assert.equal(ch.channel, 'unknown');
 });
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   Geography aggregation
+
+   THE ERROR THIS PREVENTS, and it would have been the biggest number on the
+   page: a relay geolocates to the DATACENTER. Counting proxied connections in
+   the geography would report "our second-largest state is Virginia" — which is
+   where a lot of AWS is, and which reads as a genuine finding about an
+   audience that does not exist there.
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+const PLACE_GEO = {
+  lookupNetwork: (ip) => (
+    String(ip).startsWith('192.0.2.')
+      ? { resolved: true, network: 'hosting', asn: 16509, org: 'AMAZON-02' }
+      : { resolved: true, network: 'unrecognised', asn: 7922, org: 'Comcast' }
+  ),
+  lookupPlace: (ip) => {
+    const map = {
+      '203.0.113.1': { countryCode: 'US', region: 'TX' },
+      '203.0.113.2': { countryCode: 'US', region: 'CA' },
+      '203.0.113.3': { countryCode: 'GB', region: null },
+      // A relay in Virginia. If geography counted it, VA would appear.
+      '192.0.2.50': { countryCode: 'US', region: 'VA' },
+    };
+    const hit = map[String(ip)];
+    if (!hit) return { resolved: false, reason: 'not-in-database', countryCode: null, region: null, isEU: false, accuracyRadius: null, regionWithheld: null };
+    return { resolved: true, reason: null, isEU: false, accuracyRadius: 20, regionWithheld: null, ...hit };
+  },
+};
+
+const PLACE_ROWS = [
+  { ip: '203.0.113.1', userAgent: 'Safari/604.1',  connectedSec: 900, id: '1' },
+  { ip: '203.0.113.2', userAgent: 'VLC/3.0.20',    connectedSec: 60,  id: '2' },
+  { ip: '203.0.113.3', userAgent: 'Mozilla/5.0 Firefox/1', connectedSec: 300, id: '3' },
+  { ip: '192.0.2.50',  userAgent: 'okhttp/4.9.0',  connectedSec: 100, id: '4' },
+  { ip: '198.51.100.7', userAgent: 'Sonos/70.1',   connectedSec: 200, id: '5' },
+];
+
+test('RELAYS ARE EXCLUDED FROM GEOGRAPHY, and counted separately', () => {
+  const p = ld.aggregate(PLACE_ROWS, { mount: '/m', geo: PLACE_GEO }).places;
+  assert.equal(p.relays, 1);
+  assert.ok(!('VA' in p.usStates), 'a datacenter must never appear as an audience state');
+  assert.deepEqual(p.usStates, { TX: 1, CA: 1 });
+});
+
+test('countries and states are counted, and non-US carries no state', () => {
+  const p = ld.aggregate(PLACE_ROWS, { mount: '/m', geo: PLACE_GEO }).places;
+  assert.deepEqual(p.countries, { US: 2, GB: 1 });
+  assert.equal(p.placed, 3);
+});
+
+test('an address the database cannot place is counted with its reason', () => {
+  /* "We could not place 14% of connections" is a finding. Silently dropping
+     them would make the located share look like the whole audience. */
+  const p = ld.aggregate(PLACE_ROWS, { mount: '/m', geo: PLACE_GEO }).places;
+  assert.equal(p.unplaced, 1);
+  assert.equal(p.reasons['not-in-database'], 1);
+});
+
+test('with no geo resolver at all, places is empty rather than absent', () => {
+  // A missing block would make every consumer optional-chain around it.
+  const p = ld.aggregate(PLACE_ROWS, { mount: '/m' }).places;
+  assert.deepEqual(p.countries, {});
+  assert.equal(p.placed, 0);
+  assert.equal(p.unplaced, 5, 'nothing can be classified as a relay either, so all five are unplaced');
+});
+
+test('a resolver with only ONE lookup is a supported state, not a crash', () => {
+  /* The ASN and city databases are configured independently, and ASN-only is
+     the expected first deployment. A partial resolver must report the missing
+     signal, not throw halfway through a collection pass. */
+  const asnOnly = { lookupNetwork: () => ({ resolved: true, network: 'unrecognised', asn: 1, org: 'ISP' }) };
+  const p = ld.aggregate(PLACE_ROWS, { mount: '/m', geo: asnOnly }).places;
+  assert.equal(p.placed, 0);
+  assert.equal(p.reasons['no-resolver'], 5);
+});
+
+test('THE BOUNDARY: no IP survives the geography path', () => {
+  const json = JSON.stringify(ld.aggregate(PLACE_ROWS, { mount: '/m', geo: PLACE_GEO }).places);
+  for (const r of PLACE_ROWS) assert.ok(!json.includes(r.ip), `${r.ip} leaked`);
+});
+
+test('places merge by addition across mounts', () => {
+  const a = ld.aggregate(PLACE_ROWS, { mount: '/a', geo: PLACE_GEO });
+  const b = ld.aggregate(PLACE_ROWS, { mount: '/b', geo: PLACE_GEO });
+  const m = ld.mergeAggregates([a, b], { mount: 'channel' });
+  assert.deepEqual(m.places.usStates, { TX: 2, CA: 2 });
+  assert.deepEqual(m.places.countries, { US: 4, GB: 2 });
+  assert.equal(m.places.relays, 2);
+  assert.equal(m.places.unplaced, 2);
+});
+
+test('a state withheld by the centroid guard is counted, not silently dropped', () => {
+  /* This is what a DB-IP City database produces for every US address: a country
+     but no state. The count is what lets the page say "the wrong database is
+     installed" instead of drawing an empty map. */
+  const geoNoRadius = {
+    lookupNetwork: () => ({ resolved: true, network: 'unrecognised', asn: 1, org: 'ISP' }),
+    lookupPlace: () => ({
+      resolved: true, reason: null, countryCode: 'US', region: null,
+      isEU: false, accuracyRadius: null, regionWithheld: 'no-accuracy-radius',
+    }),
+  };
+  const p = ld.aggregate(
+    [{ ip: '203.0.113.9', userAgent: 'Safari/604.1', connectedSec: 60, id: '1' }],
+    { mount: '/m', geo: geoNoRadius },
+  ).places;
+  assert.deepEqual(p.countries, { US: 1 });
+  assert.deepEqual(p.usStates, {});
+  assert.equal(p.stateWithheld, 1);
+  assert.equal(p.reasons['no-accuracy-radius'], 1);
+});

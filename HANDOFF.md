@@ -206,6 +206,8 @@ silently alters what lands in someone's inbox.
 | `safe-url.js` | ~150 | **SSRF guard** for fetching user-supplied URLs |
 | `discover.js` | 822 | Station discovery: mount → channel grouping, validation |
 | `listener-detail.js` | 605 | `/admin/listclients`: parsing, agent + **channel classification**, **the privacy boundary** — IPs go in, aggregates come out |
+| `geo-update.js` | ~250 | **Downloads GeoLite2 onto the data volume.** The only network code in the geo path, deliberately outside `geo.js` |
+| `public/geo-map.js` | ~200 | **The cartogram and the in-market arithmetic**, separate so Node can test it. `window.GeoMap` in the browser |
 | `geo.js` | 435 | **Local MMDB lookups.** IP → network (relay detection) and IP → place. No coordinates ever leave it. Databases optional, deployer-supplied |
 | `device-store.js` | 297 | SQLite device records behind cume |
 | `public/app.js` | 852 | Dashboard |
@@ -791,6 +793,71 @@ listener's IP to a third party, one request per listener, for ever.
 country-only rule and the centroid gate, both tested, but no aggregation, no API
 and no page. It also needs a **city** database, which is where the accuracy
 argument genuinely bites and where a MaxMind account may earn its keep.
+
+---
+
+## 5j. Also 2026-09-02: the map (Phase 5.9)
+
+**Built:** `geo-update.js`, `public/geo-map.js`, a "Where They Listen" section,
+and geography aggregation in `listener-detail.js`.
+
+### The finding that decided the database, measured not argued
+
+`ADMIN-ACCESS-SCOPE.md` §2 recommended MaxMind GeoLite2 City over DB-IP on
+*accuracy*. The real reason is harder, and it was found by fetching both files:
+
+| | MaxMind GeoLite2 City | DB-IP City Lite |
+|---|---|---|
+| `subdivisions[0].iso_code` | `"TX"` | **absent** — only the name |
+| `location.accuracy_radius` | present | **absent entirely** |
+
+**`accuracy_radius` is the centroid guard.** It is the only field that says an
+answer is a fallback rather than a place. Without it a manufactured cluster is
+indistinguishable from a finding — the Kansas-farm artefact. So DB-IP City is
+used at **country resolution only**, and the app withholds every US state with
+`regionWithheld: 'no-accuracy-radius'` and says so on the page. Verified against
+production: 173 US connections placed by country, 173 states withheld.
+
+State NAMES are mapped back to codes (`US_STATE_CODES`) so a DB-IP database is
+not silently stateless for a second, separate reason.
+
+### How the city database reaches a server nobody can shell into
+
+The ASN database rides in the image because CC BY permits redistribution.
+**GeoLite2's EULA does not**, so it cannot travel that way. `geo-update.js`
+downloads it at startup onto the **data volume**, under the deployment's own
+licence key — MaxMind's own documented pattern, and nothing is redistributed by
+us. It also fixes staleness, which the image-baked ASN database still has.
+
+**This does not contradict the rule in `geo.js`.** That rule is *never send a
+listener's address to a third party*; downloading a database file sends nobody's
+address anywhere. The network code lives in `geo-update.js` and
+`test/geo-update.test.js` asserts `geo.js` still has no HTTP client — an http
+client in there is one refactor away from being pointed at a per-listener API.
+
+MaxMind ships `.tar.gz` only, so the updater walks the tar directly rather than
+shelling out or adding a dependency. The entry is matched **by extension**: the
+directory name carries a build date that changes every download.
+
+### A tile grid, not a shaped map
+
+The scope doc says "SVG choropleth — US states". It is one, with the geometry
+changed deliberately: **area is not audience.** A shaped map makes Montana sixty
+times the size of Rhode Island, hides Delaware, DC and Rhode Island — where a
+Pacifica audience actually concentrates — and implies a precision a
+radius-gated state figure does not have. Equal tiles say "per-state" and stop.
+It also saves ~120 KB of path data.
+
+### Traps this adds
+
+| | |
+|---|---|
+| Counting relays in the geography | A datacenter address geolocates to the DATACENTER. Production has **41** relays; unexcluded they would report as an audience in Virginia and be the largest error on the page |
+| Dividing the in-market share by anything but US-placed connections | Using `placed` or all connections gives a number that FALLS when the database gets worse, so a data-quality problem reads as an audience shift |
+| Guessing the home state from the largest one | Usually right, and the one station it is wrong for gets a confident wrong headline. `STATION_REGION` or the figure is withheld |
+| Calling the in-market figure a coverage area | It is a whole STATE. A listener in Dallas counts as inside KPFT's "market" |
+| Rendering a blank grid | "No database", "wrong database" and "no data yet" are three problems with three different fixes. `readiness()` keeps them apart |
+| Painting a one-listener state as empty | Any listener gets at least band 1 |
 
 ---
 

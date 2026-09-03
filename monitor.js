@@ -4185,6 +4185,12 @@ module.exports = {
      configuration rather than data, and the CC-licensed databases REQUIRE the
      credit to be displayed wherever their data is shown — so the page that
      renders the figures has to be able to read it. */
+  /* The station's own US state, for the in-market share. Optional: without it
+     the page shows the distribution and says which figure is missing, rather
+     than guessing that the largest state is the home one — which is usually
+     true and is exactly the kind of "usually" that produces a wrong headline
+     for the one station where it is false. */
+  homeRegion: () => (process.env.STATION_REGION || '').trim().toUpperCase() || null,
   geoAvailable: () => geo.available(),
   geoAttribution: () => geo.attribution(),
 };

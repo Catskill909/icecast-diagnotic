@@ -924,3 +924,154 @@
 }
 
 .deep-attribution a:hover { color: var(--text-secondary); }
+
+/* ── Where They Listen ──────────────────────────────────────────────────────
+   A TILE GRID, not a shaped map. Equal squares because the quantity is
+   listeners per state: a geographic map makes Montana sixty times the size of
+   Rhode Island and reads as sixty times more important, and it hides Delaware,
+   DC and Rhode Island entirely — which is where a Pacifica audience actually
+   concentrates. Equal tiles also match our published resolution: a drawn
+   coastline implies a precision the data does not have. */
+
+.geo-tiles {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 12px;
+  margin-bottom: 18px;
+}
+
+.geo-grid {
+  display: grid;
+  grid-template-columns: repeat(11, 1fr);
+  grid-template-rows: repeat(8, auto);
+  gap: 5px;
+  max-width: 620px;
+  margin: 4px 0 12px;
+}
+
+.geo-tile {
+  aspect-ratio: 1;
+  border-radius: 5px;
+  background: var(--surface-2);
+  border: 1px solid var(--surface-3);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 1px;
+  min-width: 0;
+  transition: transform 0.12s ease;
+}
+
+.geo-tile:hover { transform: scale(1.12); }
+
+.geo-tile-code {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  color: var(--text-tertiary);
+  line-height: 1;
+}
+
+.geo-tile-n {
+  font-size: 9px;
+  color: var(--text-tertiary);
+  line-height: 1;
+  opacity: 0.85;
+}
+
+/* FIVE BANDS, NOT A CONTINUOUS RAMP. A smooth scale invites reading a shade as
+   a value, which at these audience sizes it cannot support — one listener would
+   be a visible difference in shade. Bands say "more" and "fewer" and stop. */
+.geo-tile.step-1 { background: rgba(124, 106, 239, 0.16); border-color: rgba(124, 106, 239, 0.22); }
+.geo-tile.step-2 { background: rgba(124, 106, 239, 0.32); border-color: rgba(124, 106, 239, 0.36); }
+.geo-tile.step-3 { background: rgba(124, 106, 239, 0.50); border-color: rgba(124, 106, 239, 0.54); }
+.geo-tile.step-4 { background: rgba(124, 106, 239, 0.70); border-color: rgba(124, 106, 239, 0.74); }
+.geo-tile.step-5 { background: var(--primary); border-color: var(--primary-light); }
+
+.geo-tile.step-3 .geo-tile-code,
+.geo-tile.step-4 .geo-tile-code,
+.geo-tile.step-5 .geo-tile-code,
+.geo-tile.step-3 .geo-tile-n,
+.geo-tile.step-4 .geo-tile-n,
+.geo-tile.step-5 .geo-tile-n { color: #fff; }
+
+/* The station's own state, marked so the in-market figure above can be found
+   on the map without hunting for it. */
+.geo-tile.home {
+  outline: 2px solid var(--status-up);
+  outline-offset: 1px;
+}
+
+.geo-legend {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 10px;
+  color: var(--text-tertiary);
+  margin-bottom: 14px;
+}
+
+.geo-legend i {
+  width: 20px;
+  height: 10px;
+  border-radius: 2px;
+  display: inline-block;
+}
+
+.geo-legend i.step-1 { background: rgba(124, 106, 239, 0.16); }
+.geo-legend i.step-2 { background: rgba(124, 106, 239, 0.32); }
+.geo-legend i.step-3 { background: rgba(124, 106, 239, 0.50); }
+.geo-legend i.step-4 { background: rgba(124, 106, 239, 0.70); }
+.geo-legend i.step-5 { background: var(--primary); }
+
+/* Not a blank grid. An empty map reads as "our audience is nowhere"; this says
+   which of three different problems is actually in the way. */
+.geo-blocked {
+  display: flex;
+  gap: 14px;
+  align-items: flex-start;
+  background: var(--warn-surface);
+  border: 1px solid rgba(245, 158, 11, 0.25);
+  border-radius: var(--radius-md);
+  padding: 16px 18px;
+  margin-bottom: 14px;
+}
+
+.geo-blocked .material-symbols-outlined { color: var(--warn); font-size: 22px; }
+.geo-blocked-title { font-size: 13px; font-weight: 600; color: var(--text-primary); margin-bottom: 4px; }
+.geo-blocked-note { font-size: 11px; color: var(--text-secondary); line-height: 1.55; }
+
+.geo-foot {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 18px;
+  font-size: 11px;
+  color: var(--text-tertiary);
+  padding: 10px 0;
+  border-top: 1px solid var(--border);
+  margin-bottom: 12px;
+}
+
+.geo-foot strong { color: var(--text-secondary); }
+
+.geo-note-line {
+  font-size: 12px;
+  color: var(--text-secondary);
+  margin-bottom: 14px;
+  line-height: 1.6;
+}
+
+.geo-note-line code {
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: 11px;
+  background: var(--surface-2);
+  border-radius: 4px;
+  padding: 1px 5px;
+}
+
+@media (max-width: 560px) {
+  .geo-grid { max-width: 100%; gap: 3px; }
+  .geo-tile-n { display: none; }
+  .geo-tile-code { font-size: 8px; }
+}
