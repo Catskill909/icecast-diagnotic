@@ -29,6 +29,7 @@
 
   let days = 7;
   let data = null;
+  let loadVersion = 0;
 
   // One colour per channel, held stable across every chart and table on the
   // page — a legend that means something different in two places is worse than
@@ -99,12 +100,28 @@
   /* ── Data ────────────────────────────────────────────────────────────── */
 
   async function load() {
+    const version = ++loadVersion;
+    // Clear the previous selection before any request can finish. Both APIs
+    // refresh together, but a protected-panel failure must not hide public data.
+    data = null;
+    render();
+    $('#aud-tiles').innerHTML = '<div class="aud-empty">Loading audience data…</div>';
+    $('#range-note').textContent = 'Updating…';
+    renderDeep(version).catch(() => {
+      if (version !== loadVersion) return;
+      const panel = $('#deep-panel');
+      if (panel) panel.innerHTML = '<div class="muted">Could not load listener detail.</div>';
+      blankGeo('Could not load listener detail.');
+    });
+    let next;
     try {
       const r = await fetch(`/api/listeners?days=${days}${scope()}`);
-      data = r.ok ? await r.json() : null;
+      next = r.ok ? await r.json() : null;
     } catch (e) {
-      data = null;
+      next = null;
     }
+    if (version !== loadVersion) return;
+    data = next;
     render();
     $('#loading').style.display = 'none';
     $('#audience-view').style.display = '';
@@ -136,10 +153,12 @@
   function render() {
     if (!data || !rows().length) {
       $('#aud-tiles').innerHTML = '<div class="aud-empty">No audience data in this range yet.</div>';
-      ['#count-cards', '#aud-lines', '#channel-table', '#daily-table', '#mount-breakdown', '#hour-profile'].forEach((s) => {
+      ['#count-cards', '#aud-lines', '#channel-table', '#daily-table', '#mount-breakdown', '#hour-profile', '#ath-panel'].forEach((s) => {
         const el = $(s);
         if (el) el.innerHTML = '';
       });
+      $('#ath-hint').textContent = '';
+      $('#range-note').textContent = '';
       return;
     }
     renderCounts();
@@ -743,20 +762,25 @@
     }).join('');
   }
 
-  async function renderDeep() {
+  async function renderDeep(version) {
     const panel = document.getElementById('deep-panel');
     const hint = document.getElementById('deep-hint');
     if (!panel) return;
+    panel.innerHTML = '<div class="muted">Loading listener detail…</div>';
+    if (hint) hint.textContent = '';
+    blankGeo('Loading listener detail…');
 
     let res;
     try {
       res = await fetch(`/api/listener-detail?days=${days}${scope()}`);
     } catch {
+      if (version !== loadVersion) return;
       panel.innerHTML = '<div class="muted">Could not reach the server.</div>';
       blankGeo('Could not reach the server.');
       return;
     }
 
+    if (version !== loadVersion) return;
     if (res.status === 401 || res.status === 503) {
       // 401 = not signed in. 503 = no admin password configured on the server.
       // Different causes, and the fix differs, so they do not share a message.
@@ -784,6 +808,7 @@
     }
 
     const d = await res.json();
+    if (version !== loadVersion) return;
     // ONE PAYLOAD, TWO SECTIONS. Both are drawn from this single response so a
     // map and the headcounts beside it cannot come from two different fetches.
     renderGeo(d).catch(() => {});
@@ -801,8 +826,9 @@
       return;
     }
 
-    if (!mounts.length) {
-      panel.innerHTML = '<div class="muted">No listener detail collected yet — the first pass runs within a few minutes of startup.</div>';
+    if (!mounts.length && !d.period?.devices) {
+      panel.innerHTML = '<div class="muted">No listener detail available for this selection yet.</div>';
+      if (hint) hint.textContent = '';
       return;
     }
 
@@ -917,13 +943,13 @@
         </div>
         <div class="deep-tile">
           <div class="deep-tile-label">Longest session</div>
-          <div class="deep-tile-value">${fmtSession(Math.max(...mounts.map((m) => m.session?.maxSec || 0)) || null)}</div>
+          <div class="deep-tile-value">${fmtSession(Math.max(0, ...mounts.map((m) => m.session?.maxSec || 0)) || null)}</div>
           <div class="deep-tile-note">of a real listener, machines removed</div>
         </div>
         <div class="deep-tile">
           <div class="deep-tile-label">Distinct addresses</div>
           <div class="deep-tile-value">${d.distinctAddresses == null ? '—' : d.distinctAddresses}</div>
-          <div class="deep-tile-note">connected right now. <strong>Not a headcount</strong> — a household shares one address, and an aggregator can hide hundreds behind one.</div>
+          <div class="deep-tile-note">${d.distinctAddresses == null ? 'A distinct address total is not available for this selection.' : 'connected right now.'} <strong>Not a headcount</strong> — a household shares one address, and an aggregator can hide hundreds behind one.</div>
         </div>
         <div class="deep-tile">
           <div class="deep-tile-label">Mounts measured</div>
@@ -1103,7 +1129,6 @@
     days = parseFloat(btn.dataset.days) || 7;
     syncRangeEcho();
     load();
-    renderDeep().catch(() => {});
   });
 
   document.getElementById('export-btn').addEventListener('click', exportCsv);
@@ -1112,8 +1137,5 @@
     await initStationPicker();
     syncRangeEcho();
     await load();
-    // Independent of load(): a failure here must not take the public page with
-    // it, and it does not move with the date-range pills — it is a live reading.
-    renderDeep().catch(() => {});
   })();
 })();

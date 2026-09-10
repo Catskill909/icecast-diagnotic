@@ -740,13 +740,28 @@ app.get('/api/listener-detail', auth.requireAuth, (req, res) => {
   const sinceMs = Date.now() - days * 24 * 60 * 60 * 1000;
   const period = { days, ...monitor.getDistinctDevices(streamIds, sinceMs) };
 
+  // A path alone is not unique: stations can use the same mount on different
+  // hosts. Scope every live aggregate before computing totals and geography.
+  const stationMounts = station ? new Set(monitor.getStreams()
+    .filter((stream) => streamIds.includes(stream.id))
+    .flatMap((stream) => {
+      let host;
+      try { host = new URL(stream.url).host; } catch { return []; }
+      return diagnose.channelMountPaths(stream).map((mount) => host + mount);
+    })) : null;
   const mounts = Object.entries(detail.mounts)
+    .filter(([key]) => !stationMounts || stationMounts.has(key))
     .filter(([key]) => !mountFilter || key.endsWith(mountFilter))
     .map(([key, agg]) => ({ key, ...agg }))
     .sort((a, b) => (b.listeners || 0) - (a.listeners || 0));
 
   res.json({
     ...detail.meta,
+    // Only the full collection has a cross-mount address union. Summing mount
+    // counts would double-count listeners using multiple bitrates.
+    distinctAddresses: station || mountFilter
+      ? (mounts.length === 1 ? mounts[0].distinctAddresses ?? null : null)
+      : detail.meta.distinctAddresses,
     period,
     enabled: monitor.LISTENER_DETAIL_ENABLED,
     everyCycles: monitor.LISTENER_DETAIL_EVERY,

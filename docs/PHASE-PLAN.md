@@ -405,3 +405,26 @@ negotiated, and Phase 6 becomes engineering rather than politics.
 **Explicitly NOT a question any more: per-user roles and multi-user accounts.**
 One shared admin credential, plus a narrow public page. Anything more is not
 planned.
+
+
+## Audience filter bug fix — 2026-09-10
+
+Status: **In progress** — implementation and targeted regression tests complete;
+manual deployment and signed-in browser acceptance remain open.
+
+- [x] Changing station or range requests both audience APIs for the selection.
+- [x] Player/App and platform figures update without a page reload.
+- [x] Live totals, sessions, mounts, distribution and geography use the same
+  station scope, keyed by host plus path; All stations remains supported.
+- [x] Previous figures clear during loading, including listening hours; late
+  fetch/JSON results and failures cannot overwrite a newer selection.
+- [x] Historical device totals remain available without current listeners.
+- [x] Six targeted behavioral tests and JS syntax checks pass. Full-suite
+  baseline failures are recorded in HANDOFF.md and docs/DEVLOG.md.
+- [ ] Deploy through the existing manual Coolify release flow and verify in a
+  signed-in browser: KPFK → All stations → another station, range changes, rapid
+  changes, and absence of stale Player/App or per-mount values.
+
+Exit criteria: all checks above pass, with deployment and browser evidence
+recorded. A scoped multi-mount distinct-address union remains unavailable because
+it is not stored; the page explicitly says so.
