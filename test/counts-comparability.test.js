@@ -41,6 +41,11 @@ const DAY = 24 * HOUR;
 // Hour-aligned, so the windows below start and end on exact hour boundaries and
 // "hours covered" can be compared against "hours in the window" without slack.
 const NOW = Date.parse('2026-09-01T13:00:00.000Z');
+
+// load() prunes against Date.now(), not the explicit query time. Keep these
+// historical fixtures inside retention regardless of the day CI runs.
+test.mock.timers.enable({ apis: ['Date'], now: NOW });
+test.after(() => test.mock.timers.reset());
 const WEEK_START = NOW - 7 * DAY;
 const PREV_WEEK_START = NOW - 14 * DAY;
 const PREV_WEEK_HOURS = 7 * 24;

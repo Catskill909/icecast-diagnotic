@@ -1,5 +1,37 @@
 # Handoff — Icecast Monitor
 
+## 2026-09-10 — Fix date-sensitive CI tests
+
+The owner pushed the audience refresh as `62691e8` and reported GitHub CI #111:
+Unit tests failed; Image builds and boots passed (screenshot). Coolify was not
+deployed. GitHub CLI is not authenticated in this session, so remote job logs
+were not retrieved; the screenshot establishes job status, not individual failures.
+
+The six locally reproduced failures were caused by historical fixtures being
+pruned during `store.load()` using the real wall clock. Queries passed a fixed
+`NOW`, but loading did not. `test/counts-comparability.test.js` now freezes Date
+at its existing 2026-09-01 fixture time; `test/mount-collision-repair.test.js`
+freezes it 30 minutes after the historical repair cutoff. Each file resets the
+mock after its tests. All existing assertions remain; production retention,
+comparison calculations, repair logic, and the CI workflow are unchanged.
+
+Verification: Node 24.20.0, both affected files 12/12 passing; complete suite
+656/656 passing, zero failures/skips (6.43 seconds). `git diff --check` passed.
+This resolves all six previously recorded baseline failures. The full run needed
+local networking permission for the existing HTTP-server tests. Docker was not
+rerun locally because only tests/docs changed; the owner's screenshot shows the
+image job passed for `62691e8`.
+
+Files: `test/counts-comparability.test.js`,
+`test/mount-collision-repair.test.js`, `HANDOFF.md`, `docs/PHASE-PLAN.md`,
+`docs/DEVLOG.md`. README behavior/setup is unchanged.
+
+Next action: commit and push this test fix, wait for BOTH GitHub CI jobs to pass,
+then perform the manual Coolify deploy and verify station/range switching in a
+signed-in browser. This correction is local and has not been pushed or deployed.
+
+---
+
 ## 2026-09-10 — Audience station selection refresh
 
 Status: implemented locally; not deployed or verified in a real browser against production.

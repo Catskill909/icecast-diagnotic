@@ -36,6 +36,11 @@ const VICTIM = 'wbai-wpfw';
 const CUTOFF = Date.parse('2026-08-29T17:11:00.000Z');
 const MIN = 60e3;
 
+// load() prunes against Date.now(), not the explicit query time. Keep these
+// historical fixtures inside retention regardless of the day CI runs.
+test.mock.timers.enable({ apis: ['Date'], now: CUTOFF + 30 * MIN });
+test.after(() => test.mock.timers.reset());
+
 /** A sample in the shape the monitor writes, uptime fields and all. */
 const sample = (t, listeners, extra = {}) => ({
   timestamp: new Date(t).toISOString(),

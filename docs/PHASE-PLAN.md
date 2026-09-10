@@ -419,8 +419,8 @@ manual deployment and signed-in browser acceptance remain open.
 - [x] Previous figures clear during loading, including listening hours; late
   fetch/JSON results and failures cannot overwrite a newer selection.
 - [x] Historical device totals remain available without current listeners.
-- [x] Six targeted behavioral tests and JS syntax checks pass. Full-suite
-  baseline failures are recorded in HANDOFF.md and docs/DEVLOG.md.
+- [x] Six targeted behavioral tests and JS syntax checks pass. Full suite now passes 656/656 after freezing the two historical fixture
+  clocks (2026-09-10); evidence is in HANDOFF.md and docs/DEVLOG.md.
 - [ ] Deploy through the existing manual Coolify release flow and verify in a
   signed-in browser: KPFK → All stations → another station, range changes, rapid
   changes, and absence of stale Player/App or per-mount values.
@@ -428,3 +428,17 @@ manual deployment and signed-in browser acceptance remain open.
 Exit criteria: all checks above pass, with deployment and browser evidence
 recorded. A scoped multi-mount distinct-address union remains unavailable because
 it is not stored; the page explicitly says so.
+
+
+## CI fixture clock repair — 2026-09-10
+
+Status: **Complete** — all local exit criteria verified on 2026-09-10.
+
+- [x] Freeze the historical fixtures before store.load() applies retention.
+- [x] Keep all original assertions and production retention/repair logic intact.
+- [x] Both affected test files pass 12/12; the full suite passes 656/656 with
+  no failures or skips on Node 24.20.0. Diff whitespace check passes.
+
+Release remains pending: push the correction and confirm GitHub CI is green
+before the owner deploys through Coolify. Audience browser acceptance remains
+open in the preceding section.
