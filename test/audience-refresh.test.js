@@ -132,6 +132,8 @@ test('listener-detail scopes mounts, totals, distribution and geography by host 
       getDistinctDevices: (ids) => ({ devices: ids.length }),
       getReturningDevices: (ids) => ({ current: ids.length, comparable: false, reason: 'nothing-recorded' }),
       getDeviceTrend: (ids) => ({ granularity: 'day', buckets: ids.map(() => ({ key: '2026-09-01', devices: 1, families: {}, platforms: {} })) }),
+      getRegionHourProfile: (ids, _s, _u, tz) => ({ regions: ids.map(() => ({ key: 'US:TX', hours: new Array(24).fill(0), total: 1 })), timeZone: tz, total: ids.length }),
+      stationTz: (id) => (id === 'kpfk' ? 'America/Los_Angeles' : 'UTC'),
       adminHost: () => 'one.test', geoAvailable: () => ({}), geoAttribution: () => ({}), homeRegion: () => 'CA',
     },
     listenerDetail: { mergeAggregates: (rows) => ({
@@ -152,6 +154,9 @@ test('listener-detail scopes mounts, totals, distribution and geography by host 
   assert.equal(selected.returning.current, 1, 'scoped to the selected station\'s streams');
   assert.ok(selected.trend, 'the route must surface the device trend');
   assert.equal(selected.trend.buckets.length, 1, 'scoped to the selected station\'s streams');
+  assert.ok(selected.regionHours, 'the route must surface the daypart profile');
+  assert.equal(selected.regionHours.timeZone, 'America/Los_Angeles',
+    'the hour is read on the SELECTED station\'s clock, not the deployment\'s');
   assert.equal(selected.totals.connections, 15);
   assert.equal(selected.places.placed, 14);
   assert.equal(selected.distribution.channels.length, 2);

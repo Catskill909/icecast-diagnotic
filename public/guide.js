@@ -212,6 +212,30 @@
          <em>growth</em> \u2014 and a station acts on them differently. A single
          percentage would hide the second: a month can keep every regular and reach nobody
          new, and the share goes <em>up</em>.`,
+        `<strong>When each region listens</strong> answers the daypart question: does
+         the New York audience arrive at the same hour as the Los Angeles one? Each row
+         is one region across the 24 hours of a day, and the hours are the
+         <strong>station's own</strong> \u2014 a programme airs on the station's clock,
+         so that is what a daypart is read against. Selecting all stations reports UTC,
+         because a selection spanning three time zones has no single local hour.`,
+        `<strong>Each row is shaded against its own busiest hour, not the biggest
+         region's.</strong> On one shared scale the home state fills every row and
+         everywhere else renders as an empty strip \u2014 which answers "who is
+         biggest", something the map already tells you, and hides the question this
+         panel exists for. The count beside each row is the size; the shading is the
+         shape.`,
+        `<strong>It measures when listening happens, not how many people.</strong>
+         Somebody listening from seven until nine is counted in both hours, which is
+         what makes it a picture of demand across the day. It is not a headcount and
+         the hours must not be added together into one.`,
+        `<strong>This one could not be worked out after the fact.</strong> Detailed
+         listener records are kept for about two days and then compacted, and once that
+         happens the hour is gone \u2014 a listener belongs to a day and nothing
+         finer. So the hour-of-day figures are set down while the detail still exists,
+         and the record begins the day that started. Two days of history could not have
+         answered this honestly in any case: a weekend and a Tuesday are different
+         stations, and a profile built from whichever two days happened to be in range
+         could be wrong by half.`,
         `<strong>How they listen, over time</strong> is the same device mix shown as a
          series rather than as today's snapshot \u2014 the form a platform decision is
          actually made from. It groups by KIND of device, not by individual player,

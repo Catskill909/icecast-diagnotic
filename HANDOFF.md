@@ -1,5 +1,70 @@
 # Handoff — Icecast Monitor
 
+## 2026-09-11 — When each region listens (roadmap §4.5 item 3)
+
+The daypart question, and the one §4.5 item that needed NEW STORAGE rather than
+a new query. Items 1 and 2 are committed as `b91388e`.
+
+THE DECISION, taken deliberately because it cannot be revisited later. The
+previous handoff framed this as a choice between restricting to the hour tier
+(48h) and reading day-resolution data while calling the hour approximate.
+Neither is good enough. Two days cannot tell a weekday from a weekend — on this
+record weekends average 69-78 against 43-47 on Monday and Tuesday, so a profile
+from whichever two days were in range could be wrong by half. And an approximate
+hour is not a daypart: the hour IS the question.
+
+The third option is the one the app already uses for tune-ins, which are frozen
+onto each hour's rollup as samples compact "because the churn is unrecoverable
+afterwards". `region_hours` is written in the same compaction pass, BEFORE the
+fold, while exact per-hour rows still exist. An aggregate — a few hundred rows a
+day, not one per listener — kept for ever, so the profile improves indefinitely.
+
+Dayparts are how radio is scheduled and sold, which is why this was worth a
+table.
+
+RULES, each with a test:
+- **Frozen before the fold, in the same pass.** Afterwards the hour is gone.
+  There is no backfill: the record begins when recording begins and the panel
+  says so.
+- **The hour is the STATION'S, converted per day.** One offset across a range
+  puts an hour of October in the wrong column every year. `stationTz()` already
+  answers UTC for a selection spanning zones, which is the only honest answer
+  for "all stations".
+- **Each row is shaded against its OWN peak.** On a shared scale the home state
+  fills every row and everywhere else is an empty strip — answering "who is
+  biggest", which the map already answers, and hiding the question asked here.
+- **It measures WHEN listening happens, not how many people.** A listener
+  present from seven to nine is in both hours; the hours must never be summed.
+- Relays and unplaceable addresses excluded as on the map; non-US at country
+  resolution.
+
+The live tail and the frozen record cannot overlap: the fold deletes what it
+freezes in the same pass, so they are disjoint by construction and simply added.
+
+Verification, Node 24.20.0: full suite 767/767, zero failures. New
+`test/region-hours.test.js` (14, passing first run including the daylight-saving
+case) and `test/region-hours-render.test.js` (12). Booted on a scratch data dir:
+table created, no SQL error, `/api/listener-detail` answers 401 behind its gate.
+
+One bug while building, caught by `node --check`: a JS template literal holding
+the schema had a word wrapped in backticks inside an SQL comment, which closed
+the literal early.
+
+Docs: README gains "When each region listens"; the roadmap marks item 3 shipped
+and records the general rule — for anything finer than the surviving tier the
+answer is not "refuse" and not "approximate" but **pre-aggregate the cross-tab
+before the detail is lost**, and that decision must be made before the data ages
+out. Remaining: 4 (city) and 5 (session length), both still needing a deliberate
+decision first.
+
+Status: local and tested, NOT committed or deployed.
+
+Next action: commit, push, confirm CI, deploy. The panel will be empty until the
+first compaction pass has frozen an hour — within `DEVICE_HOUR_RETENTION_H`
+(48h) of deploying.
+
+---
+
 ## 2026-09-11 — Player and device trends over time (roadmap §4.5 item 2)
 
 Built alongside item 1 and, as the roadmap predicted, needing no new collection.

@@ -4200,6 +4200,7 @@ module.exports = {
   getDistinctDevices: (ids, since, until) => store.getDistinctDevices(ids, since, until),
   getReturningDevices: (ids, since, until) => store.getReturningDevices(ids, since, until),
   getDeviceTrend: (ids, since, until) => store.getDeviceTrend(ids, since, until),
+  getRegionHourProfile: (ids, since, until, tz) => store.getRegionHourProfile(ids, since, until, tz),
   LISTENER_DETAIL_EVERY, LISTENER_DETAIL_ENABLED,
   /* Which geo databases are loaded, and the attribution owed for them. Both are
      configuration rather than data, and the CC-licensed databases REQUIRE the

@@ -925,6 +925,75 @@
       </div>`;
   }
 
+  /* ── When each region listens ─────────────────────────────────────────────
+     The daypart question, which is how radio is scheduled and sold.
+
+     EACH ROW IS NORMALISED TO ITS OWN PEAK. Drawn on a shared scale the home
+     state fills every row and the others render as empty strips, which answers
+     "which state is biggest" — a question the map above already answers — and
+     hides the one being asked here, which is WHEN. The size of each region is
+     carried as a number beside it instead. */
+  const hourLabel = (h) => (h === 0 ? '12a' : h === 12 ? '12p' : h < 12 ? `${h}a` : `${h - 12}p`);
+
+  function regionHoursBlock(d) {
+    const rh = d.regionHours;
+    if (!rh || !Array.isArray(rh.regions) || !rh.regions.length) {
+      return `
+        <div class="deep-sub">When each region listens</div>
+        <div class="geo-note-line">No hour-of-day record for this selection yet.
+          It is written as listening is measured and cannot be filled in
+          backwards, so it begins when recording starts.</div>`;
+    }
+
+    const zone = rh.timeZone === 'UTC' ? 'UTC' : rh.timeZone.split('/').pop().replace(/_/g, ' ');
+    const rows = rh.regions.slice(0, 8).map((r) => {
+      const peakN = Math.max(...r.hours);
+      const peakHour = r.hours.indexOf(peakN);
+      const name = r.region
+        ? ((window.GeoMap && GeoMap.STATE_NAMES && GeoMap.STATE_NAMES[r.region]) || r.region)
+        : r.country;
+      const cells = r.hours.map((n, h) => {
+        // Five steps, matching the map's legend, so intensity means the same
+        // thing in both places.
+        const step = n <= 0 ? 0 : Math.max(1, Math.ceil((n / peakN) * 5));
+        return `<i class="rh-cell step-${step}" title="${esc(name)} · ${esc(hourLabel(h))} — ${esc(plural(n, 'listener', 'listeners'))}"></i>`;
+      }).join('');
+      return `
+        <div class="rh-row">
+          <div class="rh-name">${esc(name)}</div>
+          <div class="rh-cells">${cells}</div>
+          <div class="rh-peak">peak ${esc(hourLabel(peakHour))}</div>
+          <div class="rh-total">${r.total.toLocaleString()}</div>
+        </div>`;
+    }).join('');
+
+    const from = rh.coveredFrom
+      ? `Recording of the hour began ${new Date(rh.coveredFrom).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}. `
+      : '';
+
+    return `
+      <div class="deep-sub">When each region listens · ${esc(zone)} time</div>
+      <div class="rh">
+        <div class="rh-row rh-head">
+          <div class="rh-name"></div>
+          <div class="rh-cells rh-scale">
+            ${[0, 6, 12, 18].map((h) => `<span>${esc(hourLabel(h))}</span>`).join('')}
+          </div>
+          <div class="rh-peak"></div>
+          <div class="rh-total">listeners</div>
+        </div>
+        ${rows}
+        <div class="rh-note">Each row is shaded against <strong>its own</strong> busiest
+          hour, so a smaller region's pattern is visible rather than flattened by the
+          largest one; the count beside it is the size. Hours are the
+          <strong>station's</strong> — a programme airs on the station's clock, so that
+          is what a daypart is read against. ${esc(from)}It cannot be filled in
+          backwards: before recording started, the hour had already been compacted away.
+          A listener present across several hours counts in each of them, so this
+          measures <strong>when listening happens</strong> and is not a count of people.</div>
+      </div>`;
+  }
+
   async function renderDeep(version) {
     const panel = document.getElementById('deep-panel');
     const hint = document.getElementById('deep-hint');
@@ -1134,6 +1203,8 @@
       </div>
 
       ${trendBlock(d)}
+
+      ${regionHoursBlock(d)}
 
       <div class="deep-sub">Per mount · right now</div>
       <div class="table-scroll">

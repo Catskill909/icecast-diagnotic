@@ -286,6 +286,11 @@ function getDistinctDevices(streamIds, sinceMs, untilMs = Date.now()) {
   return deviceDb().getDistinctDevices(streamIds, sinceMs, untilMs);
 }
 
+/** When each region listens, by hour of day on the station's own clock. */
+function getRegionHourProfile(streamIds, sinceMs, untilMs = Date.now(), timeZone = 'UTC') {
+  return deviceDb().getRegionHourProfile(streamIds, sinceMs, untilMs, timeZone);
+}
+
 /** Player and platform mix as a series. Bucket size is chosen by the data. */
 function getDeviceTrend(streamIds, sinceMs, untilMs = Date.now()) {
   return deviceDb().getDeviceTrend(streamIds, sinceMs, untilMs);
@@ -3153,7 +3158,8 @@ function getStorageInfo() {
 
 module.exports = {
   // Cume — distinct devices over a period. See the block above hourKey().
-  recordDevices, getDistinctDevices, getReturningDevices, getDeviceTrend, compactDevices, deviceSalt, getMonthlyAudience,
+  recordDevices, getDistinctDevices, getReturningDevices, getDeviceTrend,
+  getRegionHourProfile, compactDevices, deviceSalt, getMonthlyAudience,
   _deviceTiers: () => deviceDb().tierCounts(),
   _deviceRows: () => deviceDb().rowCount(),
   _resetDevices: () => { deviceDb().reset(); },

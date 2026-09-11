@@ -751,6 +751,13 @@ app.get('/api/listener-detail', auth.requireAuth, (req, res) => {
      bucket size is the store's decision, not this route's — it depends on how
      far the record has aged, which only the store knows. */
   const trend = monitor.getDeviceTrend(streamIds, sinceMs);
+  /* When each region listens, on the STATION'S clock — a programme airs on the
+     station's schedule, so that is the clock a daypart is read against.
+     `stationTz` already answers UTC for a selection spanning several zones,
+     which is the only honest answer for "all stations". */
+  const regionHours = monitor.getRegionHourProfile(
+    streamIds, sinceMs, Date.now(), monitor.stationTz(station),
+  );
   /* KIND is rolled up HERE rather than in the browser. The family → kind table
      is the same one that classified the agent in the first place, and it lives
      server-side; shipping it to the page would be a second copy to keep in
@@ -790,6 +797,7 @@ app.get('/api/listener-detail', auth.requireAuth, (req, res) => {
     period,
     returning,
     trend,
+    regionHours,
     enabled: monitor.LISTENER_DETAIL_ENABLED,
     everyCycles: monitor.LISTENER_DETAIL_EVERY,
     // Named so a reader can see WHICH server the credential covers, without the

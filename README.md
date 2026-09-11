@@ -389,6 +389,35 @@ The reason a figure is withheld is carried in `returning.reason` and shown on th
 card, because *"we could not measure it"* and *"nobody came back"* must not look
 the same.
 
+### When each region listens
+
+The daypart question — does New York tune in at the same hour as Los Angeles?
+Dayparts are how radio is scheduled and sold, so this is the one §4.5 feature
+that needed **new storage** rather than a new query.
+
+**Why.** `devices` keeps hour resolution for `DEVICE_HOUR_RETENTION_H` (48h) and
+then a device's timestamp becomes its **day**. Two days cannot tell a weekday
+from a weekend — on this station's own record weekends average 69–78 against
+43–47 on Monday and Tuesday — so a profile built from them could be wrong by
+more than half depending which two days it caught.
+
+So `region_hours` is **frozen as the hour tier compacts**, at the moment the
+exact data still exists. This is the pattern the app already uses for tune-ins,
+which are frozen onto each hour's rollup as samples compact "because the churn
+is unrecoverable afterwards". It is an aggregate — a few hundred rows a day, not
+one per listener — and it is kept for ever, so the profile improves indefinitely.
+
+| Rule | Why |
+|---|---|
+| **Frozen BEFORE the fold, in the same pass** | Afterwards the hour is gone and cannot be recovered. There is no backfill; the record begins when recording begins, and the panel says so |
+| **The hour is the STATION'S, converted per day** | A programme airs on the station's clock. Converting with one offset for a whole range puts an hour of October in the wrong column every year, so each day is converted on its own and daylight saving is handled |
+| **All stations reports UTC** | A selection spanning three time zones has no single local hour, and `stationTz()` already answers this way |
+| **Each row is shaded against its OWN peak** | On a shared scale the home state fills every row and everywhere else is an empty strip — answering "who is biggest", which the map already answers, and hiding the question this panel exists for |
+| **It measures WHEN listening happens, not how many people** | A listener present from seven to nine is counted in both hours. The hours must never be summed into a headcount |
+
+Relays and unplaceable addresses are excluded here exactly as they are from the
+map, and non-US listeners stay at country resolution.
+
 ### How they listen, over time
 
 The device mix as a **series** rather than today's snapshot. Needed no new

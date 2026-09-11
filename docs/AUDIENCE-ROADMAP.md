@@ -383,7 +383,7 @@ Ordered by value per unit of work.
 |---|---|---|---|
 | 1 | ✅ **SHIPPED 2026-09-11. Returning vs new listeners** | "3,400 people listened this week; 1,900 also listened last week." Loyalty and churn — the retention question funders and underwriters actually ask, and the one figure a competitor cannot fake | **Nothing new**, as predicted: `GROUP BY device` over two windows, intersected |
 | 2 | ✅ **SHIPPED 2026-09-11. Player and device trends over time** | "Smart speakers went from 8% to 22% this year." Where to spend engineering effort, and evidence for a platform conversation | **Nothing new**, as predicted. `kind` was not stored either, and did not need to be — it is recovered from `family` through the same `PLAYER_RULES` table that classified the agent |
-| 3 | **Time of day by region** | Drive-time in New York against drive-time in Los Angeles — three time zones on one network, currently flattened into one curve | **Nothing new.** Cross `place` with the bucket timestamp, both already stored |
+| 3 | ✅ **SHIPPED 2026-09-11. Time of day by region** | Drive-time in New York against drive-time in Los Angeles — three time zones on one network, previously flattened into one curve | **The one that DID need storage.** `place` and the timestamp are both stored, but the hour is compacted away after 48h, so a `region_hours` aggregate is frozen as the hour tier folds |
 | 4 | **City, for US listeners** | A licence covers a METRO; the map counts a whole STATE. This is the difference between "Texas" and "Greater Houston", i.e. between an overstated figure and the real in-footprint reach | One more field in the `place` token. GeoLite2 City is already downloaded and already read |
 | 5 | **Session length over time** | Whether people are staying longer, not just arriving more often. Currently live-only, so it cannot be trended at all | Storing `connectedSec`, which is already fetched and discarded |
 
@@ -415,12 +415,29 @@ Two further rules came out of it that any future series work inherits:
 smaller than the finished ones beside it), and **lead with what moved, not what
 is biggest** — otherwise the headline reports the dominant category for ever.
 
-Item 3 (time of day by region) is the one to watch: an hour-of-day cross is
-finer than a DAY bucket, so it is exact only inside the hour tier —
-`hourRetentionH`, 48 hours by default. Unlike item 2 there is no coarser bucket
-to fall back to, because the question IS the hour. So it must either restrict
-itself to the hour tier and say so, or read day-resolution data and state that
-the hour is approximate. Decide that before building, not after.
+**3 shipped the same day, and the prediction above was right about the problem
+and wrong about the options.** Neither answer was good enough: restricted to the
+hour tier the profile covers 48 hours, and two days cannot tell a weekday from a
+weekend — on this record weekends average 69-78 against 43-47 on Monday and
+Tuesday, so the figure could be wrong by half depending which two days were in
+range. Reading day-resolution data and calling the hour approximate is worse: a
+daypart IS the hour, and an approximate one is not a daypart.
+
+The third option is the one the app already uses elsewhere: **freeze the
+aggregate while the resolution still exists.** Tune-ins are frozen onto each
+hour's rollup as samples compact, for exactly this reason. `region_hours` is
+written as the hour tier folds, in the same compaction pass, and kept for ever.
+A few hundred rows a day rather than one per listener.
+
+So the rule for anything finer than the surviving tier is: not "refuse" and not
+"approximate", but **pre-aggregate the cross-tab before the detail is lost**.
+That decision has to be made BEFORE the data ages out — it cannot be backfilled,
+and the record begins the day it ships.
+
+Remaining: **4 (city)** and **5 (session length)**. Both still need a deliberate
+decision before building — 4 because city accuracy is materially weaker than
+state and the centroid gate must be applied at that resolution too, 5 because it
+is the only item that increases what is collected per listener.
 
 **Think hardest about 4.** It is the one that materially improves the number the
 station cares about, and also the one where the database is least trustworthy —
