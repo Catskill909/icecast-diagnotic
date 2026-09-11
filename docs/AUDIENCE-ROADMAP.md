@@ -27,7 +27,7 @@ listeners are on each mount right now. From counts alone:
 | Concurrent listeners, peak, average | ✅ built |
 | Per-mount / per-bitrate split | ✅ built — **nobody else has this** |
 | Hour-of-day profile | ✅ built |
-| **ATH / Total Listening Hours** | ⚠️ `store.getListeningDelivered()` already computes listener-minutes. Not exported, not surfaced. **One export away.** |
+| **ATH / Total Listening Hours** | ✅ built 2026-08-28 — month-to-date against the SoundExchange allowance, labelled an estimate. See §4 item 1 |
 | Day-of-week × hour heatmap | buildable now |
 | Channel-vs-channel comparison, trend vs previous period | buildable now |
 | Audience retained through an outage | buildable now — we have the outage record beside the audience |

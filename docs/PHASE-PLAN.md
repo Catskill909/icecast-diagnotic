@@ -14,9 +14,14 @@
 
 ## Where the project actually is
 
-**Live and healthy.** 5 stations, 10 channels, 3 Icecast hosts, 440 tests,
+**Live and healthy.** 5 stations, 10 channels, 3 Icecast hosts, **823 tests**,
 99.63% audio uptime over 7 days, data volume intact since 2026-08-04.
-(Figures re-verified against production 2026-09-02.)
+(Station/uptime figures re-verified against production 2026-09-02; test count
+2026-09-11.)
+
+**`AUDIENCE-ROADMAP.md` §4.5 is complete as of 2026-09-11** — returning vs new
+listeners, device mix over time, dayparts by region, metro-level geography and
+session length. Four of the five needed no new collection at all.
 
 Build-order items 1–8 of `HANDOFF.md` §6 are shipped. Per-station alert
 recipients — the item that had been "next" for four days — shipped 2026-08-31
@@ -234,6 +239,49 @@ fetches a minute would cover all of them.
 **Affiliates are more rows, not a new architecture** — but they are the reason
 storage (5.2) has to be settled first, and the reason the fleet view (Phase 3)
 has to exist before rather than after.
+
+---
+
+## Access tiers — decided 2026-09-11, and why env vars are the path
+
+**One login for all, and it stays that way until the move to Pacifica
+production.** This confirms Phase 7 below rather than competing with it: the
+split is by SENSITIVITY, not by user. The figures that matter in an emergency —
+is it up, what broke, whose side is it, since when, and the alerts — are exactly
+the ones that need no credential of any kind. Analytics sit behind the one admin
+login. No roles are required for that to be correct.
+
+**Icecast admin credentials go in the hosting panel's environment**
+(`ICECAST_ADMIN_CREDS`, a per-host JSON map), shipped 2026-09-11. This is the
+tier-friendly choice, and the reason is worth stating because it is easy to get
+backwards:
+
+> **An Icecast admin password is a property of a SERVER, not of a person.** It
+> never belongs to a role. Whatever access model arrives later governs *who may
+> see the panel*, not *who holds the password* — so putting credentials in the
+> environment today costs nothing later and needs no migration when roles exist.
+
+The opposite choice — building per-host credential entry into the admin panel
+now — would bind a secret to a UI whose permission model is undecided, and would
+have to be rebuilt the moment it is decided. `AUDIENCE-ROADMAP.md` §4.1
+specifies that entry flow and it remains the destination; it is sequenced after
+the access decision, not before it.
+
+**What is deliberately NOT decided yet**, and should be settled at the Pacifica
+move when the real users are known:
+
+| Question | Why it waits |
+|---|---|
+| Per-user accounts, or one shared login | Depends on how many people at how many stations actually sign in, which nobody knows yet |
+| Whether a GM sees a different surface from an engineer | Phase 7 says this is public-vs-private, not GM-vs-technician. Revisit only if real use contradicts it |
+| Who may enter or rotate an Icecast credential | Meaningless until there is more than one kind of account |
+| Whether a station sees only its own data | Today every signed-in reader sees every station. On a network of independent licensees this is a governance question, not a technical one |
+
+**The migration path, if tiers do arrive.** Nothing shipped needs undoing:
+credentials stay in the environment; the existing session gate becomes one of
+several; `redact.js` is already an allowlist, so a narrower view is a new
+projection rather than a rewrite; and the `auth` capability flags in
+`/api/config` already report configuration without exposing it.
 
 ---
 
@@ -471,3 +519,45 @@ acceptance remains open.
 
 Broader audit remains In progress. Protected Audience API/UI checks have not
 been completed in a verified authenticated browser session.
+
+---
+
+## Audience analytics build-out — 2026-09-11
+
+`AUDIENCE-ROADMAP.md` §4.5 closed in one session. Recorded here because the
+*hazards* it surfaced outlive the features, and anything computed over the
+device record later will meet them again.
+
+**Shipped:** returning vs new listeners · device and player mix over time ·
+when each region listens (dayparts) · metro-level geography · session length.
+Plus per-host Icecast credentials, a coverage band naming which channels the
+credentialed figures actually cover, and two sign-in fixes.
+
+**Four hazards, each of which produced a plausible wrong number before it was
+caught.** The data is sampled, tiered and folded, and each of those does
+something different to a figure computed naively over it:
+
+| Hazard | What it produced | The rule |
+|---|---|---|
+| **Tiers smear a boundary** | `returning` went 1 → 2 on identical data purely because compaction ran — loyalty manufactured by a maintenance job | Snap windows to the tier, or refuse. Re-bucket where a coarser answer is still honest |
+| **Detail is lost at compaction** | An hour-of-day profile is impossible 48 hours after the fact | Pre-aggregate the cross-tab BEFORE the detail goes. It cannot be backfilled |
+| **Repeated sampling is length-biased** | A six-hour session appears in ~72 readings, a two-minute one in at most one | Store per device and reduce; never tally per reading and sum |
+| **A gate sized for one claim is wrong for a smaller one** | 200 km is inside one state and spans several cities | Tighten the gate with the claim; degrade to the coarser answer rather than refusing |
+
+**A correctness bug found on the way**, unrelated to the new features: KPFA is
+carried on two servers and only one is credentialed, so its individual-listener,
+geography and daypart figures covered half the station and were presented as the
+whole. `detailCoverage` now reports which channels are covered, per channel,
+with the host named.
+
+**Measured cost**, 108,000 device rows over 90 days, uncompacted (the worst
+case; production keeps most of it pre-aggregated): distinct devices 76 ms,
+returning 29 ms, device trend 77 ms, region-hour profile 181 ms. About 0.4 s for
+the full 90-day signed-in view.
+
+**A boundary was deliberately moved.** `test/geo.test.js` asserted "no city name
+survives a lookup", correct while city was out of scope. It is now seven tests
+describing a narrower rule. **The coordinate boundary did not move and must not:**
+no latitude or longitude survives a lookup, so a dot-per-listener map stays
+impossible to build downstream by accident.
+

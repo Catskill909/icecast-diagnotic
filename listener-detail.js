@@ -292,8 +292,15 @@ function placeToken(row, cls, geo = NO_GEO) {
 
      A colon in a city name would create a fourth segment and silently shift
      every reader's parse, so it is replaced rather than escaped. */
-  const city = pl.city ? String(pl.city).replace(/:/g, ' ').trim() : '';
-  return `US:${pl.region || ''}${city ? `:${city}` : ''}`;
+  /* A CITY ONLY WHERE THERE IS A STATE, enforced here and not merely assumed.
+     geo.js already refuses a city without one — a record too vague for a state
+     is more vague, not less — but the token's own shape depends on it: the
+     second segment carries the state, so 'US::Houston' would place a metro in
+     no state at all. One line, so the invariant survives a future database
+     whose records are shaped differently. */
+  const region = pl.region || '';
+  const city = region && pl.city ? String(pl.city).replace(/:/g, ' ').trim() : '';
+  return `US:${region}${city ? `:${city}` : ''}`;
 }
 
 /**

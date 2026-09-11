@@ -1089,7 +1089,10 @@ ICECAST_ADMIN_PASSWORD=
 ICECAST_ADMIN_HOST=              # defaults to the host in ICECAST_STATUS_URL
 
 GEOIP_ASN_DB=                    # identifies relays and aggregators (5.4)
-GEOIP_CITY_DB=                   # in-market share and the map (5.9, not built)
+GEOIP_CITY_DB=                   # the state map, in-market share, the metro list
+                                 # and the daypart profile. Must report its own
+                                 # accuracy_radius — see "The city database must
+                                 # report its own accuracy" above.
 GEOIP_MAX_ACCURACY_RADIUS_KM=200 # wider than this is a CENTROID, not a place
 GEOIP_MAX_CITY_ACCURACY_RADIUS_KM=50
                                  # TIGHTER, because a metro is a smaller claim.
