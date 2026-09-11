@@ -1322,3 +1322,71 @@
   .rh-name { flex-basis: 76px; }
   .rh-peak { display: none; }
 }
+
+/* ── Which channels these figures cover ──────────────────────────────────────
+   Said ONCE, at the top of the gated section. Repeating it per panel turns the
+   page into a wall of apologies that a reader learns to scroll past, which is
+   the opposite of informing them. Individual figures carry a small key instead.
+
+   Deliberately NOT styled as an error. A station whose server is run by someone
+   else is the common case, not a fault, and an amber warning box would tell an
+   affiliate their deployment is broken when it is working exactly as designed. */
+.cov-band {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  background: var(--surface-2);
+  border: 1px solid var(--surface-3);
+  border-radius: 8px;
+  padding: 12px 14px;
+  margin-bottom: 16px;
+}
+
+/* The partial case gets the accent, because it is the one that changes how a
+   number already on screen should be read. */
+.cov-partial {
+  background: var(--primary-surface);
+  border-color: var(--primary-dark);
+}
+
+.cov-band .material-symbols-outlined {
+  font-size: 20px;
+  color: var(--text-tertiary);
+  flex-shrink: 0;
+}
+
+.cov-partial .material-symbols-outlined { color: var(--primary); }
+
+.cov-title {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text-primary);
+  margin-bottom: 3px;
+}
+
+.cov-note {
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--text-secondary);
+}
+
+.cov-note code {
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: 11px;
+  background: var(--surface-3);
+  border-radius: 4px;
+  padding: 1px 5px;
+}
+
+/* A figure that is present and empty. It names what the tool can do and what
+   would switch it on; an absent panel names nothing. */
+.deep-tile.locked { opacity: 0.72; }
+
+.deep-tile.locked .deep-tile-value { color: var(--text-tertiary); }
+
+.cov-key {
+  font-size: 14px !important;
+  color: var(--text-tertiary);
+  vertical-align: -2px;
+  margin-left: 4px;
+}

@@ -368,6 +368,54 @@ size a count of one would say something about a person rather than a population.
 Shares are merged across mounts by recomputing from summed counts, never by
 averaging — and a merged figure inherits the **weakest** confidence of its parts.
 
+### What needs an Icecast admin password
+
+**One sentence.** Counting *how many* people are listening needs nothing.
+Telling *one listener from another* needs an admin password for the Icecast
+server that stream is served from.
+
+| No password — any Icecast | Needs `/admin/listclients` |
+|---|---|
+| Listeners now, peak, average | Individual listeners (unique) |
+| Per-mount / bitrate split | Returning vs new |
+| Tune-ins, hour-of-day profile | Player / app, platform, device trends |
+| ATH and the royalty allowance | Session length, TSL |
+| Uptime, outages, diagnosis, alerts | Geography, the map, in-market share |
+| Day-by-day, weekly roundup | When each region listens |
+| | Relay / proxied share |
+
+**The password belongs to the HOST, not the station**, and a station's channels
+need not share one. On this deployment:
+
+| Host | Credential | Carries |
+|---|---|---|
+| `streams.pacifica.org:9000` | yes | KPFT ×3, WPFW, KPFK, **and one KPFA channel** |
+| `streaming.wbai.org` | no | WBAI ×3 |
+| `streams.kpfa.org:8443` | no | KPFA Berkeley |
+
+**So KPFA is split, and that used to be silent.** Its individual-listener,
+geography and daypart figures covered the HiRes stream only and were presented
+as the station's. An understated number shown as a whole one is worse than a
+missing one, because nobody goes looking for it. `/api/listener-detail` now
+returns `detailCoverage` — per channel, with the host named — and the page says
+*"These figures cover 1 of 2 channels"* and which one is missing.
+
+**Three states, deliberately worded and styled apart:**
+
+| State | Says | Fixed by |
+|---|---|---|
+| Not signed in | "Sign in to view" | the reader, in seconds |
+| No password for any of the selection's hosts | names the host, and that everything above is unaffected | whoever runs that server |
+| Password for some channels only | "covers N of M channels", names the missing ones | same, per host |
+
+**Nothing is hidden for being unavailable** — `docs/ADMIN-ACCESS-SCOPE.md` §4.1
+required this and the page did the opposite, replacing the whole section with
+one box. Gated figures now render **present and empty with a key**, so an
+affiliate can see what the tool does and what would switch it on, and the page
+does not change shape depending on which station is selected. The explanation is
+given **once**, at the top of the gated section; repeating it per panel is a wall
+of apologies that a reader learns to scroll past.
+
 ### Returning and new listeners
 
 **Two figures, not one ratio.** *Came back* is retention; *First time* is

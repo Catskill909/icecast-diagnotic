@@ -327,6 +327,42 @@
       ],
     },
     {
+      id: 'access',
+      icon: 'key',
+      title: 'What needs the server\u2019s password',
+      lead: 'Some figures work on any Icecast. Others need an admin password for the server the stream lives on.',
+      body: [
+        `<strong>One sentence covers it.</strong> Counting <em>how many</em> people are
+         listening needs nothing special. Telling <em>one listener from another</em>
+         needs an admin password for the Icecast server that stream is served from.`,
+        `<strong>Works on any stream, no password:</strong> listeners now, peak and
+         average, the per-mount split, tune-ins, the hour-of-day profile, listening
+         hours and the royalty allowance, uptime, outages, root-cause diagnosis and
+         every alert. That is most of this application, and it is the whole of the
+         dashboard and the history page.`,
+        `<strong>Needs the admin password:</strong> individual listeners, who came back
+         and who was new, which players and devices people use and how that moves over
+         time, how long sessions last, and everything about where listeners are \u2014
+         the map, the in-market share and the daypart profile. All of these come from
+         one Icecast endpoint that lists the connections currently open, and it is
+         password-protected because those connections are the audience.`,
+        `<strong>The password belongs to the SERVER, not to the station</strong>, and a
+         station's channels do not all have to live on the same server. On this network
+         KPFA is carried both on Pacifica's shared server and on its own, so a password
+         for one of them covers part of that station and not the rest. Where that
+         happens the page says which channels are covered, because figures describing
+         half a station would otherwise read as the whole of it.`,
+        `<strong>"Sign in" and "needs an admin password" are different problems.</strong>
+         Signing in is about you and takes a moment. An admin password is about the
+         deployment: somebody runs that streaming server, and it is entered once, per
+         server. If the panel asks for one, that is who to ask.`,
+        `<strong>Nothing is hidden because it is unavailable.</strong> A figure that
+         cannot be measured is shown empty with a key beside it, so it is always clear
+         what this tool can do and what would switch it on \u2014 rather than the page
+         quietly changing shape depending on which station is selected.`,
+      ],
+    },
+    {
       id: 'royalties',
       icon: 'hourglass_top',
       title: 'Listening hours and royalties',

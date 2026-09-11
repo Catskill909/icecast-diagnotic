@@ -1,5 +1,67 @@
 # Handoff — Icecast Monitor
 
+## 2026-09-11 — Which figures need an Icecast admin password, said once
+
+The owner asked how to signal credential-gated figures without the UI becoming a
+mess, and corrected a wrong assumption of mine: WBAI is NOT on Pacifica's host.
+Verified against the live configuration:
+
+    streams.pacifica.org:9000   CREDENTIALED   kpft x3, wpfw, kpfk, AND one kpfa channel
+    streaming.wbai.org          none           wbai x3
+    streams.kpfa.org:8443       none           kpfa-kpfa-berkeley
+
+THE CORRECTNESS BUG THIS EXPOSED, which is more than a UX問題. Listener detail is
+collected only from hosts with a credential (`collectListenerDetail` filters on
+`adminCredsFor`), but `streamIdsFor('kpfa')` returns BOTH channels. So KPFA's
+individual-listener, returning, geography and daypart figures covered the HiRes
+stream alone and were presented as the station's. An understated number shown as
+a whole one is worse than a missing one: nobody goes looking for it.
+`/api/listener-detail` now returns `detailCoverage` — per channel, each with its
+host and whether it is covered — and the page states "These figures cover 1 of 2
+channels" and names which is missing.
+
+THE SECOND BUG: the page HID rather than marked, which is the opposite of what
+`docs/ADMIN-ACCESS-SCOPE.md` §4.1 already decided ("SHOWN, marked unavailable —
+never hidden. A missing panel teaches nobody anything"). `renderDeep` replaced
+the whole section with one box and returned, so a reader on an uncredentialed
+station never learned the product could do any of it — and no-credentials is the
+COMMON case for an affiliate, not an edge one. Gated figures now render present
+and empty with a key.
+
+THE DESIGN, for whoever changes it next:
+- **Said ONCE**, at the top of the gated section. Per-panel notices are a wall of
+  apologies that a reader learns to scroll past, which is the opposite of
+  informing them. Individual figures carry a small key glyph instead.
+- **The host is named**, because the fix is per host and "unavailable" tells an
+  operator nothing they can act on.
+- **Three states, worded and styled apart.** "Sign in" is about the READER and
+  takes ten seconds; "no admin password" is about the DEPLOYMENT and needs a
+  station engineer. One grey box for both sends the first reader to the wrong
+  person. The partial case carries the accent colour, because it changes how a
+  number already on screen should be read.
+- **Not styled as an error.** A station whose server somebody else runs is the
+  normal case; an amber box would tell an affiliate their install is broken.
+
+Verification, Node 24.20.0: full suite 783/783. New
+`test/coverage-band-render.test.js` (8) pins all three states including the KPFA
+split, that one host is named once for three channels, and that the band never
+says "Sign in". `test/audience-refresh.test.js` gains a 'split' station — one
+station, two channels, two servers, a password for one — as a permanent test of
+the shape. A new `access` guide topic states the one-sentence rule, both lists,
+that the password belongs to the SERVER not the station, and that the two gates
+are different problems; `test/guide-topics.test.js` asserts those survive edits.
+
+Also fixed here: two more cross-realm `assert.deepStrictEqual` failures on arrays
+built inside a `vm`. That is now the third time — the rule is `Array.from`, never
+`.map`, on anything coming out of `vm.runInContext`.
+
+Status: local and tested, NOT committed or deployed.
+
+Next action: commit and push. Four commits now await deployment: b91388e,
+9710b18, ebf6155 and this one.
+
+---
+
 ## 2026-09-11 — Two sign-in faults, neither of them in the login
 
 Reported by the owner: "login is not persistent and I keep needing to log in

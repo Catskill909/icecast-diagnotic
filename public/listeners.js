@@ -925,6 +925,84 @@
       </div>`;
   }
 
+  /* ── Which channels these figures cover ──────────────────────────────────
+     TWO DIFFERENT GATES, and they must never look alike. "Sign in" is about
+     the READER and takes ten seconds. "No admin password for this server" is
+     about the DEPLOYMENT and needs a station engineer. A single grey box for
+     both sends the first reader looking for the wrong person.
+
+     Said ONCE, at the top of the section, and never repeated per panel — the
+     alternative is a page of apologies that a reader learns to scroll past.
+     Individual figures carry a small key instead. */
+  function coverageBand(d) {
+    const c = d.detailCoverage;
+    if (!c || !c.total) return '';
+    if (c.covered === c.total) return '';        // nothing to explain
+
+    const hosts = (c.uncoveredHosts || []).map((h) => `<code>${esc(h)}</code>`).join(', ');
+    const missing = (c.channels || []).filter((x) => !x.covered).map((x) => x.name || x.id);
+
+    /* THE PARTIAL CASE IS THE DANGEROUS ONE. A station carried on two servers
+       gets real figures covering part of itself, which reads as the whole
+       station. KPFA is exactly this: one channel on Pacifica's host and one on
+       its own. Saying nothing understates the station and nobody goes looking. */
+    if (c.covered > 0) {
+      return `
+        <div class="cov-band cov-partial">
+          <span class="material-symbols-outlined">key_off</span>
+          <div>
+            <div class="cov-title">These figures cover ${c.covered} of ${c.total} channels</div>
+            <div class="cov-note">${esc(missing.join(', '))}
+              ${missing.length === 1 ? 'is' : 'are'} carried on ${hosts}, which this
+              monitor has no Icecast admin password for — so nothing below counts
+              ${missing.length === 1 ? 'its' : 'their'} listeners. Everything ABOVE this
+              section covers the whole station.</div>
+          </div>
+        </div>`;
+    }
+
+    return `
+      <div class="cov-band">
+        <span class="material-symbols-outlined">key_off</span>
+        <div>
+          <div class="cov-title">Advanced audience data is off for this selection</div>
+          <div class="cov-note">Counting how many people are listening needs nothing
+            special, and every figure above this section is unaffected. Telling one
+            listener from another — individual listeners, players, devices, session
+            length and geography — needs an Icecast <strong>admin</strong> password for
+            ${hosts}. Ask whoever runs that server; it is entered once, per server.</div>
+        </div>
+      </div>`;
+  }
+
+  /* The gated figures, present and empty.
+
+     An affiliate whose server has no admin password is the COMMON case, not an
+     edge one, and a page that simply omits these teaches them nothing about
+     what the tool does or what would switch it on. Present and empty is a
+     different message from absent: it names the figure, shows a key, and the
+     band above says who to ask. */
+  const GATED_FIGURES = [
+    ['Individual listeners', 'how many different people, not how many tune-ins'],
+    ['Came back', 'how many of them listened in the period before'],
+    ['First time', 'how many were new'],
+    ['Player / app · platform', 'what people listen with, and how that moves'],
+    ['Session length', 'how long people actually stay'],
+    ['Where they listen', 'which states and countries, and when each one listens'],
+  ];
+
+  const lockedTiles = () => `
+    <div class="deep-tiles">
+      ${GATED_FIGURES.map(([label, note]) => `
+        <div class="deep-tile locked">
+          <div class="deep-tile-label">${esc(label)}
+            <span class="material-symbols-outlined cov-key" title="Needs an Icecast admin password">key_off</span>
+          </div>
+          <div class="deep-tile-value">—</div>
+          <div class="deep-tile-note">${esc(note)}</div>
+        </div>`).join('')}
+    </div>`;
+
   /* ── When each region listens ─────────────────────────────────────────────
      The daypart question, which is how radio is scheduled and sold.
 
@@ -1046,20 +1124,17 @@
     renderGeo(d).catch(() => {});
     const mounts = (d.mounts || []).filter((m) => (m.connections || 0) > 0);
 
-    if (!d.credentialedHost) {
-      panel.innerHTML = `
-        <div class="deep-locked">
-          <span class="material-symbols-outlined">key_off</span>
-          <div>
-            <div class="deep-locked-title">No Icecast admin credential</div>
-            <div class="deep-locked-note">This needs an Icecast admin password for the stream's server. Without one the rest of the page is unaffected — only this section depends on it.</div>
-          </div>
-        </div>`;
-      return;
-    }
-
+    /* SHOWN, MARKED UNAVAILABLE — NEVER HIDDEN, which is what
+       docs/ADMIN-ACCESS-SCOPE.md §4.1 already decided and what this code did
+       not do: it replaced the whole section with one box and returned, so a
+       reader on an uncredentialed station never learned the product could do
+       any of it. A figure that is present and empty teaches what is missing
+       and what would switch it on; a figure that is absent teaches nothing. */
     if (!mounts.length && !d.period?.devices) {
-      panel.innerHTML = '<div class="muted">No listener detail available for this selection yet.</div>';
+      const band = coverageBand(d);
+      panel.innerHTML = band
+        ? band + lockedTiles()
+        : '<div class="muted">No listener detail available for this selection yet.</div>';
       if (hint) hint.textContent = '';
       return;
     }
@@ -1156,6 +1231,7 @@
       </tr>`).join('');
 
     panel.innerHTML = `
+      ${coverageBand(d)}
       ${distributionBlock}
       <div class="deep-tiles">
         <div class="deep-tile primary">
@@ -1311,6 +1387,19 @@
     const unit = usePeriod
       ? { one: 'person', many: 'people', noun: 'listeners' }
       : { one: 'connection', many: 'connections', noun: 'connections' };
+
+    /* One LINE here, not the band again. The band is said once, higher up; a
+       reader who has scrolled this far still needs to know why the map is empty,
+       and "no located connections yet" would read as data that is on its way. */
+    const detailCov = d.detailCoverage;
+    if (detailCov && detailCov.total && detailCov.covered === 0) {
+      panel.innerHTML = `<div class="geo-note-line">
+        Where listeners are needs an Icecast <strong>admin</strong> password for
+        ${(detailCov.uncoveredHosts || []).map((h) => `<code>${esc(h)}</code>`).join(', ')}.
+        See the note in <strong>Who Is Listening</strong> above.</div>`;
+      if (hint) hint.textContent = '';
+      return;
+    }
 
     const ready = GeoMap.readiness(places, d.geo);
     const market = GeoMap.inMarket(places);

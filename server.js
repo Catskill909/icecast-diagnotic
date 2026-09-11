@@ -767,6 +767,40 @@ app.get('/api/listener-detail', auth.requireAuth, (req, res) => {
      station's schedule, so that is the clock a daypart is read against.
      `stationTz` already answers UTC for a selection spanning several zones,
      which is the only honest answer for "all stations". */
+  /* WHICH CHANNELS THESE FIGURES ACTUALLY COVER.
+
+     Per-listener detail is collected only from hosts this deployment holds an
+     Icecast admin password for, and a station's channels can live on different
+     servers. KPFA is carried BOTH on Pacifica's host and on its own, so its
+     individual-listener, geography and daypart figures describe one channel of
+     two — and said nothing about it. An understated number presented as a whole
+     one is worse than a missing number, because nobody goes looking for it.
+
+     Reported per channel, with the host named, because the fix is per host and
+     "unavailable" tells an operator nothing they can act on. */
+  const detailCoverage = (() => {
+    const channels = monitor.getStreams()
+      .filter((s) => streamIds.includes(s.id))
+      .map((s) => {
+        let host = null;
+        try { host = new URL(s.url).host; } catch { /* malformed URL stays null */ }
+        return {
+          id: s.id,
+          name: s.name,
+          host,
+          covered: !!(host && monitor.adminCredsFor(host)),
+        };
+      });
+    const uncovered = channels.filter((c) => !c.covered);
+    return {
+      channels,
+      covered: channels.length - uncovered.length,
+      total: channels.length,
+      // De-duplicated: three WBAI channels on one server is one thing to fix.
+      uncoveredHosts: [...new Set(uncovered.map((c) => c.host).filter(Boolean))],
+    };
+  })();
+
   const regionHours = monitor.getRegionHourProfile(
     streamIds, sinceMs, Date.now(), monitor.stationTz(station),
   );
@@ -810,6 +844,7 @@ app.get('/api/listener-detail', auth.requireAuth, (req, res) => {
     returning,
     trend,
     regionHours,
+    detailCoverage,
     enabled: monitor.LISTENER_DETAIL_ENABLED,
     everyCycles: monitor.LISTENER_DETAIL_EVERY,
     // Named so a reader can see WHICH server the credential covers, without the

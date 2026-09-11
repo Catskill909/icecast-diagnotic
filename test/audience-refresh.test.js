@@ -128,7 +128,10 @@ test('listener-detail scopes mounts, totals, distribution and geography by host 
     diagnose: { channelMountPaths: (s) => s.mounts },
     monitor: {
       getListenerDetail: () => ({ meta: { distinctAddresses: 40 }, mounts }), getStreams: () => streams,
-      streamIdsFor: (id) => id === 'kpfk' ? ['a'] : [],
+      // 'split' is the KPFA shape: one station, two channels, two servers,
+      // and an admin password for only one of them.
+      streamIdsFor: (id) => (id === 'kpfk' ? ['a'] : id === 'split' ? ['a', 'b'] : []),
+      adminCredsFor: (host) => (host === 'one.test' ? { user: 'u', password: 'p' } : null),
       getDistinctDevices: (ids) => ({ devices: ids.length }),
       getReturningDevices: (ids) => ({ current: ids.length, comparable: false, reason: 'nothing-recorded' }),
       getDeviceTrend: (ids) => ({ granularity: 'day', buckets: ids.map(() => ({ key: '2026-09-01', devices: 1, families: {}, platforms: {} })) }),
@@ -157,6 +160,23 @@ test('listener-detail scopes mounts, totals, distribution and geography by host 
   assert.ok(selected.regionHours, 'the route must surface the daypart profile');
   assert.equal(selected.regionHours.timeZone, 'America/Los_Angeles',
     'the hour is read on the SELECTED station\'s clock, not the deployment\'s');
+
+  /* A station wholly on the credentialed host: nothing to explain. */
+  assert.equal(selected.detailCoverage.covered, 1);
+  assert.equal(selected.detailCoverage.total, 1);
+  /* Array.from, because the handler ran in a vm: deepStrictEqual compares
+     prototypes, and an array built in another realm fails on the prototype
+     rather than on its contents. */
+  assert.deepEqual(Array.from(selected.detailCoverage.uncoveredHosts), []);
+
+  /* THE KPFA CASE. One station, two channels, two servers, a password for one.
+     These figures describe HALF the station, and saying nothing understates it
+     as a whole one — which nobody goes looking for. */
+  const split = get({ stationId: 'split' });
+  assert.equal(split.detailCoverage.covered, 1);
+  assert.equal(split.detailCoverage.total, 2);
+  assert.deepEqual(Array.from(split.detailCoverage.uncoveredHosts), ['two.test']);
+  assert.equal(split.detailCoverage.channels.find((c) => c.id === 'b').covered, false);
   assert.equal(selected.totals.connections, 15);
   assert.equal(selected.places.placed, 14);
   assert.equal(selected.distribution.channels.length, 2);

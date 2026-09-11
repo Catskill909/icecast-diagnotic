@@ -68,7 +68,7 @@ test('no topic body contains an unclosed tag or a stray backtick', () => {
 test('the guide covers the panels that get misread', () => {
   const all = topics();
   const ids = Array.from(all, (t) => t.id);
-  for (const id of ['audience', 'geography', 'royalties', 'impact']) {
+  for (const id of ['audience', 'geography', 'royalties', 'impact', 'access']) {
     assert.ok(ids.includes(id), `the guide has no "${id}" topic`);
   }
 
@@ -78,4 +78,15 @@ test('the guide covers the panels that get misread', () => {
   assert.match(text, /two maps/i, 'the geography topic must explain the two maps');
   assert.match(text, /cannot be filled in backwards/i, 'and why history cannot be backfilled');
   assert.match(text, /state, not your signal area/i, 'and that in-market is a state');
+
+  /* The two gates are fixed by different people, so the guide has to separate
+     them or a reader chases the wrong one. */
+  const access = all.find((t) => t.id === 'access');
+  const at = access.body.join(' ');
+  assert.match(at, /Counting <em>how many<\/em> people are\s+listening needs nothing special/,
+    'the one-sentence rule must survive edits');
+  assert.match(at, /belongs to the SERVER, not to the station/,
+    'a station split across two servers is the case that misleads');
+  assert.match(at, /different problems/,
+    '"sign in" and "needs an admin password" must not be conflated');
 });
