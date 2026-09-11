@@ -1,5 +1,63 @@
 # Handoff — Icecast Monitor
 
+## 2026-09-10 — History fix confirmed live; dashboard uptime tile fixed; audit
+
+The History selection fix shipped as `e5d2aa9`. Verified rather than assumed:
+both GitHub checks pass on that commit ("Unit tests", "Image builds and boots"),
+and the deployed `history.js` and `listeners.js` are byte-identical to local
+HEAD (SHA-256 `04f3200b…16fa7ac` and `5402b920…1ef4f452`). The earlier entry
+below saying this was "not committed, pushed or deployed" is superseded.
+
+SWEEP FOR THE CLASS, not the instance. The defect is: an async handler decides
+what to paint by reading the MUTABLE current selection after its await, rather
+than the selection captured when the request was issued. Every client script was
+checked. `event-detail.js`, `geo-map.js`, `guide.js`, `audience-stats.js` and
+`preview-player.js` make no network calls at all; `admin.js` is user-initiated
+CRUD behind a timeout helper, not selection-scoped. That leaves three files:
+`history.js` (correct — one captured query, one `Promise.all`, atomic commit,
+version checked in BOTH the success and catch paths) and `listeners.js`
+(correct — `loadVersion` checked after every await), plus one live instance.
+
+`public/app.js` `refreshUptimeTile()` guarded its success path with
+`uptimeFetchToken` but not its failure path. A slow 7-day request that failed
+after the reader clicked 24h read the mutated `uptimeRangeDays`, saw `=== 1`,
+and painted the local sample-based fallback over the live 24-hour figure — under
+a "last 7 days" label, since `rangeLabel` was captured from the older range. The
+same mutable read made `res.coverageDays < uptimeRangeDays * 0.95` judge a
+30-day answer against 1 day, reporting partial coverage as complete. The range
+is now captured once as `requestedDays`, and the catch returns when superseded.
+
+Verification, Node 24.20.0: full suite 667/667 passing, zero failures
+(6.35 s). New `test/uptime-range-refresh.test.js` drives the real loader in a
+`vm` with controlled completion order; 2 of its 5 tests fail against unpatched
+`app.js` and all 5 pass against the fix.
+
+AUDIT, read-only against production. Per-station figures sum EXACTLY to All
+stations at every range (24h 14,254; 7d 107,221; 30d 221,561), the five stations
+partition the 10 streams with no orphan or overlap, and no longer range reports a
+lower peak than a shorter one. Cache headers are correct on every HTML and JS
+asset (`no-cache, no-store, must-revalidate`), so the hard refresh the owner
+needed was a tab held open across a deploy, not a misconfiguration — no header
+can fix that, only a build-stamp "reload" nudge, which is deferred as a feature.
+`/api/listener-detail` reads the monitor's cached snapshot, so auditing it does
+not probe Icecast or inflate listener counts. Stream `wbai-wpfw` ("WPFW
+Eckington 1", 2.1 avg listeners) sits under station `wbai`; the owner confirms
+this is a known arrangement — one station carries another's mount. No action.
+
+NOT DONE: the protected `/api/listener-detail` audit. It needs a signed-in
+session and this environment has no browser automation (no Puppeteer/Playwright)
+and no `gh`. Asked the owner for the `kpft_admin` cookie value rather than a
+password; the Player/App panel is unverified against real authenticated data.
+
+Files: `public/app.js`, `test/uptime-range-refresh.test.js`, `HANDOFF.md`.
+Status: fix is local and tested, NOT committed or deployed.
+
+Next action: commit and push `public/app.js` + its test, confirm both checks,
+deploy in Coolify. Then run the protected-endpoint audit once a session cookie
+is available.
+
+---
+
 ## 2026-09-10 — History selection race fixed locally
 
 The owner confirmed that the earlier Audience deployment works after a hard

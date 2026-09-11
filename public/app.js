@@ -179,7 +179,11 @@
 
   let uptimeFetchToken = 0;
   async function refreshUptimeTile() {
-    const rangeLabel = UPTIME_RANGE_LABELS[uptimeRangeDays] || `last ${uptimeRangeDays} days`;
+    // Capture the range this request describes. Reading uptimeRangeDays again
+    // after the await belongs to whichever pill is selected by then, not to the
+    // one that asked — which is how a late answer lands under the wrong label.
+    const requestedDays = uptimeRangeDays;
+    const rangeLabel = UPTIME_RANGE_LABELS[requestedDays] || `last ${requestedDays} days`;
 
     // Every range, including 24h, now comes from /api/uptime. The old local
     // shortcut counted raw check samples, so a run of probe resets that never
@@ -187,13 +191,13 @@
     // disagreed with the same number on the history page.
     const token = ++uptimeFetchToken;
     try {
-      const res = await fetch(`/api/uptime?days=${uptimeRangeDays}`).then((r) => r.json());
+      const res = await fetch(`/api/uptime?days=${requestedDays}`).then((r) => r.json());
       if (token !== uptimeFetchToken) return; // a newer tab click superseded this request
       if (res.uptime == null) {
         applyUptimeValue(null, { collecting: true });
         return;
       }
-      if (res.coverageDays < uptimeRangeDays * 0.95) {
+      if (res.coverageDays < requestedDays * 0.95) {
         applyUptimeValue(res.uptime, {
           partial: true,
           detail: `Partial — only ${coverageLabel(res.coverageDays)} of history collected so far`,
@@ -203,9 +207,13 @@
       }
     } catch (err) {
       console.error('Uptime range fetch failed:', err);
+      // The failure is worth logging either way, but the tile is not ours to
+      // write once a newer pill click owns it — the same rule the success path
+      // follows. Without this, a slow 7-day failure repaints the 24-hour tile.
+      if (token !== uptimeFetchToken) return;
       // Fall back to the local sample-based figure rather than showing nothing:
       // a slightly pessimistic number beats an empty tile on the live dashboard.
-      if (uptimeRangeDays === 1) {
+      if (requestedDays === 1) {
         applyUptimeValue(calculate24hUptime(), { detail: `across all streams · ${rangeLabel}` });
       }
     }
