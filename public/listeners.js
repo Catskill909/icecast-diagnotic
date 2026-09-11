@@ -1002,19 +1002,105 @@
      Reads the SAME payload as renderDeep — /api/listener-detail carries the
      places block — so the map and the audience figures beside it can never
      describe two different moments. */
+  /* WHICH MAP. "period" counts distinct people across the selected range;
+     "live" counts connections open this second. The period map is the figure a
+     general manager actually reports, so it leads — but it can only draw what
+     has been recorded since geography started being stored, and before that
+     there is nothing to show. The choice is remembered per reader. */
+  let geoMode = 'period';
+  try { geoMode = localStorage.getItem('geoMode') === 'live' ? 'live' : 'period'; } catch (e) { /* private mode */ }
+  let lastDetail = null;
+
+  /**
+   * How much of the selected window the location record actually covers.
+   *
+   * THIS IS WHAT RETIRES THE EXPLANATORY NOTICE. Geography is written down from
+   * the day the column shipped and cannot be backfilled, so for the first weeks
+   * the map is honestly incomplete. Rather than a banner somebody must remember
+   * to delete before a network rollout, the notice is derived: when the record
+   * reaches back past the start of the window and no device in it predates the
+   * record, there is nothing left to explain and it stops being rendered.
+   */
+  function geoCoverage(d) {
+    const period = d.period || {};
+    const places = period.places || {};
+    const windowDays = period.days || days;
+    const from = period.coveredFrom ? new Date(period.coveredFrom) : null;
+    const daysCovered = from ? Math.max(0, (Date.now() - from.getTime()) / 86400000) : 0;
+    const located = places.placed || 0;
+    const unrecorded = places.unrecorded || 0;
+    return {
+      windowDays, from, daysCovered, located, unrecorded,
+      // Every device in the window predates the location record: nothing to draw.
+      empty: located === 0,
+      // Half a day of slack, so a window that is covered to the minute does not
+      // flicker a "still collecting" notice at a reader because of rounding.
+      partial: located > 0 && (unrecorded > 0 || daysCovered + 0.5 < windowDays),
+    };
+  }
+
+  const plural = (n, one, many) => `${n} ${n === 1 ? one : many}`;
+
   async function renderGeo(d) {
     const panel = document.getElementById('geo-panel');
     const hint = document.getElementById('geo-hint');
     if (!panel || !window.GeoMap) return;
+    lastDetail = d;
 
-    const places = d.places || {};
+    const cov = geoCoverage(d);
+    // Asking for the window map before any of it was recorded would draw an
+    // empty country. Fall back to live and say why, rather than showing nothing.
+    const usePeriod = geoMode === 'period' && !cov.empty;
+    const places = usePeriod ? (d.period.places || {}) : (d.places || {});
+    const rangeName = rangeLabelFor(days);
+
+    // A person and a connection are not the same unit, and the map means
+    // something different depending on which one it is counting.
+    const unit = usePeriod
+      ? { one: 'person', many: 'people', noun: 'listeners' }
+      : { one: 'connection', many: 'connections', noun: 'connections' };
+
     const ready = GeoMap.readiness(places, d.geo);
     const market = GeoMap.inMarket(places);
     const countryRows = GeoMap.countries(places);
 
-    const notPlaced = `
+    const toggle = `
+      <div class="geo-modes" role="group" aria-label="What the map counts">
+        <button type="button" class="geo-mode${usePeriod ? ' active' : ''}"
+                data-geo-mode="period"${cov.empty ? ' disabled' : ''}>${esc(rangeName)}</button>
+        <button type="button" class="geo-mode${usePeriod ? '' : ' active'}"
+                data-geo-mode="live">Right now</button>
+        <span class="geo-mode-note">${usePeriod
+          ? 'distinct people who listened in this period'
+          : 'connections open at this moment'}</span>
+      </div>`;
+
+    let notice = '';
+    if (cov.empty) {
+      notice = `<div class="geo-notice">
+          <span class="material-symbols-outlined">schedule</span>
+          <div><strong>Location history is still being collected.</strong>
+            Where listeners are can only be counted from the day the app started
+            recording it, and it cannot be filled in backwards. Until then this
+            panel shows who is connected right now.</div>
+        </div>`;
+    } else if (cov.partial) {
+      const covered = cov.daysCovered < 1
+        ? 'less than a day'
+        : plural(Math.floor(cov.daysCovered), 'day', 'days');
+      notice = `<div class="geo-notice">
+          <span class="material-symbols-outlined">hourglass_top</span>
+          <div><strong>Still filling in.</strong> Location has been recorded for
+            ${esc(covered)} of the last ${esc(plural(Math.round(cov.windowDays), 'day', 'days'))},
+            so this map covers part of the period rather than all of it. It keeps
+            growing on its own and this notice disappears once the record covers
+            the whole range.</div>
+        </div>`;
+    }
+
+    const foot = `
       <div class="geo-foot">
-        <span><strong>${places.placed || 0}</strong> connections located</span>
+        <span><strong>${places.placed || 0}</strong> ${unit.many} located</span>
         <span><strong>${places.relays || 0}</strong> relays excluded</span>
         <span><strong>${places.unplaced || 0}</strong> could not be placed</span>
       </div>`;
@@ -1022,11 +1108,11 @@
     // The map, or the reason there isn't one — never a blank grid, which would
     // read as an audience that exists nowhere.
     const mapBlock = ready.ok
-      ? `<div class="geo-grid" role="img" aria-label="Listeners by US state">
+      ? `<div class="geo-grid" role="img" aria-label="${usePeriod ? 'Listeners' : 'Connections'} by US state">
            ${GeoMap.tiles(places).map((t) => `
              <div class="geo-tile step-${t.step}${t.code === market.home ? ' home' : ''}"
                   style="grid-column:${t.col + 1};grid-row:${t.row + 1}"
-                  title="${esc(t.name)} — ${t.listeners} listener${t.listeners === 1 ? '' : 's'}">
+                  title="${esc(t.name)} — ${plural(t.listeners, unit.one, unit.many)}">
                <span class="geo-tile-code">${t.code}</span>
                ${t.listeners ? `<span class="geo-tile-n">${t.listeners}</span>` : ''}
              </div>`).join('')}
@@ -1052,13 +1138,13 @@
            <div class="deep-tile primary">
              <div class="deep-tile-label">In ${esc(market.homeName)}</div>
              <div class="deep-tile-value">${Math.round(market.share * 100)}%</div>
-             <div class="deep-tile-note">${market.inside} of ${market.usPlaced} located US connections.
+             <div class="deep-tile-note">${market.inside} of ${market.usPlaced} located US ${esc(unit.many)}.
                <strong>A state, not a signal area</strong> — a listener across the state counts as inside.</div>
            </div>
            <div class="deep-tile">
              <div class="deep-tile-label">Outside ${esc(market.home)}</div>
              <div class="deep-tile-value">${market.outside}</div>
-             <div class="deep-tile-note">US listeners the broadcast signal never reaches</div>
+             <div class="deep-tile-note">US ${esc(unit.noun)} the broadcast signal never reaches</div>
            </div>
          </div>`
       : `<div class="geo-note-line">${
@@ -1081,8 +1167,32 @@
       ? `<div class="deep-attribution">${(d.attribution || []).map((a) => `<a href="${esc(a.url)}" target="_blank" rel="noopener noreferrer">${esc(a.text)}</a>`).join(' \u00b7 ')}</div>`
       : '';
 
-    panel.innerHTML = marketBlock + mapBlock + notPlaced + countryBlock + attribution;
-    if (hint) hint.textContent = d.lastRunAt ? `read ${fmtWhen(d.lastRunAt)}` : '';
+    panel.innerHTML = toggle + notice + marketBlock + mapBlock + foot + countryBlock + attribution;
+
+    // NAME THE CLOCK. This section is the one panel below the range selector
+    // that does not simply obey it, so a reader comparing it with the figures
+    // above is otherwise left to conclude the geography is missing listeners.
+    if (hint) {
+      hint.textContent = usePeriod
+        ? `${rangeName.toLowerCase()} \u00b7 distinct listeners`
+        : (d.lastRunAt ? `connected right now \u00b7 read ${fmtWhen(d.lastRunAt)}` : 'connected right now');
+    }
+  }
+
+  /* Delegated on the PANEL, not on the document: the panel rewrites its own
+     markup on every render, so a handler bound to the buttons themselves would
+     die with them, while one bound to the container survives `innerHTML`.
+     Redrawing uses the payload already in hand — switching what the map counts
+     is a change of view, not a new request. */
+  const geoPanelEl = document.getElementById('geo-panel');
+  if (geoPanelEl) {
+    geoPanelEl.addEventListener('click', (e) => {
+      const btn = e.target && e.target.closest && e.target.closest('[data-geo-mode]');
+      if (!btn || btn.disabled) return;
+      geoMode = btn.dataset.geoMode === 'live' ? 'live' : 'period';
+      try { localStorage.setItem('geoMode', geoMode); } catch (err) { /* private mode */ }
+      if (lastDetail) renderGeo(lastDetail).catch(() => {});
+    });
   }
 
   /* ── Range echo ───────────────────────────────────────────────────────

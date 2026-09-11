@@ -1075,3 +1075,78 @@
   .geo-tile-n { display: none; }
   .geo-tile-code { font-size: 8px; }
 }
+
+/* ── Which map ──────────────────────────────────────────────────────────────
+   The one control on this page that does NOT belong to the range bar, so it is
+   deliberately not a .range-pill: it switches what is being counted, not over
+   what period. Made to look like a choice rather than a filter, because the
+   reader's first question at this panel is "why is this number so small" and
+   the answer is which of the two clocks they are reading. */
+.geo-modes {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 12px;
+}
+
+.geo-mode {
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  background: var(--surface-2);
+  border: 1px solid var(--surface-3);
+  border-radius: 100px;
+  padding: 6px 14px;
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease;
+}
+
+.geo-mode:hover:not(:disabled) { color: var(--text-primary); border-color: var(--primary-dark); }
+
+.geo-mode.active {
+  background: var(--primary);
+  border-color: var(--primary);
+  color: #fff;
+}
+
+/* Disabled means the window map has nothing recorded yet, not that the feature
+   is broken — the notice directly below says which, so this only has to stop
+   reading as clickable. */
+.geo-mode:disabled { opacity: 0.45; cursor: not-allowed; }
+
+.geo-mode-note {
+  font-size: 11px;
+  color: var(--text-tertiary);
+  margin-left: 4px;
+}
+
+/* The notice that retires itself. Styled as information rather than as a
+   warning: incomplete history early on is expected, not a fault, and an amber
+   alert box would train a manager to distrust a figure that is simply young. */
+.geo-notice {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--text-secondary);
+  background: var(--primary-surface);
+  border: 1px solid var(--primary-dark);
+  border-radius: 8px;
+  padding: 10px 12px;
+  margin-bottom: 14px;
+}
+
+.geo-notice strong { color: var(--text-primary); }
+
+.geo-notice .material-symbols-outlined {
+  font-size: 18px;
+  color: var(--primary);
+  flex-shrink: 0;
+}
+
+@media (max-width: 560px) {
+  .geo-mode-note { flex-basis: 100%; margin-left: 0; }
+}

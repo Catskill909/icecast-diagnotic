@@ -1707,7 +1707,9 @@ async function collectListenerDetail(hosts) {
 
       const streamId = channelOf.get(mountPath);
       if (streamId) {
-        const ids = listenerDetailModule.deviceIdentities(res.rows, salt);
+        // `geo` is the same module the live aggregate below is given, so the
+        // stored place and the live map are produced by identical rules.
+        const ids = listenerDetailModule.deviceIdentities(res.rows, salt, geo);
         const bag = perChannel.get(streamId) || [];
         bag.push(...ids);
         perChannel.set(streamId, bag);

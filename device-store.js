@@ -94,6 +94,23 @@ class DeviceStore {
         end_ms    INTEGER NOT NULL,
         device    TEXT    NOT NULL,
         cls       TEXT    NOT NULL,
+        /* WHERE, at the coarsest useful grain, so the map can answer for a
+           WINDOW and not only for this instant. Icecast reports where its
+           current listeners are and keeps none of it, so a 30-day map can only
+           exist if the place is written down beside the device as it is seen.
+
+           One compact token, because it is one value per device per bucket and
+           the table is the one that grows with the audience:
+             ''       never recorded — every row written before this column
+             '-'      relay or datacenter, excluded from the map by the same
+                      rule the live panel uses
+             '?'      could not be placed
+             'US:MD'  placed, with a state that cleared the centroid guard
+             'US:'    placed in the US, state withheld by that guard
+             'GB:'    placed, non-US — country resolution only, by design
+
+           Never a city and never a coordinate, exactly as the live panel. */
+        place     TEXT    NOT NULL DEFAULT '',
         PRIMARY KEY (stream_id, tier, start_ms, device)
       ) WITHOUT ROWID;
 
@@ -104,15 +121,25 @@ class DeviceStore {
       CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT);
     `);
 
+    /* An existing deployment has a `devices` table without `place`, and this
+       record is permanent — it cannot be dropped and rebuilt. ALTER TABLE ADD
+       COLUMN is O(1) in SQLite and leaves every existing row at '', which is
+       exactly right: those listeners were real and their location was never
+       recorded, which is a different thing from being unplaceable. */
+    const columns = this.db.prepare('PRAGMA table_info(devices)').all();
+    if (!columns.some((c) => c.name === 'place')) {
+      this.db.exec("ALTER TABLE devices ADD COLUMN place TEXT NOT NULL DEFAULT ''");
+    }
+
     this.stmt = {
       insert: this.db.prepare(
-        'INSERT OR IGNORE INTO devices (stream_id, tier, start_ms, end_ms, device, cls) VALUES (?,?,?,?,?,?)',
+        'INSERT OR IGNORE INTO devices (stream_id, tier, start_ms, end_ms, device, cls, place) VALUES (?,?,?,?,?,?,?)',
       ),
       earliestAll: this.db.prepare(
         'SELECT MIN(start_ms) AS t FROM devices WHERE start_ms < ? AND end_ms > ?',
       ),
       olderThan: this.db.prepare(
-        'SELECT stream_id, start_ms, device, cls FROM devices WHERE tier = ? AND end_ms <= ?',
+        'SELECT stream_id, start_ms, device, cls, place FROM devices WHERE tier = ? AND end_ms <= ?',
       ),
       deleteTierBefore: this.db.prepare('DELETE FROM devices WHERE tier = ? AND end_ms <= ?'),
       deleteMonthsBefore: this.db.prepare('DELETE FROM devices WHERE tier = 2 AND end_ms <= ?'),
@@ -139,7 +166,7 @@ class DeviceStore {
       const holes = new Array(n).fill('?').join(',');
       this.#byArity.set(n, {
         distinct: this.db.prepare(`
-          SELECT device, MIN(cls) AS cls
+          SELECT device, MIN(cls) AS cls, MAX(place) AS place
           FROM devices
           WHERE stream_id IN (${holes}) AND start_ms < ? AND end_ms > ?
           GROUP BY device
@@ -166,7 +193,7 @@ class DeviceStore {
     try {
       for (const e of entries) {
         if (!e || !e.id) continue;
-        this.stmt.insert.run(streamId, TIER.hour, start, end, e.id, e.cls || '');
+        this.stmt.insert.run(streamId, TIER.hour, start, end, e.id, e.cls || '', e.place || '');
       }
       this.db.exec('COMMIT');
     } catch (err) {
@@ -194,6 +221,17 @@ class DeviceStore {
 
     const players = {};
     const platforms = {};
+    /* The SAME shape the live panel publishes, so one renderer draws both and
+       the two views cannot drift apart in how they count. */
+    const places = {
+      countries: {}, usStates: {},
+      placed: 0, relays: 0, unplaced: 0, stateWithheld: 0,
+      reasons: {},
+      // Devices carrying no geography at all: seen before the column existed.
+      // Held apart from `unplaced` because "we did not record it" and "we could
+      // not place them" would otherwise average into one misleading figure.
+      unrecorded: 0,
+    };
     let devices = 0;
 
     // GROUP BY device already made these unique across the requested channels —
@@ -203,6 +241,27 @@ class DeviceStore {
       const [fam, plat] = String(r.cls || '').split('|');
       if (fam) players[fam] = (players[fam] || 0) + 1;
       if (plat) platforms[plat] = (platforms[plat] || 0) + 1;
+
+      /* MAX(place), not MIN, is what the query above selects. One device can
+         hold rows on several channels, and the tokens sort so that the most
+         informative one wins: 'US:MD' > '?' > '-' > ''. A listener placed on
+         any channel is placed, and only a device placed NOWHERE falls back. */
+      const place = String(r.place || '');
+      if (place === '') { places.unrecorded += 1; continue; }
+      if (place === '-') { places.relays += 1; continue; }
+      if (place === '?') { places.unplaced += 1; places.reasons.unknown = (places.reasons.unknown || 0) + 1; continue; }
+
+      const [country, region] = place.split(':');
+      if (!country) { places.unplaced += 1; continue; }
+      places.placed += 1;
+      places.countries[country] = (places.countries[country] || 0) + 1;
+      if (country === 'US') {
+        if (region) places.usStates[region] = (places.usStates[region] || 0) + 1;
+        else {
+          places.stateWithheld += 1;
+          places.reasons['no-region'] = (places.reasons['no-region'] || 0) + 1;
+        }
+      }
     }
 
     const e = st.earliest.get(...args);
@@ -212,6 +271,7 @@ class DeviceStore {
       devices,
       players,
       platforms,
+      places,
       coveredFrom: earliest == null ? null : new Date(earliest).toISOString(),
       // True when the window reaches back further than anything recorded, so a
       // caller can say "since we started measuring" rather than quoting a short
@@ -229,7 +289,9 @@ class DeviceStore {
       try {
         for (const r of rows) {
           const [s, e] = bucketRange(toTier, r.start_ms);
-          this.stmt.insert.run(r.stream_id, toTier, s, e, r.device, r.cls);
+          // `place` travels with the device. Dropped here, the map would work
+          // for 24 hours and go blank at 30 days — with nothing to show why.
+          this.stmt.insert.run(r.stream_id, toTier, s, e, r.device, r.cls, r.place);
         }
         this.stmt.deleteTierBefore.run(fromTier, cutoff);
         this.db.exec('COMMIT');

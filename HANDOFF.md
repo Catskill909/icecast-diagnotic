@@ -1,5 +1,130 @@
 # Handoff — Icecast Monitor
 
+## 2026-09-10 — Geography over a WINDOW, not only this instant
+
+The owner's question — "why are these numbers so low" — was not a bug. The map
+read the live Icecast snapshot (77 connections) under a heading that said seven
+days (peak 1,060). But a snapshot is not the figure a general manager reports,
+so the answer was to build the one that is: distinct people over the selected
+range, with where they were. The owner asked for both views, an obvious way to
+switch, and a "still collecting" explainer that can go away later.
+
+WHY IT WAS NOT ALREADY POSSIBLE. Icecast reports where its current listeners are
+and keeps no history. `device-store.js` already stored WHO listened, permanently
+and at three tiers, but had no geography column at all — the place was looked
+up, drawn, and discarded. Crucially the lookup already happens in the SAME loop,
+on the SAME rows, that writes the device record (`monitor.js`), so no new
+lookup, data source or service was needed: only somewhere to put it.
+
+`devices.place` is one compact token per device per bucket — '' never recorded,
+'-' relay excluded, '?' unplaceable, 'US:MD' placed with a state, 'US:' state
+withheld by the centroid guard, 'GB:' non-US country only. `placeToken()` in
+listener-detail.js produces it by calling the same `classifyChannel` and
+`lookupPlace` the live panel calls, in the same order, so the two maps cannot
+disagree about who counts. Never a city, never a coordinate — unchanged.
+
+THREE THINGS THAT WOULD HAVE FAILED SILENTLY, all now tested:
+  - `compactDevices` folds hour→day→month. Not carrying `place` would have left
+    the map working at 24 hours and quietly empty at 30 days.
+  - An existing deployment has a permanent table with no `place` column and rows
+    that cannot be re-collected. ALTER TABLE ADD COLUMN migrates it; those rows
+    read as `unrecorded`, held apart from `unplaced`, because "never written
+    down" and "could not be placed" would otherwise understate located share
+    for ever.
+  - `MAX(place)` in the distinct query, not MIN: tokens sort 'US:MD' > '?' > '-'
+    > '', so a device placed on ANY channel is placed.
+
+INTERFACE. `getDistinctDevices` returns `places` in the SAME shape the live
+panel publishes, so one renderer draws both and the views cannot drift. The
+section carries a two-button choice — the range name, or "Right now" — with the
+unit changing honestly with it ("people located" vs "connections located"). The
+choice is remembered per reader. Asking for the window map before anything was
+recorded falls back to live and says why rather than drawing an empty country.
+
+THE NOTICE RETIRES ITSELF. A banner someone must remember to delete would still
+be there over a mature figure years into a Pacifica rollout, teaching managers
+to distrust the number. `geoCoverage()` derives it: "still filling in" while the
+record is shorter than the window or any device in it predates the record, and
+nothing once neither holds. Half a day of slack stops rounding flicker.
+
+Verification, Node 24.20.0: full suite 688/688, zero failures (6.38 s). New
+`test/device-geography.test.js` (11) covers the fold, the migration from a
+hand-built pre-feature table, relay/withheld/non-US token rules, the
+cross-channel MAX, and no-database. New `test/geo-coverage-notice.test.js` (6)
+pins the three notice states and that the third is reached unaided. Two initial
+failures there were my test's own bugs — geo.js reports a datacenter as network
+'hosting', and the id helper prefixed 'dev' — not defects in the code.
+`test/audience-refresh.test.js` caught a real design mistake: a document-wide
+click listener for one panel. It is now bound to `#geo-panel`, which survives
+`innerHTML` and is the right scope anyway.
+
+Booted locally on a scratch data dir: clean start, no migration error. The
+devices DB is created on the first listener-detail cycle, so there was nothing
+to inspect on disk; the fresh-create path is covered by the store tests, which
+read `place` back and would throw if the column were absent.
+
+NOT VERIFIED: anything requiring a signed-in session, and the first real period
+map — there is no recorded geography anywhere yet, so on deploy the panel will
+correctly show "Location history is still being collected" and fall back to the
+live view. The window map becomes real as data accumulates.
+
+Files: `device-store.js`, `listener-detail.js`, `monitor.js`, `server.js`,
+`public/listeners.js`, `public/listeners.html`, `public/listeners.css`,
+`test/device-geography.test.js`, `test/geo-coverage-notice.test.js`,
+`test/range-echo-scope.test.js`, `HANDOFF.md`.
+Status: local and tested, NOT committed or deployed.
+
+Next action: commit, push, confirm both checks, deploy, hard-reload the Audience
+tab once. Then leave it to gather: the period map is only as old as the deploy.
+
+---
+
+## 2026-09-10 — "Where They Listen" was labelled with a range it does not obey
+
+The uptime-tile fix shipped as `73a0f5b`; CI green and the deployed `app.js` is
+byte-identical to local HEAD. The owner then asked why the geography numbers
+looked so low: WPFW showed 72 located connections under a 7-day heading, beside
+a 7-day peak of 1,060.
+
+They are not low. They are CURRENT. `places` is derived from `mounts`, which
+comes from `monitor.getListenerDetail()` — the live Icecast snapshot — and never
+reads `days`. 72 located + 5 relays excluded = 77, against a live count of 91
+sampled minutes later. The panel reads this instant while "Range for everything
+below" claims a week over it.
+
+This cannot be fixed by windowing the map. `device-store.js` stores no region or
+country field at all, so no geographic history exists to query; Icecast reports
+where its current listeners are and keeps none of it. Live-only is a property of
+the data, not a defect.
+
+The defect was the label. `syncRangeEcho()` already skipped titles carrying
+`data-live-section`, but the attribute appeared NOWHERE in any markup — the
+guard had never once run, so every section below the selector was stamped,
+including the one that ignores it. `listeners.html` now marks the section and
+its help text says the panel reads this moment and why there is no 30-day map;
+the geo hint reads "connected right now · read <time>" instead of only the read
+time. No API, query or stored data changed — this is labelling.
+
+Verification, Node 24.20.0: full suite 671/671, zero failures (6.37 s). New
+`test/range-echo-scope.test.js` asserts every live-only section is marked, that
+exactly the expected count is marked, that `syncRangeEcho` chips a governed
+section and skips a marked one, and that the geo hint names its clock. Checked
+against pre-fix code: tests 1-2 fail on the old HTML and test 4 on the old JS.
+Test 4 was initially a false positive — "connected right now" already appears in
+the deep-tile note, so a whole-file match passed unpatched; it is now scoped to
+`renderGeo`. Test 3 passes either way by design: the mechanism always worked,
+nothing was wired to it.
+
+Files: `public/listeners.html`, `public/listeners.js`,
+`test/range-echo-scope.test.js`, `HANDOFF.md`.
+Status: local and tested, NOT committed or deployed.
+
+Next action: commit, push, confirm both checks, deploy, then hard-reload the
+Audience tab once — an open tab keeps the old script, which is what caused the
+two earlier "it needed a refresh" reports.
+
+---
+
 ## 2026-09-10 — History fix confirmed live; dashboard uptime tile fixed; audit
 
 The History selection fix shipped as `e5d2aa9`. Verified rather than assumed:

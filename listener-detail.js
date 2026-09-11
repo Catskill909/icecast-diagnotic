@@ -241,12 +241,48 @@ function deviceId(ip, userAgent, salt) {
  * connected for a week can never enter the audience-reach figure. Cume is a
  * count of people reached; a scraper was never reached.
  */
-function deviceIdentities(rows, salt) {
+/**
+ * The stored form of WHERE one listener was, as a single token.
+ *
+ * THE RULES ARE NOT RESTATED HERE — they are the same calls the live panel
+ * makes, in the same order, so the map for a window and the map for this
+ * instant cannot disagree about who counts. A relay is excluded because it
+ * geolocates to its datacenter; a state is published only when the record
+ * clears the centroid guard, and the country stands alone when it does not.
+ *
+ *   '-'      relay or datacenter, excluded from the map
+ *   '?'      could not be placed
+ *   'US:MD'  placed, state cleared the guard
+ *   'US:'    placed in the US, state withheld
+ *   'GB:'    placed, non-US — country resolution only
+ */
+function placeToken(row, cls, geo = NO_GEO) {
+  const lookupNetwork = typeof geo?.lookupNetwork === 'function' ? geo.lookupNetwork : NO_GEO.lookupNetwork;
+  const lookupPlace = typeof geo?.lookupPlace === 'function' ? geo.lookupPlace : NO_GEO.lookupPlace;
+
+  const ch = classifyChannel(cls, lookupNetwork(row.ip));
+  if (ch.channel === 'aggregator' || ch.channel === 'datacenter') return '-';
+
+  const pl = lookupPlace(row.ip);
+  if (!pl.resolved || !pl.countryCode) return '?';
+  return pl.countryCode === 'US' ? `US:${pl.region || ''}` : `${pl.countryCode}:`;
+}
+
+/**
+ * `geo` is optional and defaults to no databases, which yields '?' for every
+ * row. That is the correct reading of an unconfigured server — not a silent
+ * zero, and not a map drawn from nothing.
+ */
+function deviceIdentities(rows, salt, geo = NO_GEO) {
   const out = [];
   for (const r of Array.isArray(rows) ? rows : []) {
     const cls = classifyAgent(r.userAgent);
     if (cls.bot || (r.connectedSec != null && r.connectedSec >= BOT_SESSION_SECONDS)) continue;
-    out.push({ id: deviceId(r.ip, r.userAgent, salt), cls: `${cls.family}|${cls.platform}` });
+    out.push({
+      id: deviceId(r.ip, r.userAgent, salt),
+      cls: `${cls.family}|${cls.platform}`,
+      place: placeToken(r, cls, geo),
+    });
   }
   return out;
 }
@@ -673,7 +709,7 @@ async function collectMount(baseUrl, mountPath, creds) {
 
 module.exports = {
   parseListClients,
-  deviceId, deviceIdentities,
+  deviceId, deviceIdentities, placeToken,
   classifyAgent,
   classifyChannel,
   aggregate,
