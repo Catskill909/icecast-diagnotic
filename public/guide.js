@@ -477,6 +477,21 @@
     },
   ];
 
+  /* ONE RENDERER, TWO AUDIENCES.
+
+     The dashboard's topics are declared above; the admin page declares its own
+     in `admin-guide.js` and loads it first. Forking this file would give the
+     project two spellings of the same component — and the copy nobody is
+     looking at is the one that rots. */
+  const TOPIC_SET = (typeof window !== 'undefined' && Array.isArray(window.GUIDE_TOPICS))
+    ? window.GUIDE_TOPICS
+    : TOPICS;
+
+  /* The admin page loads Inter and nothing else — no icon font — so a glyph
+     name would render as the literal word "key" in its navigation. A page
+     without the font declares so rather than being detected. */
+  const USE_ICONS = !(typeof window !== 'undefined' && window.GUIDE_ICONS === false);
+
   const $ = (id) => document.getElementById(id);
   let index = 0;
 
@@ -485,9 +500,9 @@
     .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
 
   function renderNav() {
-    $('guide-nav').innerHTML = TOPICS.map((t, i) => `
+    $('guide-nav').innerHTML = TOPIC_SET.map((t, i) => `
       <button class="guide-tab${i === index ? ' active' : ''}" data-i="${i}">
-        <span class="material-symbols-outlined">${esc(t.icon)}</span>
+        ${USE_ICONS ? `<span class="material-symbols-outlined">${esc(t.icon)}</span>` : ''}
         <span class="guide-tab-label">${esc(t.title)}</span>
       </button>`).join('');
     $('guide-nav').querySelectorAll('[data-i]').forEach((b) =>
@@ -495,7 +510,7 @@
   }
 
   function renderTopic() {
-    const t = TOPICS[index];
+    const t = TOPIC_SET[index];
     // Body strings carry intentional inline markup (<em>, <strong>) written here
     // in this file — they are not user input, and nothing external reaches them.
     $('guide-content').innerHTML = `
@@ -515,10 +530,10 @@
       <div class="guide-stepper">
         <button class="guide-step" id="guide-prev" ${index === 0 ? 'disabled' : ''}>← Previous</button>
         <span class="guide-count">
-          ${index + 1} of ${TOPICS.length}
+          ${index + 1} of ${TOPIC_SET.length}
           <span class="guide-keys" aria-hidden="true"><kbd>←</kbd><kbd>→</kbd></span>
         </span>
-        <button class="guide-step" id="guide-next" ${index === TOPICS.length - 1 ? 'disabled' : ''}>Next →</button>
+        <button class="guide-step" id="guide-next" ${index === TOPIC_SET.length - 1 ? 'disabled' : ''}>Next →</button>
       </div>`;
     $('guide-prev').addEventListener('click', () => go(index - 1));
     $('guide-next').addEventListener('click', () => go(index + 1));
@@ -526,7 +541,7 @@
   }
 
   function go(i) {
-    if (i < 0 || i >= TOPICS.length) return;
+    if (i < 0 || i >= TOPIC_SET.length) return;
     index = i;
     renderNav();
     renderTopic();

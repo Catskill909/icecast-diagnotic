@@ -42,21 +42,60 @@ function assetsOf(htmlPath) {
   ];
   return refs
     .filter((r) => !/^https?:\/\//.test(r))          // fonts and CDNs are not ours
-    .map((r) => (r.startsWith('/') ? r : '/' + r));
+    .map((r) => (r.startsWith('/') ? r : '/' + r))
+    /* The cache-busting query is not part of the path. The gate middleware
+       matches `req.path`, which excludes it, so comparing the raw href would
+       report a correctly gated asset as ungated the moment someone adds
+       `?v=dev` to it — which is exactly what happened. */
+    .map((r) => r.split('?')[0]);
 }
 
-test('every asset a gated page loads is gated too', () => {
+/** Assets that a PUBLIC page also loads, and therefore cannot be gated. */
+function sharedWithPublicPages() {
   const gated = gatedPaths();
+  const shared = new Set();
+  for (const file of fs.readdirSync(path.join(ROOT, 'public')).filter((f) => f.endsWith('.html'))) {
+    if (gated.has('/' + file)) continue;
+    for (const asset of assetsOf(file)) shared.add(asset);
+  }
+  return shared;
+}
+
+test('every asset a gated page loads is gated too, unless a public page needs it', () => {
+  /* THE CARVE-OUT, and why it is safe.
+
+     The rule exists so nothing revealing admin content is reachable without
+     signing in. A stylesheet a public page ALSO loads reveals nothing — and
+     gating it would serve that public page unstyled to precisely the visitor
+     being turned away, which is the failure the companion test below guards
+     from the other direction.
+
+     So the question is not "is this asset gated" but "could this asset leak
+     admin content". Anything a public page loads, by definition, could not. */
+  const gated = gatedPaths();
+  const shared = sharedWithPublicPages();
   const problems = [];
 
   for (const p of gated) {
     if (!p.endsWith('.html')) continue;
     for (const asset of assetsOf(p.slice(1))) {
-      if (!gated.has(asset)) problems.push(`${p} loads ${asset}, which is NOT gated`);
+      if (gated.has(asset) || shared.has(asset)) continue;
+      problems.push(`${p} loads ${asset}, which is neither gated nor shared with a public page`);
     }
   }
 
   assert.deepEqual(problems, [], problems.join('\n'));
+});
+
+test('an asset carrying THIS deployment\'s admin content is gated', () => {
+  /* Not an instance of the rule above — an exception to the carve-out. The
+     admin guide names the stations, describes the alerting and explains where
+     the credentials sit. It is documentation, but it is documentation ABOUT
+     this install, and it is loaded by no public page. */
+  const gated = gatedPaths();
+  assert.ok(gated.has('/admin-guide.js'), 'admin-guide.js describes this deployment and must be behind the gate');
+  const shared = sharedWithPublicPages();
+  assert.ok(!shared.has('/admin-guide.js'), 'and no public page may start loading it');
 });
 
 test('every gated asset belongs to a gated page', () => {

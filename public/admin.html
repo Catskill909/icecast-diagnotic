@@ -4,6 +4,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="help.css?v=dev">
 <link rel="stylesheet" href="admin.css">
 
 <div class="wrap">
@@ -15,6 +16,7 @@
     </div>
     <div class="head-actions">
       <a class="navlink" href="/">Dashboard</a>
+      <button class="help-btn" id="help-btn" title="How stations, alerts and backups work">Guide</button>
       <button class="signout" id="logout">Sign out</button>
     </div>
   </header>
@@ -52,15 +54,15 @@
         <label>Name
           <input id="st-name" placeholder="WPFW Washington" required>
         </label>
-        <label>Identifier
+        <label>Identifier <details class="info-popover"><summary class="help-btn help-dot" title="What this affects">?</summary><div class="info-popover-card"><strong>This is the one field you cannot change later.</strong> Every stored sample, uptime figure and incident is filed under it, permanently.<br><br>It is <strong>not</strong> the station&rsquo;s name &mdash; the name is above and can be edited whenever you like. This is an internal key, normally the call sign in lower case.<br><br>Changing it afterwards would not move the history across. It would leave the old record filed under a key nothing references, and the station would start again from zero. So the app does not allow it.</div></details>
           <input id="st-id" placeholder="wpfw" pattern="[a-z0-9][a-z0-9-]*" required>
           <span class="note">Permanent. Used to key this station's history.</span>
         </label>
-        <label>Timezone
+        <label>Timezone <details class="info-popover"><summary class="help-btn help-dot" title="What this affects">?</summary><div class="info-popover-card">Two things depend on it. The station&rsquo;s <strong>weekly report</strong> arrives at 9am in this zone, and every <strong>day boundary</strong> in its figures is drawn here &mdash; so &ldquo;yesterday&rdquo; means the station&rsquo;s yesterday, not the server&rsquo;s.<br><br>It matters most across a network: three stations in three zones would otherwise have their days cut at a moment that suits none of them.</div></details>
           <span id="st-tz-slot"></span>
           <span class="note">Sets when this station's weekly report arrives, and the day boundaries in its figures.</span>
         </label>
-        <label>State
+        <label>State <details class="info-popover"><summary class="help-btn help-dot" title="What this affects">?</summary><div class="info-popover-card">Sets the <strong>in-market share</strong> on the listener map &mdash; how much of this station&rsquo;s audience is inside its own state, and how much the broadcast signal never reaches. The second figure is the one that shows what streaming adds.<br><br><strong>Leaving it blank is a real answer.</strong> The share is then withheld rather than borrowed from another station: no figure beats a wrong one.<br><br>It belongs to this station alone, which is why WPFW reads against DC while KPFT reads against TX.</div></details>
           <input id="st-region" placeholder="DC" maxlength="2"
                  pattern="[A-Za-z]{2}" autocapitalize="characters">
           <span class="note">Two-letter code for the state this station broadcasts from, DC included.
@@ -70,7 +72,7 @@
       </div>
 
       <div class="actions">
-        <button id="save-btn" class="primary">Add station</button>
+        <button id="save-btn">Add station</button>
         <button id="cancel-btn" class="ghost" type="button">Cancel</button>
       </div>
       <div class="msg" id="save-msg"></div>
@@ -109,7 +111,7 @@
           is the only copy of the incident history if the server is lost.
         </p>
       </div>
-      <button id="export-btn" class="primary">Download backup</button>
+      <button id="export-btn">Download backup</button>
     </div>
     <div class="msg" id="export-msg"></div>
 
@@ -144,4 +146,24 @@
     </div>
   </div>
 </div>
+<!-- The guide. Same modal and same renderer as the dashboard; the topics come
+     from admin-guide.js, which must load BEFORE guide.js reads them. -->
+<div class="guide-overlay" id="help-modal" style="display: none;">
+  <div class="guide-card">
+    <header class="guide-header">
+      <div>
+        <div class="guide-eyebrow">Guide</div>
+        <h2 class="guide-heading" id="guide-heading">Setting up stations</h2>
+      </div>
+      <button class="guide-close" id="guide-close" aria-label="Close guide" title="Close  ·  Esc">&times;</button>
+    </header>
+    <div class="guide-body">
+      <nav class="guide-nav" id="guide-nav" aria-label="Guide topics"></nav>
+      <article class="guide-content" id="guide-content" tabindex="-1"></article>
+    </div>
+  </div>
+</div>
+
+<script src="admin-guide.js?v=dev"></script>
+<script src="guide.js?v=dev"></script>
 <script src="admin.js"></script>

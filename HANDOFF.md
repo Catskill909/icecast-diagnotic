@@ -44,7 +44,14 @@ has Backup & move.
    recording began 2026-08-04, so September is the first complete month and
    October the second. Shipping a comparison whose earlier term is partial is
    the `+376%` artefact wearing a different label.
-4. **Help in the admin panel — Phase 9, newly scoped.** The Audience page has 16
+4. **Help in the admin panel — Phase 9, FIRST TWO STEPS SHIPPED 2026-09-11.**
+   `help.css` extracted and loaded by all four pages; popovers on Identifier,
+   State and Timezone; a five-topic admin guide reusing the dashboard's
+   renderer. Still to do: popovers on the alerts editor, the test-alert button,
+   add-to-existing-station, and the two mount warnings — all of which live in
+   `admin.js` rather than the markup. Original scoping below:
+
+   **Phase 9, as scoped.** The Audience page has 16
    inline popovers and the dashboard a 14-topic guide; `/admin.html` has NONE,
    and it is the page where a wrong click orphans a channel's history or
    replaces the whole record. One structural decision has to be taken first:

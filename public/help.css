@@ -1,0 +1,386 @@
+/* ═══════════════════════════════════════════════════════════════════════════
+   Shared help components — the popover and the guide modal
+
+   ONE DEFINITION, LOADED BY EVERY PAGE THAT USES THEM. These lived in
+   style.css and history.css, which meant the admin page — the one page where a
+   wrong click orphans a channel's history — could not carry help at all without
+   either pulling in two large sheets written for other layouts, or growing a
+   second copy that would drift from the first.
+
+   `test/css-classes.test.js` now asserts two things that make this stick: every
+   class a page uses must be defined in a sheet THAT PAGE LOADS, and a shared
+   component must be defined in exactly one stylesheet. The first is the check
+   that was missing — a rule the page cannot reach is the same as no rule.
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+/* ── from style.css ─────────────────────────────────────────── */
+
+
+.help-btn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 14px;
+  background: var(--primary-surface);
+  border: 1px solid rgba(124, 106, 239, 0.2);
+  border-radius: 100px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--primary-light);
+  text-decoration: none;
+  cursor: pointer;
+  transition: all var(--transition);
+}
+
+.help-btn:hover {
+  background: rgba(124, 106, 239, 0.18);
+  border-color: var(--primary-light);
+  transform: translateY(-1px);
+}
+
+.help-btn .material-symbols-outlined {
+  font-size: 16px;
+}
+
+/* A TEXT VARIANT, for pages with no icon font.
+
+   The admin page loads Inter and nothing else, and deliberately so — it uses no
+   icons anywhere. Pulling in a whole icon font for one question mark would be a
+   network request per page load to render a character the keyboard already has.
+   `?` in a circle reads as help in every interface anyone has used. */
+.help-dot {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 17px;
+  height: 17px;
+  padding: 0;
+  gap: 0;
+  border-radius: 50%;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1;
+  vertical-align: -3px;
+  margin-left: 6px;
+}
+
+/* Inside a label the popover must not inherit the label's own weight or
+   colour, or it reads as part of the field name rather than as a control. */
+label > .info-popover { display: inline; font-weight: 400; }
+
+.guide-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(320px, 100%), 1fr));
+  gap: 11px;
+  align-items: start;
+}
+
+.guide-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 14px;
+  padding: 13px 14px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  height: 100%;
+}
+
+/* The headline capability spans the full width — it is the one thing a reader
+   should take away before anything else. */
+.guide-item.featured {
+  grid-column: 1 / -1;
+  background: linear-gradient(135deg, rgba(124, 106, 239, 0.1), rgba(124, 106, 239, 0.03));
+  border-color: rgba(124, 106, 239, 0.3);
+}
+
+.guide-item.featured .guide-icon {
+  background: var(--primary);
+  color: #fff;
+}
+
+.guide-item.featured h4 {
+  font-size: 15px;
+}
+
+.guide-split {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(260px, 100%), 1fr));
+  gap: 10px;
+  margin-top: 10px;
+}
+
+.guide-case {
+  padding: 9px 11px;
+  border-radius: var(--radius-sm);
+  background: var(--surface-1);
+  border-left: 3px solid var(--border-hover);
+}
+
+.guide-case.studio { border-left-color: #f59e0b; }
+.guide-case.server { border-left-color: #38bdf8; }
+
+/* Direct child only — a <strong> emphasising a phrase inside the body text
+   must stay inline, not become its own block. */
+.guide-case > strong {
+  display: block;
+  font-size: 12px;
+  color: var(--text-primary);
+  margin-bottom: 3px;
+}
+
+.guide-case span strong {
+  display: inline;
+  color: var(--text-primary);
+}
+
+.guide-case span {
+  font-size: 11.5px;
+  color: var(--text-secondary);
+  line-height: 1.65;
+}
+
+/* Inline code sits inside flowing prose here — vertical padding would inflate
+   the line box and leave the paragraph unevenly spaced. */
+.guide-case code {
+  padding: 0 4px;
+  line-height: inherit;
+}
+
+.guide-icon {
+  width: 38px;
+  height: 38px;
+  border-radius: var(--radius-sm);
+  background: var(--primary-surface);
+  color: var(--primary-light);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.guide-icon .material-symbols-outlined {
+  font-size: 20px;
+}
+
+.guide-item h4 {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-primary);
+  margin-bottom: 4px;
+}
+
+.guide-item p {
+  font-size: 12px;
+  color: var(--text-secondary);
+  line-height: 1.5;
+}
+
+.guide-item code {
+  background: var(--surface-3);
+  padding: 1px 5px;
+  border-radius: 4px;
+  font-size: 11px;
+  color: var(--primary-light);
+}
+
+/* ── In-app guide ────────────────────────────────────────────────────────────
+   One topic at a time. The previous version stacked eight dense sections in a
+   single scrolling box, which made none of them readable — the content was never
+   the problem, the density was. */
+.guide-overlay {
+  position: fixed; inset: 0; z-index: 200;
+  background: rgba(6, 6, 12, 0.82);
+  backdrop-filter: blur(10px);
+  display: flex; align-items: center; justify-content: center;
+  padding: 28px 20px;
+}
+.guide-card {
+  width: 100%; max-width: 940px; max-height: 86vh;
+  display: flex; flex-direction: column;
+  background: var(--surface-1);
+  border: 1px solid var(--surface-3);
+  border-radius: 18px;
+  box-shadow: 0 30px 80px rgba(0, 0, 0, 0.6);
+  overflow: hidden;
+  animation: guideIn .18s ease-out;
+}
+
+.guide-header {
+  display: flex; align-items: flex-start; justify-content: space-between;
+  gap: 16px; padding: 24px 28px 20px;
+  border-bottom: 1px solid var(--surface-3);
+}
+.guide-eyebrow {
+  font-size: 11px; font-weight: 700; letter-spacing: .12em;
+  text-transform: uppercase; color: var(--primary-light); margin-bottom: 5px;
+}
+.guide-heading { font-size: 19px; font-weight: 650; letter-spacing: -0.01em; }
+.guide-close {
+  width: 34px; height: 34px; flex: none;
+  display: grid; place-items: center;
+  background: none; border: 1px solid transparent; border-radius: 50%;
+  color: var(--text-muted); font-size: 22px; line-height: 1; cursor: pointer;
+  transition: transform .28s cubic-bezier(.4, 0, .2, 1), background .15s, color .15s, border-color .15s;
+}
+.guide-close:hover {
+  color: var(--text-primary);
+  background: var(--surface-2);
+  border-color: var(--surface-3);
+  transform: rotate(90deg);
+}
+.guide-close:active { transform: rotate(90deg) scale(.92); }
+
+.guide-body { display: flex; flex: 1; min-height: 0; }
+
+/* Topic rail */
+.guide-nav {
+  width: 232px; flex: none; padding: 16px 12px; overflow-y: auto;
+  border-right: 1px solid var(--surface-3); background: rgba(0, 0, 0, 0.15);
+}
+.guide-tab {
+  display: flex; align-items: center; gap: 10px; width: 100%;
+  padding: 10px 12px; margin-bottom: 3px;
+  background: none; border: none; border-radius: 9px;
+  color: var(--text-secondary); font: inherit; font-size: 13px;
+  text-align: left; cursor: pointer; transition: background .12s, color .12s;
+}
+.guide-tab:hover { background: var(--surface-2); color: var(--text-primary); }
+.guide-tab.active { background: var(--primary-surface); color: var(--primary-light); font-weight: 600; }
+.guide-tab .material-symbols-outlined { font-size: 19px; flex: none; }
+.guide-tab-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* Content — generous by design */
+.guide-content { flex: 1; min-width: 0; overflow-y: auto; padding: 34px 38px 32px; outline: none; }
+.guide-topic-icon {
+  font-size: 30px; color: var(--primary-light);
+  display: block; margin-bottom: 14px;
+}
+.guide-content h3 { font-size: 23px; font-weight: 650; letter-spacing: -0.02em; margin-bottom: 12px; }
+.guide-lead {
+  font-size: 15.5px; color: var(--text-primary); font-weight: 500;
+  margin-bottom: 20px; line-height: 1.55;
+}
+.guide-content p { font-size: 14px; color: var(--text-secondary); line-height: 1.75; margin-bottom: 16px; }
+.guide-content strong { color: var(--text-primary); font-weight: 600; }
+.guide-content em { color: var(--text-primary); font-style: italic; }
+
+.guide-cases { display: grid; gap: 12px; margin: 22px 0; }
+.guide-case {
+  padding: 16px 18px; border-radius: 11px;
+  background: var(--surface-2); border-left: 3px solid var(--surface-4);
+}
+.guide-case.studio { border-left-color: var(--warn); }
+.guide-case.server { border-left-color: var(--info); }
+.guide-case-title { font-size: 13.5px; font-weight: 650; color: var(--text-primary); margin-bottom: 7px; }
+.guide-case p { margin: 0; font-size: 13.5px; }
+
+.guide-note {
+  padding: 13px 16px; border-radius: 10px; font-size: 13px !important;
+  background: var(--primary-surface); border: 1px solid rgba(124, 106, 239, .22);
+}
+
+.guide-stepper {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 12px; margin-top: 30px; padding-top: 20px;
+  border-top: 1px solid var(--surface-3);
+}
+.guide-step {
+  padding: 8px 15px; font: inherit; font-size: 13px; font-weight: 600;
+  background: var(--surface-2); color: var(--text-secondary);
+  border: 1px solid var(--surface-3); border-radius: 9px; cursor: pointer;
+}
+.guide-step:hover:not(:disabled) { color: var(--text-primary); border-color: var(--primary); }
+.guide-step:disabled { opacity: .35; cursor: not-allowed; }
+.guide-count { font-size: 12px; color: var(--text-muted); }
+
+.guide-count { display: inline-flex; align-items: center; gap: 9px; }
+.guide-keys { display: inline-flex; gap: 2px; }
+.guide-keys kbd {
+  display: inline-block; padding: 1px 5px;
+  background: var(--surface-3); border-radius: 4px;
+  font-family: inherit; font-size: 10.5px; color: var(--text-secondary);
+}
+
+@media (max-width: 760px) {
+  .guide-card { max-height: 92vh; }
+  .guide-body { flex-direction: column; }
+  .guide-nav {
+    width: auto; display: flex; gap: 6px; overflow-x: auto; padding: 12px;
+    border-right: none; border-bottom: 1px solid var(--surface-3);
+  }
+  .guide-tab { width: auto; flex: none; margin: 0; }
+  .guide-tab-label { display: none; }
+  .guide-tab.active .guide-tab-label { display: inline; }
+  .guide-content { padding: 26px 22px 24px; }
+  .guide-keys { display: none; }
+}
+/* ── from history.css ─────────────────────────────────────────── */
+
+
+.info-popover {
+  display: inline-flex;
+  margin-left: 1px;
+  text-transform: none;
+  letter-spacing: normal;
+}
+
+.info-popover summary {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  margin: -4px 0;
+  border: 0;
+  border-radius: 50%;
+  color: var(--text-tertiary);
+  cursor: pointer;
+  list-style: none;
+  transition: color var(--transition), background var(--transition);
+}
+.info-popover summary::-webkit-details-marker { display: none; }
+.info-popover summary:hover,
+.info-popover summary:focus-visible,
+.info-popover[open] summary {
+  color: var(--primary-light);
+  background: rgba(124, 106, 239, 0.12);
+  outline: none;
+}
+.info-popover summary:focus-visible {
+  box-shadow: 0 0 0 2px var(--surface-0), 0 0 0 4px var(--primary);
+}
+.info-popover summary .material-symbols-outlined {
+  color: currentColor;
+  font-size: 17px;
+}
+
+.info-popover-card {
+  position: absolute;
+  z-index: 40;
+  top: calc(100% + 7px);
+  left: 0;
+  width: min(500px, calc(100vw - 32px));
+  padding: 13px 15px;
+  border: 1px solid var(--border-hover);
+  border-radius: var(--radius-md);
+  background: var(--surface-3);
+  box-shadow: var(--shadow-lg);
+  color: var(--text-secondary);
+  font-size: 0.79rem;
+  font-weight: 400;
+  line-height: 1.55;
+  letter-spacing: 0;
+  text-align: left;
+  text-transform: none;
+}
+.info-popover-card strong { color: var(--text-primary); font-weight: 650; }
+
+@media (hover: hover) {
+  .info-popover:not([open]):hover > .info-popover-card { display: block; }
+}
+
+@media (max-width: 560px) {
+  .info-popover-card { width: calc(100vw - 32px); }
+  .ih-label .info-popover-card { left: -18px; }
+}

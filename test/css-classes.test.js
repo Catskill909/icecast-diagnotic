@@ -84,6 +84,63 @@ test('every class in the markup is defined in a stylesheet', () => {
   );
 });
 
+/* ── THE GAP THIS TEST CLOSES ───────────────────────────────────────────────
+   The test above asks whether a class exists in SOME stylesheet. That is not
+   the question a browser asks. A page renders a class unstyled whenever the
+   sheet defining it is one the page does not LOAD — and every page here loads a
+   different set.
+
+   It passed by luck: admin.html loads only admin.css and happens to define
+   everything it uses. The moment a shared component is used there, or a rule
+   moves between sheets, the first test stays green and the page breaks. */
+
+/** The stylesheets a page actually links, in order. */
+function sheetsFor(html) {
+  return [...html.matchAll(/href="([a-z0-9.-]+\.css)[^"]*"/gi)].map((m) => m[1]);
+}
+
+function classesIn(cssFiles) {
+  const names = new Set();
+  for (const file of cssFiles) {
+    const full = path.join(PUBLIC, file);
+    if (!fs.existsSync(full)) continue;
+    for (const m of fs.readFileSync(full, 'utf8').matchAll(/\.(-?[_a-zA-Z][\w-]*)/g)) names.add(m[1]);
+  }
+  return names;
+}
+
+test('every class is defined in a stylesheet THAT PAGE LOADS', () => {
+  const problems = [];
+  for (const file of fs.readdirSync(PUBLIC).filter((f) => f.endsWith('.html'))) {
+    const html = fs.readFileSync(path.join(PUBLIC, file), 'utf8');
+    const available = classesIn(sheetsFor(html));
+    for (const m of html.matchAll(/\sclass="([^"{}]*)"/g)) {
+      for (const cls of m[1].split(/\s+/).filter(Boolean)) {
+        if (NOT_STYLE_HOOKS.has(cls)) continue;
+        if (!available.has(cls)) problems.push(`${file} uses .${cls} but does not load a sheet defining it`);
+      }
+    }
+  }
+  assert.deepEqual(
+    [...new Set(problems)], [],
+    'a rule the page cannot reach is the same as no rule at all:\n  '
+    + [...new Set(problems)].join('\n  '),
+  );
+});
+
+test('a shared component is defined ONCE, not copied per page', () => {
+  /* Two spellings of the same component drift, and the copy that is not being
+     looked at is the one that rots. Named explicitly so a third copy fails
+     here rather than being noticed as a visual difference between two pages. */
+  const shared = ['info-popover-card', 'guide-overlay', 'guide-card'];
+  for (const cls of shared) {
+    const files = fs.readdirSync(PUBLIC)
+      .filter((f) => f.endsWith('.css'))
+      .filter((f) => new RegExp(`\\.${cls}[\\s,{:]`).test(fs.readFileSync(path.join(PUBLIC, f), 'utf8')));
+    assert.ok(files.length <= 1, `.${cls} is defined in ${files.length} stylesheets: ${files.join(', ')}`);
+  }
+});
+
 test('EVERY help panel summary carries the class that styles it', () => {
   /* THE ASSERTION THAT MATTERS, and the one that catches the real bug in both
      the places it occurred.

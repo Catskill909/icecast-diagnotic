@@ -122,7 +122,13 @@ app.use((req, res, next) => {
 // email addresses. Every asset the page loads must be listed as well — a page
 // that borrows a gated stylesheet while not being gated itself renders
 // unstyled for exactly the visitor who should not have reached it.
-const ADMIN_PAGES = new Set(['/admin.html', '/admin.js', '/admin.css']);
+/* Admin-only assets. `admin-guide.js` is here because it is admin CONTENT —
+   it describes this deployment's stations by name and how its alerting works.
+   `help.css` and `guide.js` are deliberately NOT: public pages load them, so
+   gating them would serve the dashboard unstyled to the visitor it turned away,
+   and they carry no admin content — one is a stylesheet, the other a renderer
+   whose data the page supplies. */
+const ADMIN_PAGES = new Set(['/admin.html', '/admin.js', '/admin.css', '/admin-guide.js']);
 app.use((req, res, next) => {
   if (!ADMIN_PAGES.has(req.path)) return next();
   if (auth.currentSession(req)) return next();
