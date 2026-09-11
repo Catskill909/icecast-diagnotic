@@ -44,8 +44,19 @@ has Backup & move.
    recording began 2026-08-04, so September is the first complete month and
    October the second. Shipping a comparison whose earlier term is partial is
    the `+376%` artefact wearing a different label.
-4. **Admin panel build-out.** The owner wants this to be where operational UI
-   lives. Backup & move is there now and is the pattern to follow.
+4. **Help in the admin panel — Phase 9, newly scoped.** The Audience page has 16
+   inline popovers and the dashboard a 14-topic guide; `/admin.html` has NONE,
+   and it is the page where a wrong click orphans a channel's history or
+   replaces the whole record. One structural decision has to be taken first:
+   admin.html loads only `admin.css`, so neither the guide modal (`style.css`)
+   nor the popover (`history.css`) is available there. The plan recommends
+   extracting a shared `help.css` and closing a gap in `css-classes.test.js`,
+   which checks that a class exists in SOME stylesheet but not that the page
+   loads it.
+5. **Admin panel build-out generally.** The owner wants this to be where
+   operational UI lives. Backup & move is there now and is the pattern to
+   follow: plain words, the consequence stated before the action, and
+   confirmations that name what SURVIVES.
 
 ### Decisions already taken, so they are not re-litigated
 

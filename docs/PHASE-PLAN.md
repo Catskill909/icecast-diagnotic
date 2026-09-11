@@ -469,6 +469,85 @@ no 8c.
 
 ---
 
+## Phase 9 — help in the admin panel
+
+**Entry: any time.** **Exit:** every consequential choice on `/admin.html`
+explains its consequence before it is made, not after.
+
+**The gap, measured.** The Audience page carries 16 inline help popovers and the
+dashboard has a 14-topic guide. `/admin.html` has **none**. It is the page where
+a wrong click orphans a channel's history, silences a station's alerts, or
+replaces the whole record — and it is the only page with no explanation on it.
+
+What it does have, and what should set the voice: the destructive confirmations
+already name what SURVIVES rather than asking "are you sure?" — *"Its recorded
+history is kept under kpft-hd2"*, *"The current files are renamed and left on the
+server"*. Help should extend that register. **Explain the consequence, never
+restate the label.** A popover reading "the station's name" is worse than none:
+it teaches the reader that the help is not worth opening.
+
+### What actually needs explaining, and where
+
+Two kinds of question, and they want different answers in different places.
+
+**AT THE FIELD — inline popovers, because the reader is mid-decision:**
+
+| Where | What it must say |
+|---|---|
+| **Identifier** (add station) | **The highest-stakes field on the page.** It keys every stored sample, rollup and event, permanently. It is not the station's name and changing it later orphans the history rather than moving it |
+| **State** | Sets the in-market share on the listener map. Blank is a real answer — the figure is withheld rather than borrowed from another station. It is per station, not per deployment |
+| **Timezone** | When the weekly report arrives, and where the day boundaries fall in every figure |
+| **Add to an existing station** | Offering it as a CHANNEL keeps independent monitoring. Adding it as mounts on an existing channel collapses two servers into one probe — lossy, and the channel id is immutable afterwards |
+| **Alert recipients** | Four independent conditions block mail, and `effective` says which. Muted and empty are deliberately different: one is a decision, the other an unfinished setup |
+| **Test alert** | What it proves and what it does not. It fails loudly on a refused address on purpose — reporting success for mail a server rejected defeats its only use |
+| **Mount warnings** | "not being served right now" and "already on another channel" are different problems with different fixes |
+
+**IN A GUIDE — a modal, because these are "how does this work":**
+
+| Topic | Why it cannot be a popover |
+|---|---|
+| **Stations, channels and mounts** | Three levels, and which one something belongs to decides where it appears, how it is probed and what gets alerted. Needs a worked example, not a tooltip |
+| **Why some stations show advanced audience figures and others do not** | An Icecast admin password belongs to a SERVER, not a station. KPFA is on two servers and only one is credentialed. This is the single most-asked question the product will generate |
+| **What is kept when something is removed** | Removing a station stops it being watched; the record of what happened while it WAS watched stays. Configuration is not a statement about the past |
+| **Backup, and the one field that matters** | The device salt. Already prose in the panel; the guide is where the reasoning belongs |
+
+### The structural decision, which has to be taken first
+
+`admin.html` loads **only `admin.css`**. The guide modal lives in `style.css` and
+the popover in `history.css`, so neither is available there. Three ways, and the
+choice is not obvious:
+
+| | Cost | Risk |
+|---|---|---|
+| **a. Load `style.css` and `history.css` into admin.html** | nothing to write | Both sheets are large and were never written to sit beside `admin.css`; collisions would be found by eye, page by page |
+| **b. Copy the help styles into `admin.css`** | ~80 lines duplicated | Two copies drift. But it matches the existing, deliberate decision that the admin page is visually standalone |
+| **c. Extract a shared `help.css`** — popover and guide modal only | touches four pages | Cleanest, and removes an existing duplication. Wider blast radius on pages that currently work |
+
+**Recommended: (c), scoped tightly.** Only the popover and the guide modal move;
+everything else stays where it is. It is the only option that does not leave the
+project with two spellings of the same component, and the `css-classes` test
+already guards class names — though note it checks that a class exists in SOME
+stylesheet, not that the page loads it, so (c) needs that gap closed too.
+
+### Build order
+
+1. **`help.css`**, plus the test gap above: assert each page LOADS the sheets its
+   classes live in, not merely that they exist somewhere.
+2. **Inline popovers** for the seven fields, highest-stakes first — Identifier,
+   Alerts, Add-to-existing.
+3. **`ADMIN_TOPICS` in `guide.js`**, rendered by the existing renderer into the
+   same modal markup. One renderer, two audiences; do not fork the file.
+4. **A help button on `/admin.html`**, matching the dashboard's.
+
+### The test that says it is done
+
+> Every `confirmAction` on the page has a `keep:` clause, every field whose value
+> cannot be changed later carries a popover saying so, and the guide answers
+> "why does WBAI show fewer audience figures than KPFT" without anyone opening
+> the README.
+
+---
+
 ## Keeping every avenue open
 
 **Decided 2026-08-31: the destination is undecided and dev must not close any
