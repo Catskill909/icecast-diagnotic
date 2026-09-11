@@ -644,6 +644,34 @@ and a separate schema change, not something that happens by drift.
 `place` is one column, read only by the map. Cume does not touch it, so it can
 be coarsened or dropped without affecting any other figure.
 
+**Updated 2026-09-11.** Two further columns, recorded here for the same reason:
+
+- `place` gained a third segment, the US **metro** (`US:TX:Houston`), behind a
+  tighter accuracy gate than the state. A licence covers a metro, so a state
+  count reports Greater Houston's audience as all of Texas. Still never a
+  coordinate, never a pin — §3's ruling on dot-per-listener maps stands, and
+  `test/geo.test.js` still asserts no latitude or longitude survives a lookup.
+- `sess` holds a **duration band index** (one of six), raised to the longest
+  session seen for that device in that bucket. Not a duration, not a timestamp:
+  an integer 0-5, or -1 for not recorded.
+
+Both sit beside the existing salted device hash and neither leaves the server as
+a row — the API returns counts per metro and counts per band. The volume
+question in §4 does not arise for either: no new table, and nothing proportional
+to the number of readings taken.
+
+**Environment, not the admin panel, for Icecast credentials — decided with the
+owner 2026-09-11.** §4.1's design (entered in the station setup flow, stored
+against the host) collides with a decision deliberately deferred: per-user
+accounts and roles, to be settled at the move to Pacifica production. Who may
+enter a credential, see that one exists, or rotate it are role questions.
+`ICECAST_ADMIN_CREDS` is a per-host JSON map in the hosting panel's environment,
+which keeps the secret out of git and out of the data volume, and puts it where
+`SMTP_PASS` already lives. Note for whoever revisits this: an Icecast admin
+password is **not read-only** — Icecast 2.4 has a single admin account, so the
+credential that lists clients can also disconnect sources. Stations handing one
+over should be told that.
+
 Two further decisions to make explicitly, not by default:
 
 - **Retention.** How long are per-connection rows kept? Aggregates can be kept

@@ -111,6 +111,20 @@ class DeviceStore {
 
            Never a city and never a coordinate, exactly as the live panel. */
         place     TEXT    NOT NULL DEFAULT '',
+        /* HOW LONG they listened, as an index into DURATION_BUCKETS, raised to
+           the LONGEST session seen for this device in this bucket.
+
+           Stored per device rather than tallied per reading, because listener
+           detail is read every few minutes and adding up what each reading sees
+           is length-biased: a six-hour session appears in seventy-two
+           consecutive readings and a two-minute one in at most a single
+           reading. That distribution reports an audience staying far longer
+           than it does, and the error grows with the thing being measured.
+
+           -1 is "not recorded" — Icecast sent no Connected field, or the row
+           predates this column — and is deliberately not band 0, which means
+           "under a minute" and is a real answer. */
+        sess      INTEGER NOT NULL DEFAULT -1,
         PRIMARY KEY (stream_id, tier, start_ms, device)
       ) WITHOUT ROWID;
 
@@ -159,11 +173,28 @@ class DeviceStore {
     if (!columns.some((c) => c.name === 'place')) {
       this.db.exec("ALTER TABLE devices ADD COLUMN place TEXT NOT NULL DEFAULT ''");
     }
+    if (!columns.some((c) => c.name === 'sess')) {
+      // Existing rows keep -1: those listeners were real and their session
+      // length was never recorded, which is not the same as a short session.
+      this.db.exec('ALTER TABLE devices ADD COLUMN sess INTEGER NOT NULL DEFAULT -1');
+    }
 
     this.stmt = {
-      insert: this.db.prepare(
-        'INSERT OR IGNORE INTO devices (stream_id, tier, start_ms, end_ms, device, cls, place) VALUES (?,?,?,?,?,?,?)',
-      ),
+      /* AN UPSERT, not INSERT OR IGNORE, because `sess` GROWS. The same device
+         seen again later in the same hour has been listening longer, and
+         ignoring the second row would freeze every session at whatever it was
+         when the listener was first noticed — understating exactly the figure
+         this column exists to measure.
+
+         Only `sess` is raised. `cls` and `place` derive from the IP and user
+         agent that the device hash is made from, so they cannot change for a
+         given device; re-recording is still effectively free. */
+      insert: this.db.prepare(`
+        INSERT INTO devices (stream_id, tier, start_ms, end_ms, device, cls, place, sess)
+        VALUES (?,?,?,?,?,?,?,?)
+        ON CONFLICT(stream_id, tier, start_ms, device)
+        DO UPDATE SET sess = MAX(sess, excluded.sess)
+      `),
       earliestAll: this.db.prepare(
         'SELECT MIN(start_ms) AS t FROM devices WHERE start_ms < ? AND end_ms > ?',
       ),
@@ -188,7 +219,7 @@ class DeviceStore {
         GROUP BY stream_id, start_ms, place
       `),
       olderThan: this.db.prepare(
-        'SELECT stream_id, start_ms, device, cls, place FROM devices WHERE tier = ? AND end_ms <= ?',
+        'SELECT stream_id, start_ms, device, cls, place, sess FROM devices WHERE tier = ? AND end_ms <= ?',
       ),
       deleteTierBefore: this.db.prepare('DELETE FROM devices WHERE tier = ? AND end_ms <= ?'),
       deleteMonthsBefore: this.db.prepare('DELETE FROM devices WHERE tier = 2 AND end_ms <= ?'),
@@ -215,7 +246,7 @@ class DeviceStore {
       const holes = new Array(n).fill('?').join(',');
       this.#byArity.set(n, {
         distinct: this.db.prepare(`
-          SELECT device, MIN(cls) AS cls, MAX(place) AS place
+          SELECT device, MIN(cls) AS cls, MAX(place) AS place, MAX(sess) AS sess
           FROM devices
           WHERE stream_id IN (${holes}) AND start_ms < ? AND end_ms > ?
           GROUP BY device
@@ -319,7 +350,7 @@ class DeviceStore {
     try {
       for (const e of entries) {
         if (!e || !e.id) continue;
-        this.stmt.insert.run(streamId, TIER.hour, start, end, e.id, e.cls || '', e.place || '');
+        this.stmt.insert.run(streamId, TIER.hour, start, end, e.id, e.cls || '', e.place || '', Number.isInteger(e.sess) ? e.sess : -1);
       }
       this.db.exec('COMMIT');
     } catch (err) {
@@ -343,6 +374,7 @@ class DeviceStore {
       // in exactly one case, which is how the one case stops being handled.
       return {
         devices: 0, players: {}, platforms: {}, coveredFrom: null, partial: true,
+        sessions: { bands: {}, measured: 0, notRecorded: 0 },
         places: {
           countries: {}, usStates: {}, usCities: {},
           placed: 0, relays: 0, unplaced: 0, stateWithheld: 0, cityWithheld: 0,
@@ -357,6 +389,11 @@ class DeviceStore {
 
     const players = {};
     const platforms = {};
+    /* Session bands, by index into DURATION_BUCKETS. `notRecorded` is held
+       apart from band 0: "Icecast sent no duration" and "listened for under a
+       minute" are different answers, and averaging them together would make an
+       unmeasured audience look like a bouncing one. */
+    const sessions = { bands: {}, measured: 0, notRecorded: 0 };
     /* The SAME shape the live panel publishes, so one renderer draws both and
        the two views cannot drift apart in how they count. */
     const places = {
@@ -380,6 +417,15 @@ class DeviceStore {
       const [fam, plat] = String(r.cls || '').split('|');
       if (fam) players[fam] = (players[fam] || 0) + 1;
       if (plat) platforms[plat] = (platforms[plat] || 0) + 1;
+
+      /* One band per DEVICE, already reduced by MAX in the query above, so a
+         listener sampled seventy-two times counts once and at their longest. */
+      const band = Number.isInteger(r.sess) ? r.sess : -1;
+      if (band < 0) sessions.notRecorded += 1;
+      else {
+        sessions.measured += 1;
+        sessions.bands[band] = (sessions.bands[band] || 0) + 1;
+      }
 
       /* MAX(place), not MIN, is what the query above selects. One device can
          hold rows on several channels, and the tokens sort so that the most
@@ -423,6 +469,7 @@ class DeviceStore {
       players,
       platforms,
       places,
+      sessions,
       coveredFrom: earliest == null ? null : new Date(earliest).toISOString(),
       // True when the window reaches back further than anything recorded, so a
       // caller can say "since we started measuring" rather than quoting a short
@@ -724,7 +771,9 @@ class DeviceStore {
           const [s, e] = bucketRange(toTier, r.start_ms);
           // `place` travels with the device. Dropped here, the map would work
           // for 24 hours and go blank at 30 days — with nothing to show why.
-          this.stmt.insert.run(r.stream_id, toTier, s, e, r.device, r.cls, r.place);
+          // MAX on conflict, so folding several hours of one listener into a
+          // day keeps their LONGEST session rather than the last one seen.
+          this.stmt.insert.run(r.stream_id, toTier, s, e, r.device, r.cls, r.place, r.sess);
         }
         this.stmt.deleteTierBefore.run(fromTier, cutoff);
         this.db.exec('COMMIT');

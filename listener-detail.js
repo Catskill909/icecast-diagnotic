@@ -310,6 +310,7 @@ function deviceIdentities(rows, salt, geo = NO_GEO) {
       id: deviceId(r.ip, r.userAgent, salt),
       cls: `${cls.family}|${cls.platform}`,
       place: placeToken(r, cls, geo),
+      sess: sessionBucket(r.connectedSec),
     });
   }
   return out;
@@ -325,6 +326,34 @@ const DURATION_BUCKETS = [
   ['1–6h',      60 * 60,         6 * 60 * 60],
   ['6h+',       6 * 60 * 60,     Infinity],
 ];
+
+/* WHICH DURATION BAND a session falls in, as an index into DURATION_BUCKETS.
+
+   THE TRAP THIS EXISTS TO AVOID. Listener detail is read every few minutes, and
+   the obvious way to trend session length is to tally the durations seen at
+   each pass and add them up. That is LENGTH-BIASED sampling: a six-hour session
+   is present in seventy-two consecutive readings and a two-minute one in at
+   most a single reading, so the distribution would report an audience that
+   stays far longer than it does — and the error grows with the very thing being
+   measured.
+
+   So the band is stored ONCE PER DEVICE per bucket and raised to the longest
+   session seen, which counts each listener once however often they are sampled.
+
+   -1 is "not recorded": Icecast's `Connected` field was absent, or the row
+   predates this column. Held apart from band 0 ("under a minute"), which is a
+   real and different answer. */
+function sessionBucket(connectedSec) {
+  if (connectedSec == null || !Number.isFinite(connectedSec) || connectedSec < 0) return -1;
+  for (let i = 0; i < DURATION_BUCKETS.length; i += 1) {
+    const [, lo, hi] = DURATION_BUCKETS[i];
+    if (connectedSec >= lo && connectedSec < hi) return i;
+  }
+  return DURATION_BUCKETS.length - 1;
+}
+
+/** The band labels, in order, so a caller never rebuilds them from memory. */
+const SESSION_BUCKET_LABELS = DURATION_BUCKETS.map(([label]) => label);
 
 function percentile(sorted, p) {
   if (!sorted.length) return null;
@@ -751,6 +780,7 @@ async function collectMount(baseUrl, mountPath, creds) {
 module.exports = {
   parseListClients,
   deviceId, deviceIdentities, placeToken, kindForFamily,
+  sessionBucket, SESSION_BUCKET_LABELS, DURATION_BUCKETS,
   classifyAgent,
   classifyChannel,
   aggregate,

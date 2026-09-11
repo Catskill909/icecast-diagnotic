@@ -368,6 +368,24 @@ size a count of one would say something about a person rather than a population.
 Shares are merged across mounts by recomputing from summed counts, never by
 averaging — and a merged figure inherits the **weakest** confidence of its parts.
 
+### How long they listened
+
+TSL is the engagement metric station managers say they actually watch. Reach
+says how many; this says whether they stayed — and a station can grow its
+audience while losing engagement, which nothing here could previously show,
+because session figures came only from the live snapshot.
+
+| Rule | Why |
+|---|---|
+| **Each listener counted ONCE, at their longest session in the period** | Listener detail is read every few minutes, so tallying what each reading sees and summing it is **length-biased**: a six-hour session appears in ~72 consecutive readings and a two-minute one in at most a single reading. Summed, the audience looks far more engaged than it is — and the error grows with exactly the quantity being measured |
+| **The band is RAISED, never lowered** | Ignoring a later reading would freeze every session at whatever it was when the listener was first noticed, understating the figure the column exists to measure. `MAX` on conflict, and again through every fold |
+| **"Not recorded" is not band zero** | Icecast sometimes sends no `Connected` field. "We did not measure this" and "listened for under a minute" are different answers, and averaging them makes an unmeasured audience look like a bouncing one |
+| **No new table, and nothing per-listener beyond one small integer** | The band is a property of the device row, like `place` — six bands, stored as an index, folded by `MAX`. The volume question in `ADMIN-ACCESS-SCOPE.md` §4 does not arise |
+
+Connection time comes from Icecast's own `Connected` counter, not inferred from
+polling — so a session shorter than one collection pass may be missed entirely,
+which is why this is a distribution rather than an average.
+
 ### What needs an Icecast admin password
 
 **One sentence.** Counting *how many* people are listening needs nothing.

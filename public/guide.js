@@ -212,6 +212,17 @@
          <em>growth</em> \u2014 and a station acts on them differently. A single
          percentage would hide the second: a month can keep every regular and reach nobody
          new, and the share goes <em>up</em>.`,
+        `<strong>Session length</strong> is the engagement half of the story: reach says
+         how many people you got, this says whether they stayed. A station can grow its
+         audience and lose engagement at the same time, and the two figures side by side
+         are what shows it.`,
+        `<strong>Each listener is counted once, at their longest session in the
+         period.</strong> Somebody who listens every day is one row here, not seven. That
+         matters more than it sounds: the streaming server is asked every few minutes who
+         is connected, so a six-hour listener appears in seventy-odd of those answers and
+         a two-minute one in barely any. Adding up what each check sees would report an
+         audience that stays far longer than it really does. Listeners the server gave no
+         connection time for are left out rather than counted as short.`,
         `<strong>When each region listens</strong> answers the daypart question: does
          the New York audience arrive at the same hour as the Los Angeles one? Each row
          is one region across the 24 hours of a day, and the hours are the

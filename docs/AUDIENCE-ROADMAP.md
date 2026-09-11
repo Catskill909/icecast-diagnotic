@@ -385,7 +385,7 @@ Ordered by value per unit of work.
 | 2 | ✅ **SHIPPED 2026-09-11. Player and device trends over time** | "Smart speakers went from 8% to 22% this year." Where to spend engineering effort, and evidence for a platform conversation | **Nothing new**, as predicted. `kind` was not stored either, and did not need to be — it is recovered from `family` through the same `PLAYER_RULES` table that classified the agent |
 | 3 | ✅ **SHIPPED 2026-09-11. Time of day by region** | Drive-time in New York against drive-time in Los Angeles — three time zones on one network, previously flattened into one curve | **The one that DID need storage.** `place` and the timestamp are both stored, but the hour is compacted away after 48h, so a `region_hours` aggregate is frozen as the hour tier folds |
 | 4 | ✅ **SHIPPED 2026-09-11. City, for US listeners** | A licence covers a METRO; the map counts a whole STATE. This is the difference between "Texas" and "Greater Houston", i.e. between an overstated figure and the real in-footprint reach | One more field in the `place` token. GeoLite2 City is already downloaded and already read |
-| 5 | **Session length over time** | Whether people are staying longer, not just arriving more often. Currently live-only, so it cannot be trended at all | Storing `connectedSec`, which is already fetched and discarded |
+| 5 | ✅ **SHIPPED 2026-09-11. Session length over time** | Whether people are staying longer, not just arriving more often. Currently live-only, so it cannot be trended at all | Storing `connectedSec`, which is already fetched and discarded |
 
 **1 shipped 2026-09-11**, as two tiles — *Came back* and *First time* — rather
 than one ratio, because retention and growth are different questions and a
@@ -455,11 +455,30 @@ share rather than a visible error. The metro LIST beside the state figure gives
 a manager the same answer without that fragility — "412 of Texas's 700 are in
 Houston" — and can be promoted to a computed share later if it earns it.
 
-Remaining: **5 (session length)**, the only item that increases what is
-collected per listener. Store the six DURATION_BUCKETS per day, frozen as the
-hour tier compacts, exactly as `region_hours` is — six integers a day rather
-than a duration per listener, which sidesteps the volume question in §4 of
-`ADMIN-ACCESS-SCOPE.md` entirely.
+**5 shipped 2026-09-11, and §4.5 IS COMPLETE.** It needed neither a new table
+nor a duration per listener: the band is one small integer on the device row,
+like `place`, folded by MAX. The volume question in §4 of
+`ADMIN-ACCESS-SCOPE.md` does not arise.
+
+The trap it had to avoid is worth carrying into any future work on this data.
+Listener detail is read every few minutes, so tallying what each reading sees
+and summing it is **length-biased**: a six-hour session is present in ~72
+consecutive readings and a two-minute one in at most a single reading. The
+resulting distribution reports a far more engaged audience than exists, and the
+error GROWS with the quantity being measured. Storing one band per device,
+raised to the longest session seen, counts each listener once however often they
+are sampled.
+
+**The general rule across all five items**, now that they are all built: this
+data is sampled, tiered and folded, and each of those three does something
+different to a figure computed naively over it.
+
+| Hazard | Where it bit | The rule |
+|---|---|---|
+| Tiers smear a boundary | items 1, 2 | Snap windows to the tier, or refuse; re-bucket where a coarser answer is still honest |
+| Detail is lost at compaction | item 3 | Pre-aggregate the cross-tab BEFORE the detail goes — it cannot be backfilled |
+| Repeated sampling is length-biased | item 5 | Store per device and reduce, never tally per reading and sum |
+| A gate sized for one claim is wrong for a smaller one | item 4 | Tighten the gate with the claim; degrade to the coarser answer rather than refusing outright |
 
 **Think hardest about 4.** It is the one that materially improves the number the
 station cares about, and also the one where the database is least trustworthy —

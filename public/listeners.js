@@ -1003,6 +1003,52 @@
         </div>`).join('')}
     </div>`;
 
+  /* ── How long they listened, over the period ─────────────────────────────
+     The live tiles above answer "how long have the people connected RIGHT NOW
+     been connected", which is a different question and a much smaller sample.
+     This is the engagement figure a manager actually watches: reach says how
+     many, this says whether they stayed.
+
+     EACH LISTENER COUNTED ONCE, at their longest session in the period. The
+     obvious alternative — tally what each reading sees and add it up — is
+     length-biased: a six-hour session appears in seventy-two readings and a
+     two-minute one in at most one, so the audience would look far more engaged
+     than it is, and the error would grow with the very thing being measured. */
+  function sessionBlock(d) {
+    const sess = d.period?.sessions;
+    if (!sess || !Array.isArray(sess.labelled)) return '';
+    if (!sess.measured) {
+      return sess.notRecorded
+        ? `<div class="deep-sub">Session length · ${esc(rangeLabelFor(days))}</div>
+           <div class="geo-note-line">No session lengths recorded in this period.
+             ${sess.notRecorded} ${sess.notRecorded === 1 ? 'listener was' : 'listeners were'}
+             counted without one, because the streaming server reported no connection
+             time for them.</div>`
+        : '';
+    }
+
+    const rows = sess.labelled.map((b) => {
+      const share = sess.measured ? Math.round((b.listeners / sess.measured) * 100) : 0;
+      return `
+        <div class="deep-bar-row">
+          <div class="deep-bar-label">${esc(b.label)}</div>
+          <div class="deep-bar-track"><div class="deep-bar-fill" style="width:${share}%"></div></div>
+          <div class="deep-bar-val">${b.listeners.toLocaleString()}<span class="deep-bar-pct">${share}%</span></div>
+        </div>`;
+    }).join('');
+
+    return `
+      <div class="deep-sub">Session length · ${esc(rangeLabelFor(days))}</div>
+      ${rows}
+      <div class="geo-note-line">Each listener counted <strong>once</strong>, at their
+        longest session in this period \u2014 so somebody who listened every day is one
+        row here, not seven. ${sess.notRecorded
+    ? `<strong>${sess.notRecorded}</strong> more had no connection time reported and
+           ${sess.notRecorded === 1 ? 'is' : 'are'} left out rather than counted as short.`
+    : ''} Connection time comes from the streaming server itself, not from
+        guessing between checks.</div>`;
+  }
+
   /* ── When each region listens ─────────────────────────────────────────────
      The daypart question, which is how radio is scheduled and sold.
 
@@ -1279,6 +1325,8 @@
           ${bars(platforms, cume, 6)}
         </div>
       </div>
+
+      ${sessionBlock(d)}
 
       ${trendBlock(d)}
 

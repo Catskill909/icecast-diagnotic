@@ -755,6 +755,14 @@ app.get('/api/listener-detail', auth.requireAuth, (req, res) => {
      page renders either through one code path and a reader can switch between
      "this week" and "right now" without the two being drawn differently. */
   if (period.places) period.places.homeRegion = monitor.homeRegion(station);
+  /* Band labels attached HERE, not rebuilt in the browser. DURATION_BUCKETS is
+     the table the durations were banded against in the first place; a second
+     copy on the page is a second thing to keep in agreement with it. */
+  if (period.sessions) {
+    period.sessions.labelled = listenerDetail.SESSION_BUCKET_LABELS.map((label, i) => ({
+      label, listeners: period.sessions.bands[i] || 0,
+    }));
+  }
   /* Returning vs new. Same request, because it answers a question about the
      same period and a second round trip is how two panels end up describing
      two different moments. */

@@ -1,5 +1,60 @@
 # Handoff — Icecast Monitor
 
+## 2026-09-11 — Session length (roadmap §4.5 item 5) — §4.5 IS COMPLETE
+
+TSL is the engagement metric station managers say they watch. Reach says how
+many; this says whether they stayed, and a station can grow its audience while
+losing engagement — which nothing here could show, because session figures came
+only from the live snapshot and could not be trended.
+
+THE TRAP, and the reason this is stored per device rather than tallied per
+reading. Listener detail is read every few minutes. Summing what each reading
+sees is LENGTH-BIASED: a six-hour session is present in about seventy-two
+consecutive readings and a two-minute one in at most a single reading. That
+distribution reports an audience staying far longer than it does, and the error
+grows with exactly the quantity being measured — a confident, flattering,
+entirely wrong engagement figure. So the band is stored ONCE PER DEVICE and
+RAISED to the longest session seen; a listener sampled seventy-two times counts
+once.
+
+CHEAPER THAN THE ROADMAP ASSUMED. §4.5 called this "the only item that increases
+what is collected per listener" and proposed a frozen per-day aggregate. Neither
+was needed: the band is one small integer on the device row, like `place` —
+0-5, or -1 for not recorded — folded by MAX through every tier. No new table,
+and nothing proportional to how often the audience is sampled, so the volume
+question in §4 of ADMIN-ACCESS-SCOPE.md does not arise.
+
+`INSERT OR IGNORE` became an upsert, because `sess` GROWS. Ignoring the second
+row would freeze every session at whatever it was when the listener was first
+noticed. Only `sess` is raised: `cls` and `place` derive from the IP and user
+agent the device hash is made from, so they cannot change for a given device.
+
+"Not recorded" (-1) is deliberately not band 0. Icecast sometimes sends no
+Connected field, and "we did not measure this" and "listened for under a minute"
+are different answers — averaged together they make an unmeasured audience look
+like a bouncing one.
+
+Verification, Node 24.20.0: full suite 823/823. New
+`test/session-length.test.js` (12), including the bias case driven as twelve
+consecutive readings of one growing session, the raise-never-lower rule,
+survival through the fold, legacy rows, and that the bands always sum to the
+measured count. One failure during development was my own arithmetic — 21600s is
+exactly six hours and lands in the 6h+ band, not 1-6h. Booted on a scratch data
+dir: clean, migration runs, no SQL error.
+
+Also fixed: the same backtick-inside-a-JS-template-literal slip as the schema
+comment on 2026-09-10. Third time a word wrapped in backticks has closed a
+template literal early in this file — do not use them in SQL comments here.
+
+§4.5 IS NOW COMPLETE. The roadmap carries a table of the four hazards these five
+items surfaced — tier smearing, detail lost at compaction, length-biased
+sampling, and a gate sized for the wrong claim — which is the part worth reading
+before computing anything else over this data.
+
+Status: local and tested, NOT committed at the time of writing.
+
+---
+
 ## 2026-09-11 — Metro-level geography (roadmap §4.5 item 4)
 
 The number this corrects: a licence covers a METRO, and the map counts a whole
