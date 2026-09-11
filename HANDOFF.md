@@ -1,5 +1,99 @@
 # Handoff — Icecast Monitor
 
+## 2026-09-10 — In-market share was a deployment's figure, not a station's
+
+The owner selected WPFW — Washington DC — and the panel reported "In Texas 0%,
+0 of 59 located US connections. Outside TX: 59."
+
+ROOT CAUSE, pre-existing and not introduced by the new map, which merely
+inherited it from the live one:
+
+    homeRegion: () => (process.env.STATION_REGION || '').trim().toUpperCase()
+
+One env var for the whole install. Correct for the single station it was written
+for; silently wrong for every station added since. The failure is the dangerous
+kind — no error, nothing blank, just a confident figure that is entirely false.
+"0% of our audience is in our own state" is a sentence a manager would act on.
+The comment above the call site already claimed `homeRegion` was "the station's
+own state", which it had stopped being. Recorded in memory as a known gap.
+
+FIX. `region` is now a station property, carried on the channel exactly as
+`timezone` is and for the same stated reason. `homeRegion(stationId)` returns
+the station's own value; STATION_REGION survives only as the fallback for an
+install with exactly ONE station, since a deployment-wide value cannot be true
+of more than one and is therefore true of none. "All stations" correctly reports
+no home region — it spans three states. A station with nothing configured gets
+no figure, which beats a false one.
+
+Configuration: `region` validated in both `validateStationPayload` and
+`validateStationEdit` against a 51-entry list (50 states plus DC), upper-cased,
+with blank a legitimate answer rather than an error. An edit that does not
+mention the region keeps it, so renaming a station cannot blank its state. Added
+to BOTH admin forms — the add-station flow and the station editor — since the
+five Pacifica stations already exist and only the editor can reach them.
+
+Verification, Node 24.20.0: full suite 703/703, zero failures (6.39 s). New
+`test/station-region.test.js` (11); 7 of them fail against HEAD. The last is a
+drift guard asserting the accepted codes and `GeoMap.GRID` are identical in both
+directions — a code that validates but has no tile would vanish, and a state on
+the map that configuration rejects would be unreachable.
+
+THE OPERATOR MUST STILL SET THEM. Existing stations have no region stored, so
+until someone fills each one in, the panel shows "Set this station's state in
+the admin panel" instead of an in-market share. That is deliberate: guessing a
+state from a call sign is how the wrong one gets stored and believed.
+
+Files: `monitor.js`, `server.js`, `discover.js`, `public/admin.html`,
+`public/admin.js`, `public/listeners.js`, `test/station-region.test.js`,
+`HANDOFF.md`.
+Status: local and tested, NOT committed or deployed. Carries the uncommitted
+coverage-notice correction from the previous entry.
+
+---
+
+## 2026-09-10 — The coverage notice contradicted itself in production
+
+Shipped as `8683177` and seen live: "Location has been recorded for 7 days of
+the last 7 days, so this map covers part of the period rather than all of it."
+That states full coverage and partial coverage in one sentence, on the one panel
+whose whole job that week was explaining why a number looked small.
+
+ROOT CAUSE. `period.coveredFrom` is when DEVICE recording began — years, in a
+mature deployment. `places.coveredFrom` is when LOCATION recording began, which
+is the day the column shipped and can never be backfilled. The first was read as
+the second. The "part of the period" clause was meanwhile triggered by an
+entirely different condition (devices with no location), so the two halves of
+the sentence were describing two different things.
+
+The owner's reading was correct: the total is small because it just started.
+
+FIX, in the shape of the lesson. The store now reports the two dates separately
+(`placesEarliest`, `MIN(start_ms) WHERE place != ''`), and the notice is driven
+by COUNTS of listeners with and without a location rather than by date
+arithmetic — "2 people of 1,247 in this period have a location; the other 1,245
+listened before location recording began." A count cannot contradict itself, and
+it reaches zero on its own as pre-feature rows age out of the window, so the
+notice still retires unaided and now does so on the devices rather than a clock.
+
+A short location record covering everyone currently in the range is no longer
+called partial, which is right: that map is complete.
+
+Verification, Node 24.20.0: full suite 692/692, zero failures (6.50 s).
+`test/geo-coverage-notice.test.js` rewritten around the new semantics — its
+fixtures set device recording 400 days back in EVERY case, so if that value ever
+leaks into the notice again the tests break. Three store tests added for the new
+field, including that a relay counts as located (the lookup ran; the answer was
+"exclude"), not as unrecorded.
+
+Files: `device-store.js`, `public/listeners.js`,
+`test/geo-coverage-notice.test.js`, `test/device-geography.test.js`, `HANDOFF.md`.
+Status: local and tested, NOT committed or deployed. This corrects `8683177`,
+which IS live.
+
+Next action: commit, push, confirm both checks, deploy, hard-reload the tab.
+
+---
+
 ## 2026-09-10 — Geography over a WINDOW, not only this instant
 
 The owner's question — "why are these numbers so low" — was not a bug. The map

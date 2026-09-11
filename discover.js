@@ -440,6 +440,40 @@ function existingChannelIds(config) {
  * { ok: false, errors: [...] } — every problem at once, because fixing a form
  * one error per submission is miserable.
  */
+/* The states a listener map can actually draw, DC included. Hardcoded rather
+   than imported from the map: this is a validation boundary and it should not
+   go soft because a rendering module moved. test/station-region.test.js asserts
+   this list and the map's grid stay identical, which is what catches drift.
+
+   Validating the CODE matters because the failure it prevents is silent: a
+   station configured with a neighbouring state's code reports an in-market
+   share that is entirely wrong and looks entirely plausible. */
+const US_REGIONS = new Set([
+  'AL', 'AK', 'AZ', 'AR', 'CA', 'CO', 'CT', 'DE', 'DC', 'FL', 'GA', 'HI',
+  'ID', 'IL', 'IN', 'IA', 'KS', 'KY', 'LA', 'ME', 'MD', 'MA', 'MI', 'MN',
+  'MS', 'MO', 'MT', 'NE', 'NV', 'NH', 'NJ', 'NM', 'NY', 'NC', 'ND', 'OH',
+  'OK', 'OR', 'PA', 'RI', 'SC', 'SD', 'TN', 'TX', 'UT', 'VT', 'VA', 'WA',
+  'WV', 'WI', 'WY',
+]);
+
+/**
+ * The station's own state, or null.
+ *
+ * Null is a legitimate answer and not an error: a station that has not said
+ * where it broadcasts from gets no in-market share, which is correct. What is
+ * NOT acceptable is inheriting another station's state, which is what a single
+ * deployment-wide STATION_REGION did to every station on a network.
+ */
+function validateRegion(raw, errors) {
+  const region = String(raw ?? '').trim().toUpperCase();
+  if (!region) return null;
+  if (!US_REGIONS.has(region)) {
+    errors.push(`"${region}" is not a US state or DC — use a two-letter code such as TX or DC`);
+    return null;
+  }
+  return region;
+}
+
 function validateStationPayload(payload, config) {
   const errors = [];
   const p = payload && typeof payload === 'object' ? payload : {};
@@ -460,6 +494,8 @@ function validateStationPayload(payload, config) {
   } catch {
     errors.push(`"${timezone}" is not a recognised timezone`);
   }
+
+  const region = validateRegion(stationIn.region, errors);
 
   if (!channelsIn.length) errors.push('At least one channel is required');
 
@@ -498,7 +534,7 @@ function validateStationPayload(payload, config) {
   const origins = [...new Set(channels.map((c) => new URL(c.url).host))];
   return {
     ok: true,
-    station: { id, name, timezone, channels },
+    station: { id, name, timezone, region, channels },
     hosts: origins.map((host) => ({
       id: host.replace(/[^a-z0-9]+/gi, '-').toLowerCase(),
       host,
@@ -520,6 +556,7 @@ function addStationToConfig(config, station, hosts) {
 }
 
 module.exports.validateStationPayload = validateStationPayload;
+module.exports.US_REGIONS = US_REGIONS;
 module.exports.addStationToConfig = addStationToConfig;
 module.exports.existingChannelIds = existingChannelIds;
 
@@ -555,6 +592,8 @@ function validateStationEdit(payload, config, stationId) {
   if (!name) errors.push('Station name is required');
 
   const timezone = String(p.timezone ?? station.timezone ?? 'UTC').trim();
+  // `?? station.region` so an edit that does not mention the region keeps it.
+  const region = validateRegion(p.region ?? station.region, errors);
   try {
     new Intl.DateTimeFormat('en-US', { timeZone: timezone });
   } catch {
@@ -609,7 +648,7 @@ function validateStationEdit(payload, config, stationId) {
   const origins = [...new Set(channels.map((c) => new URL(c.url).host))];
   return {
     ok: true,
-    station: { ...station, id: stationId, name, timezone, channels },
+    station: { ...station, id: stationId, name, timezone, region, channels },
     removedChannels: removed,
     hosts: origins.map((host) => ({
       id: host.replace(/[^a-z0-9]+/gi, '-').toLowerCase(),

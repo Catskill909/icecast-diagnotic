@@ -721,6 +721,11 @@ function flattenChannels(cfg) {
         stationId: station.id,
         stationName: station.name,
         stationTimezone: station.timezone || 'UTC',
+        // The station's own state, for the in-market share on the listener map.
+        // Carried here for the same reason the timezone is — and because the
+        // single deployment-wide STATION_REGION it replaces reported WPFW's
+        // Washington audience as 0% in Texas.
+        stationRegion: station.region || null,
         // Who to tell when this channel breaks, carried on the channel for the
         // same reason the timezone is: reading it back off the config at the
         // moment of sending is how an alert ends up addressed from a different
@@ -3552,7 +3557,11 @@ function getStations() {
   const seen = new Map();
   for (const s of streams) {
     if (!s.stationId || seen.has(s.stationId)) continue;
-    seen.set(s.stationId, { id: s.stationId, name: s.stationName || s.stationId });
+    seen.set(s.stationId, {
+      id: s.stationId,
+      name: s.stationName || s.stationId,
+      region: s.stationRegion || null,
+    });
   }
   return [...seen.values()];
 }
@@ -4199,7 +4208,32 @@ module.exports = {
      than guessing that the largest state is the home one — which is usually
      true and is exactly the kind of "usually" that produces a wrong headline
      for the one station where it is false. */
-  homeRegion: () => (process.env.STATION_REGION || '').trim().toUpperCase() || null,
+  /**
+   * The state a given station broadcasts from.
+   *
+   * WAS A SINGLE ENV VAR FOR THE WHOLE DEPLOYMENT, which is correct for one
+   * station and wrong for a network: every station on this install reported its
+   * in-market share against Texas, so WPFW's Washington audience read as "0% in
+   * Texas". The station's own value wins; STATION_REGION survives only as the
+   * fallback for a single-station install that already relies on it, and is
+   * never applied to one station out of several.
+   */
+  homeRegion: (stationId) => {
+    const stations = getStations();
+    const station = stationId
+      ? stations.find((st) => st.id === stationId)
+      : (stations.length === 1 ? stations[0] : null);
+    if (station && station.region) return station.region;
+
+    // No station selected, or one with nothing configured. The env fallback is
+    // only meaningful when there is exactly one station it could describe.
+    const env = (process.env.STATION_REGION || '').trim().toUpperCase() || null;
+    if (!env) return null;
+    if (stations.length <= 1) return env;
+    // Several stations and only a deployment-wide value: it cannot be true of
+    // more than one of them, so it is true of none.
+    return station && stations.length === 1 ? env : null;
+  },
   geoAvailable: () => geo.available(),
   geoAttribution: () => geo.attribution(),
 };

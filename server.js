@@ -742,7 +742,7 @@ app.get('/api/listener-detail', auth.requireAuth, (req, res) => {
   /* The window's map. Same shape and same home region as the live one, so the
      page renders either through one code path and a reader can switch between
      "this week" and "right now" without the two being drawn differently. */
-  if (period.places) period.places.homeRegion = monitor.homeRegion();
+  if (period.places) period.places.homeRegion = monitor.homeRegion(station);
 
   // A path alone is not unique: stations can use the same mount on different
   // hosts. Scope every live aggregate before computing totals and geography.
@@ -807,7 +807,7 @@ app.get('/api/listener-detail', auth.requireAuth, (req, res) => {
       const m = listenerDetail.mergeAggregates(mounts, { host: monitor.adminHost() || '' });
       return {
         ...m.places,
-        homeRegion: monitor.homeRegion(),
+        homeRegion: monitor.homeRegion(station),
       };
     })(),
     mounts,

@@ -176,6 +176,16 @@ class DeviceStore {
           FROM devices
           WHERE stream_id IN (${holes}) AND start_ms < ? AND end_ms > ?
         `),
+        /* When LOCATION recording began, which is a different date from when
+           device recording began and must not be read as the same one. The
+           device record is years old; `place` starts the day it ships and can
+           never be backfilled. Reporting the former as the latter tells a
+           reader the map has seven days behind it when it has minutes. */
+        placesEarliest: this.db.prepare(`
+          SELECT MIN(start_ms) AS t
+          FROM devices
+          WHERE stream_id IN (${holes}) AND start_ms < ? AND end_ms > ? AND place != ''
+        `),
       });
     }
     return this.#byArity.get(n);
@@ -266,6 +276,9 @@ class DeviceStore {
 
     const e = st.earliest.get(...args);
     const earliest = e && e.t != null ? e.t : null;
+
+    const pe = st.placesEarliest.get(...args);
+    places.coveredFrom = pe && pe.t != null ? new Date(pe.t).toISOString() : null;
 
     return {
       devices,

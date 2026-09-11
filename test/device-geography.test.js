@@ -185,3 +185,44 @@ test('a bot is still excluded from the device record entirely', () => {
   const rows = [{ ip: '1.2.3.4', userAgent: 'Icecast 2.4.3', connectedSec: 60 }];
   assert.equal(listenerDetail.deviceIdentities(rows, 'salt', geoStub()).length, 0);
 });
+
+// ── When location recording began ──────────────────────────────────────────
+
+test('places.coveredFrom is when LOCATION began, not when the device record did', () => {
+  const s = freshStore();
+  // A long-standing device record with no geography behind it...
+  s.recordDevices('kpft-main', at(120), [{ id: 'old1', cls: 'Safari|iOS' }]);
+  s.recordDevices('kpft-main', at(90), [{ id: 'old2', cls: 'Safari|iOS' }]);
+  // ...and location recording starting only an hour ago.
+  s.recordDevices('kpft-main', at(1), [dev(9, 'US:TX')]);
+
+  const r = s.getDistinctDevices(['kpft-main'], since(300), NOW);
+
+  assert.ok(r.coveredFrom, 'the device record still reports its own start');
+  assert.ok(
+    new Date(r.coveredFrom).getTime() <= NOW - 100 * HOUR,
+    'device recording is old',
+  );
+  assert.ok(
+    new Date(r.places.coveredFrom).getTime() >= NOW - 2 * HOUR,
+    'location recording is an hour old and must not inherit the device record\'s age',
+  );
+  assert.equal(r.places.unrecorded, 2);
+  assert.equal(r.places.placed, 1);
+});
+
+test('with no located rows at all, places.coveredFrom is null rather than a guess', () => {
+  const s = freshStore();
+  s.recordDevices('kpft-main', at(2), [{ id: 'old1', cls: 'Safari|iOS' }]);
+  const r = s.getDistinctDevices(['kpft-main'], since(6), NOW);
+  assert.equal(r.places.coveredFrom, null);
+  assert.equal(r.places.placed, 0);
+});
+
+test('a relay still counts as a located row: we know where it was, and excluded it', () => {
+  const s = freshStore();
+  s.recordDevices('kpft-main', at(1), [dev(1, '-')]);
+  const r = s.getDistinctDevices(['kpft-main'], since(6), NOW);
+  assert.ok(r.places.coveredFrom, 'the lookup ran; the result was "exclude this one"');
+  assert.equal(r.places.unrecorded, 0, 'an excluded relay is not an unrecorded listener');
+});

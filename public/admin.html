@@ -60,6 +60,13 @@
           <span id="st-tz-slot"></span>
           <span class="note">Sets when this station's weekly report arrives, and the day boundaries in its figures.</span>
         </label>
+        <label>State
+          <input id="st-region" placeholder="DC" maxlength="2"
+                 pattern="[A-Za-z]{2}" autocapitalize="characters">
+          <span class="note">Two-letter code for the state this station broadcasts from, DC included.
+            Sets the in-market share on the listener map. Leave blank if you would rather not say &mdash;
+            the map still works, it just will not report how much of the audience is outside the signal area.</span>
+        </label>
       </div>
 
       <div class="actions">

@@ -1017,25 +1017,41 @@
    * THIS IS WHAT RETIRES THE EXPLANATORY NOTICE. Geography is written down from
    * the day the column shipped and cannot be backfilled, so for the first weeks
    * the map is honestly incomplete. Rather than a banner somebody must remember
-   * to delete before a network rollout, the notice is derived: when the record
-   * reaches back past the start of the window and no device in it predates the
-   * record, there is nothing left to explain and it stops being rendered.
+   * to delete before a network rollout, the notice is derived: once every
+   * listener in the window carries a location there is nothing left to explain
+   * and it stops being rendered.
+   *
+   * `places.coveredFrom` is when LOCATION recording began, NOT `period
+   * .coveredFrom`, which is when DEVICE recording began. Reading the second as
+   * the first produced "recorded for 7 days of the last 7 days, so this map
+   * covers part of the period" — a sentence that argues with itself, on a
+   * panel whose entire job that week was to explain why a number was small.
    */
   function geoCoverage(d) {
     const period = d.period || {};
     const places = period.places || {};
     const windowDays = period.days || days;
-    const from = period.coveredFrom ? new Date(period.coveredFrom) : null;
-    const daysCovered = from ? Math.max(0, (Date.now() - from.getTime()) / 86400000) : 0;
+
+    const from = places.coveredFrom ? new Date(places.coveredFrom) : null;
+    const daysLocated = from ? Math.max(0, (Date.now() - from.getTime()) / 86400000) : 0;
+
     const located = places.placed || 0;
+    const relays = places.relays || 0;
+    const unplaced = places.unplaced || 0;
+    // People counted in this window before there was anywhere to put a location.
     const unrecorded = places.unrecorded || 0;
+
     return {
-      windowDays, from, daysCovered, located, unrecorded,
-      // Every device in the window predates the location record: nothing to draw.
+      windowDays, from, daysLocated, located, unrecorded,
+      known: located + relays + unplaced,
+      total: located + relays + unplaced + unrecorded,
+      // Nothing to draw: every device in the window predates the location record.
       empty: located === 0,
-      // Half a day of slack, so a window that is covered to the minute does not
-      // flicker a "still collecting" notice at a reader because of rounding.
-      partial: located > 0 && (unrecorded > 0 || daysCovered + 0.5 < windowDays),
+      /* Some of this window has locations behind it and some does not. Driven by
+         the devices themselves rather than by a date arithmetic: as the old rows
+         age out of the range this reaches zero and the notice retires, with no
+         clock to get wrong. */
+      partial: located > 0 && unrecorded > 0,
     };
   }
 
@@ -1085,16 +1101,21 @@
             panel shows who is connected right now.</div>
         </div>`;
     } else if (cov.partial) {
-      const covered = cov.daysCovered < 1
-        ? 'less than a day'
-        : plural(Math.floor(cov.daysCovered), 'day', 'days');
+      /* STATE THE REAL REASON AND THE REAL NUMBERS. The question this notice
+         exists to answer is "why is this number so much smaller than the one
+         above it", and the answer is a count, not a date. */
+      const started = cov.daysLocated < 1
+        ? 'less than a day ago'
+        : `${plural(Math.floor(cov.daysLocated), 'day', 'days')} ago`;
       notice = `<div class="geo-notice">
           <span class="material-symbols-outlined">hourglass_top</span>
-          <div><strong>Still filling in.</strong> Location has been recorded for
-            ${esc(covered)} of the last ${esc(plural(Math.round(cov.windowDays), 'day', 'days'))},
-            so this map covers part of the period rather than all of it. It keeps
-            growing on its own and this notice disappears once the record covers
-            the whole range.</div>
+          <div><strong>Still filling in.</strong>
+            ${esc(plural(cov.known, 'person', 'people'))} of
+            ${cov.total} in this period have a location. The other
+            ${cov.unrecorded} listened before location recording began
+            (${esc(started)}), and that cannot be filled in backwards.
+            The map grows on its own and this notice disappears once everyone in
+            the range is covered.</div>
         </div>`;
     }
 
@@ -1149,7 +1170,11 @@
          </div>`
       : `<div class="geo-note-line">${
         market.reason === 'no-home-region'
-          ? 'Set <code>STATION_REGION</code> to the station\u2019s state (e.g. <code>TX</code>) to see the in-market share.'
+          /* Names the station, because the fix is per-station now. A single
+             deployment-wide STATION_REGION reported every station's in-market
+             share against one state — WPFW's Washington audience came back as
+             "0% in Texas", which is worse than no figure at all. */
+          ? 'Set this station\u2019s state in the admin panel (e.g. <code>DC</code>) to see how much of its audience is outside the signal area.'
           : 'No US states located in this window.'
       }</div>`;
 

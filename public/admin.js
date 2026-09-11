@@ -479,6 +479,9 @@
         id: stationId,
         name: $('st-name').value.trim(),
         timezone: (document.querySelector('#st-tz-slot [data-f=tz]') || {}).value || 'UTC',
+        // Empty is a real answer — the server stores null and the map simply
+        // reports no in-market share, rather than borrowing another station's.
+        region: $('st-region').value.trim().toUpperCase(),
       },
       // Channel ids are prefixed with the station so they stay unique across
       // stations — they key this channel's history permanently.
@@ -1093,6 +1096,13 @@
           ${timezoneSelectHtml(s.timezone || 'UTC')}
           <span class="note">Sets when this station's weekly report arrives, and the day boundaries in its figures.</span>
         </label>
+        <label>State
+          <input data-f="region" value="${esc(s.region || '')}" placeholder="DC"
+                 maxlength="2" pattern="[A-Za-z]{2}" autocapitalize="characters">
+          <span class="note">Two-letter code for the state this station broadcasts from, DC included.
+            Sets the in-market share on the listener map. Blank means the map reports no in-market
+            share &mdash; which is better than borrowing another station's.</span>
+        </label>
       </div>
       <h3>Channels</h3>
       <p class="hint">A channel's identifier is fixed — it keys this channel's recorded history. Everything else can change.</p>
@@ -1327,6 +1337,7 @@
     const body = {
       name: box.querySelector('[data-f=name]').value.trim(),
       timezone: box.querySelector('[data-f=tz]').value.trim(),
+      region: box.querySelector('[data-f=region]').value.trim().toUpperCase(),
       channels,
     };
 
