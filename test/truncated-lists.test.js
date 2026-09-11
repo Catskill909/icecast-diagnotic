@@ -22,7 +22,9 @@ const path = require('node:path');
 const vm = require('node:vm');
 
 const src = fs.readFileSync(path.join(__dirname, '../public/listeners.js'), 'utf8');
-const start = src.indexOf('  function moreRow(');
+// From the counter the helper uses, not from the function itself — slicing
+// below a declaration it closes over is how this file ReferenceErrors.
+const start = src.indexOf('  let barSeq = 0;');
 const slice = src.slice(start, src.indexOf('  /* Returning vs new listeners.', start));
 
 function load() {
@@ -48,13 +50,58 @@ test('THE REPORTED BUG: the tenth player is no longer silently dropped', () => {
   assert.match(t, /\b8\b/, 'and how many listeners it accounts for');
 });
 
-test('the visible rows plus the remainder account for every listener', () => {
+/** The markup split into what is on screen and what is behind the expander. */
+function halves(html) {
+  const at = html.indexOf('<div class="deep-bar-hidden"');
+  const visible = at === -1 ? html : html.slice(0, at);
+  const collapsed = at === -1 ? '' : html.slice(at);
+  const vals = (part) => [...part.matchAll(/deep-bar-val">(\d+)</g)].map((m) => Number(m[1]));
+  return { visible, collapsed, visibleVals: vals(visible), hiddenVals: vals(collapsed) };
+}
+
+test('the VISIBLE column sums to the total — the remainder closes the gap', () => {
+  const { bars } = load();
+  const { visibleVals } = halves(bars(TEN_PLAYERS, TOTAL, 9));
+  assert.equal(
+    visibleVals.reduce((a, n) => a + n, 0), TOTAL,
+    'a reader adding what is on screen must reach the total, or the page looks broken',
+  );
+});
+
+test('the collapsed rows sum to exactly what the remainder row claims', () => {
+  const { bars } = load();
+  const { visibleVals, hiddenVals } = halves(bars(TEN_PLAYERS, TOTAL, 9));
+  const remainder = visibleVals[visibleVals.length - 1];
+  assert.equal(
+    hiddenVals.reduce((a, n) => a + n, 0), remainder,
+    'expanding must reveal exactly the listeners the summary promised',
+  );
+});
+
+test('EXPANDING reveals the entry that was missing, rather than only counting it', () => {
+  // The reported case: iOS app was tenth on a list of nine.
+  const { bars } = load();
+  const { visible, collapsed } = halves(bars(TEN_PLAYERS, TOTAL, 9));
+  assert.doesNotMatch(visible, /iOS app/, 'still not in the default view — the list is a top N');
+  assert.match(collapsed, /iOS app/, 'but one click away, not gone');
+});
+
+test('the expander is keyboard reachable and announces its state', () => {
   const { bars } = load();
   const html = bars(TEN_PLAYERS, TOTAL, 9);
-  // Every count that appears in a value cell, summed.
-  const values = [...html.matchAll(/deep-bar-val">(\d+)</g)].map((m) => Number(m[1]));
-  assert.equal(values.reduce((a, n) => a + n, 0), TOTAL,
-    'a reader adding the column must reach the total, or the page looks wrong');
+  assert.match(html, /role="button"/);
+  assert.match(html, /tabindex="0"/);
+  assert.match(html, /aria-expanded="false"/, 'collapsed by default, and says so');
+  assert.match(html, /aria-controls="bar-rest-/);
+  assert.match(html, /<div class="deep-bar-hidden" id="bar-rest-[^"]+" hidden>/);
+});
+
+test('each list on a page gets its own toggle id', () => {
+  // Four lists render at once; a shared id would make one caret open another.
+  const { bars } = load();
+  const a = bars(TEN_PLAYERS, TOTAL, 9).match(/id="(bar-rest-[^"]+)"/)[1];
+  const b = bars(TEN_PLAYERS, TOTAL, 9).match(/id="(bar-rest-[^"]+)"/)[1];
+  assert.notEqual(a, b);
 });
 
 test('a complete list does not imply there is more', () => {

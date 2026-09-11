@@ -1411,3 +1411,30 @@
   color: var(--text-tertiary);
   font-style: italic;
 }
+
+/* The remainder row doubles as the expander. No separate "show all" control,
+   and no affordance at all when the list already fits. */
+.deep-bar-rest.is-toggle {
+  cursor: pointer;
+  border-radius: 4px;
+}
+
+.deep-bar-rest.is-toggle:hover .deep-bar-label,
+.deep-bar-rest.is-toggle:focus-visible .deep-bar-label { color: var(--text-primary); }
+
+.deep-bar-rest.is-toggle:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 2px;
+}
+
+.bar-caret {
+  display: inline-block;
+  width: 10px;
+  font-style: normal;
+  color: var(--text-tertiary);
+}
+
+/* Collapsed by default. Most of a long tail is one-listener entries, and a
+   panel that opens with thirty rows of them is one nobody scans — which is how
+   the silent truncation got there to begin with. */
+.deep-bar-hidden { margin: 0; }

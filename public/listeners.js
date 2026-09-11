@@ -763,15 +763,34 @@
 
      So the remainder is drawn as its own row: how many were left out, and how
      many listeners they account for between them. */
-  function moreRow(hiddenCount, hiddenListeners, total) {
+  /* THE REMAINDER ROW IS THE EXPANDER, rather than a separate "show all"
+     control somewhere else.
+
+     It is already saying "3 more" — the number a reader wants is one click from
+     the place they noticed it was missing, with no modal, no second page and no
+     control at all when nothing is hidden. A list that fits shows no affordance
+     because there is nothing behind it.
+
+     The tail stays COLLAPSED by default. Most of it is one-listener entries,
+     and a panel that opens with thirty rows of noise is a panel nobody scans —
+     which is how the truncation got there in the first place. */
+  let barSeq = 0;
+
+  function moreRow(hiddenCount, hiddenListeners, total, hiddenRowsHtml) {
     if (hiddenCount <= 0) return '';
     const pct = total ? Math.round((hiddenListeners / total) * 100) : 0;
+    const id = `bar-rest-${barSeq += 1}`;
+    const expandable = Boolean(hiddenRowsHtml);
     return `
-      <div class="deep-bar-row deep-bar-rest">
-        <div class="deep-bar-label">${hiddenCount} more</div>
+      <div class="deep-bar-row deep-bar-rest${expandable ? ' is-toggle' : ''}"
+           ${expandable ? `data-bar-toggle="${id}" role="button" tabindex="0"
+           aria-expanded="false" aria-controls="${id}"
+           title="Show the remaining ${hiddenCount}"` : ''}>
+        <div class="deep-bar-label">${expandable ? '<span class="bar-caret">▸</span> ' : ''}${hiddenCount} more</div>
         <div class="deep-bar-track"><div class="deep-bar-fill" style="width:${pct}%"></div></div>
         <div class="deep-bar-val">${hiddenListeners}<span class="deep-bar-pct">${pct}%</span></div>
-      </div>`;
+      </div>
+      ${expandable ? `<div class="deep-bar-hidden" id="${id}" hidden>${hiddenRowsHtml}</div>` : ''}`;
   }
 
   function bars(obj, total, limit) {
@@ -779,7 +798,7 @@
     const shown = all.slice(0, limit || 8);
     if (!shown.length) return '<div class="muted">No data</div>';
     const hidden = all.slice(shown.length);
-    const rows = shown.map(([label, n]) => {
+    const row = ([label, n]) => {
       const pct = total ? Math.round((n / total) * 100) : 0;
       return `
         <div class="deep-bar-row">
@@ -787,8 +806,9 @@
           <div class="deep-bar-track"><div class="deep-bar-fill" style="width:${pct}%"></div></div>
           <div class="deep-bar-val">${n}<span class="deep-bar-pct">${pct}%</span></div>
         </div>`;
-    }).join('');
-    return rows + moreRow(hidden.length, hidden.reduce((a, [, n]) => a + n, 0), total);
+    };
+    return shown.map(row).join('')
+      + moreRow(hidden.length, hidden.reduce((a, [, n]) => a + n, 0), total, hidden.map(row).join(''));
   }
 
   /* Returning vs new listeners.
@@ -1623,7 +1643,16 @@
              <div class="deep-bar-val">${c.n}<span class="deep-bar-pct">${share}%</span></div>
            </div>`;
       }).join('')}
-         ${moreRow(cityHidden.length, cityHidden.reduce((a, c) => a + c.n, 0), usPlaced)}
+         ${moreRow(cityHidden.length, cityHidden.reduce((a, c) => a + c.n, 0), usPlaced,
+        cityHidden.map((c) => {
+          const share = usPlaced ? Math.round((c.n / usPlaced) * 100) : 0;
+          return `
+             <div class="deep-bar-row">
+               <div class="deep-bar-label">${esc(c.name)}, ${esc(c.st)}</div>
+               <div class="deep-bar-track"><div class="deep-bar-fill" style="width:${share}%"></div></div>
+               <div class="deep-bar-val">${c.n}<span class="deep-bar-pct">${share}%</span></div>
+             </div>`;
+        }).join(''))}
          <div class="geo-note-line">Share of located US ${esc(unit.many)}, the same
            denominator as the in-market figure above &mdash; so a metro can be read
            against its state. ${places.cityWithheld
@@ -1679,6 +1708,36 @@
      die with them, while one bound to the container survives `innerHTML`.
      Redrawing uses the payload already in hand — switching what the map counts
      is a change of view, not a new request. */
+  /* Delegated on the panels, which persist across their own re-renders. The
+     rows themselves are replaced on every load, so a handler bound to them
+     would die with them. Keyboard too: the row is a button in all but tag. */
+  function wireBarToggles(container) {
+    if (!container) return;
+    const toggle = (btn) => {
+      const body = document.getElementById(btn.dataset.barToggle);
+      if (!body) return;
+      const open = !body.hidden;
+      body.hidden = open;
+      btn.setAttribute('aria-expanded', String(!open));
+      btn.classList.toggle('is-open', !open);
+      const caret = btn.querySelector('.bar-caret');
+      if (caret) caret.textContent = open ? '\u25B8' : '\u25BE';
+    };
+    container.addEventListener('click', (e) => {
+      const btn = e.target && e.target.closest && e.target.closest('[data-bar-toggle]');
+      if (btn) toggle(btn);
+    });
+    container.addEventListener('keydown', (e) => {
+      if (e.key !== 'Enter' && e.key !== ' ') return;
+      const btn = e.target && e.target.closest && e.target.closest('[data-bar-toggle]');
+      if (!btn) return;
+      e.preventDefault();
+      toggle(btn);
+    });
+  }
+  wireBarToggles(document.getElementById('deep-panel'));
+  wireBarToggles(document.getElementById('geo-panel'));
+
   const geoPanelEl = document.getElementById('geo-panel');
   if (geoPanelEl) {
     geoPanelEl.addEventListener('click', (e) => {

@@ -216,7 +216,12 @@
          out.</strong> Player/app, platform, metro and country each show a top few,
          and the last row counts everything below it \u2014 "3 more". So the numbers
          in a list always add up to the total above it, and a player you expected to
-         see is either on the list or inside that last row, never simply absent.`,
+         see is either on the list or inside that last row, never simply absent.
+         <strong>Click that row to open it</strong> and the rest appear underneath.`,
+        `Why they are not all shown at once: most of a long tail is a single listener
+         apiece, and a panel that opens with thirty of those is one nobody reads. The
+         busiest few answer the question; the rest are one click away when they
+         matter.`,
         `<strong>Session length</strong> is the engagement half of the story: reach says
          how many people you got, this says whether they stayed. A station can grow its
          audience and lose engagement at the same time, and the two figures side by side

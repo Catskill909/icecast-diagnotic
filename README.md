@@ -464,6 +464,17 @@ the column always sums to the total, and the player list shows twelve rather
 than nine, because a category a station would act on should be visible without
 arithmetic.
 
+**That row is also the expander.** Clicking it reveals the rest in place — no
+modal, no second page, and no control at all when the list already fits. The
+tail stays collapsed by default because most of it is one listener apiece, and a
+panel that opens with thirty such rows is one nobody scans, which is how the
+silent truncation arrived in the first place.
+
+**Nothing is capped server-side.** The API returns the complete maps for
+players, platforms, states, metros and countries; every limit is in the display
+and now reports itself. The only truncation below the page is `deviceId`'s
+12-hex-character hash, which is deliberate and documented.
+
 ### Returning and new listeners
 
 **Two figures, not one ratio.** *Came back* is retention; *First time* is
