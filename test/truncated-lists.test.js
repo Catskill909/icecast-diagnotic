@@ -117,14 +117,72 @@ test('exactly at the limit is complete, not truncated', () => {
   assert.doesNotMatch(bars(nine, 1000, 9), /deep-bar-rest/, 'off-by-one here invents a phantom row');
 });
 
-test('many hidden entries are summed into one row, not listed', () => {
+test('many hidden entries are summed into ONE row, not listed', () => {
   const { bars } = load();
+  // A long flat tail, all of it individually tiny.
   const many = {};
-  for (let i = 0; i < 30; i += 1) many[`P${i}`] = 30 - i;
+  for (let i = 0; i < 60; i += 1) many[`P${i}`] = 60 - i;
   const total = Object.values(many).reduce((a, n) => a + n, 0);
   const html = bars(many, total, 9);
-  assert.equal((html.match(/deep-bar-rest/g) || []).length, 1, 'one remainder row');
-  assert.match(text(html), /21 more/);
+  assert.equal((html.match(/deep-bar-rest/g) || []).length, 1, 'one remainder row, however long the tail');
+  assert.match(text(html), /\d+ more/);
+});
+
+/* ── Where the cut falls ────────────────────────────────────────────────────
+   A fixed count lands in the wrong place for some stations and not others. On
+   KPFK the twelfth row was 1% and the collapsed tail was 6%, so the hidden
+   group outranked three rows above it — which is a fair thing for a reader to
+   query, and the reason the cut is now by SHARE. */
+
+test('the cut is by SHARE, so everything worth a percent is on the page', () => {
+  const { bars } = load();
+  const players = { A: 500, B: 300, C: 100, D: 60, E: 25, F: 10, G: 4, H: 1 };
+  const total = Object.values(players).reduce((a, n) => a + n, 0);   // 1000
+  const { visible, collapsed } = halves(bars(players, total, 0));
+
+  // Everything at or above 1% — F is exactly ten in a thousand, so it stays.
+  for (const name of ['A', 'B', 'C', 'D', 'E', 'F']) {
+    assert.match(visible, new RegExp(`>${name}<`), `${name} is at or above 1% and must be visible`);
+  }
+  // Below the line, and therefore behind the expander rather than gone.
+  for (const name of ['G', 'H']) {
+    assert.doesNotMatch(visible, new RegExp(`>${name}<`), `${name} is under 1% and belongs in the tail`);
+    assert.match(collapsed, new RegExp(`>${name}<`), `${name} must still be one click away`);
+  }
+});
+
+test('the remainder says WHY those entries are hidden', () => {
+  const { bars } = load();
+  const players = { A: 900, B: 50, C: 9, D: 8, E: 7 };
+  const t = text(bars(players, 974, 0));
+  assert.match(t, /each under 1%/,
+    'it answers the question the row provokes: is there anything in there I should have seen?');
+});
+
+test('a station with three players shows three, and offers no expander', () => {
+  const { bars } = load();
+  const html = bars({ Chrome: 50, Safari: 30, VLC: 20 }, 100, 12);
+  assert.equal((html.match(/deep-bar-row/g) || []).length, 3);
+  assert.doesNotMatch(html, /deep-bar-rest/, 'nothing hidden means no control at all');
+});
+
+test('a pathological tail cannot fill the panel', () => {
+  const { bars } = load();
+  // Forty entries each at exactly 2.5% — all "significant", none droppable.
+  const many = {};
+  for (let i = 0; i < 40; i += 1) many[`P${i}`] = 25;
+  const { visible } = halves(bars(many, 1000, 0));
+  const rows = (visible.match(/deep-bar-row/g) || []).length;
+  assert.ok(rows <= 21, `a ceiling must apply; got ${rows} visible rows`);
+  assert.match(visible, /deep-bar-rest/, 'and the overflow is still counted');
+});
+
+test('a numeric limit still guarantees a minimum, never a maximum', () => {
+  const { bars } = load();
+  // Only two clear 1%, but the platform list asks for six.
+  const obj = { A: 700, B: 200, C: 30, D: 25, E: 20, F: 15, G: 10 };
+  const { visible } = halves(bars(obj, 1000, 6));
+  assert.equal((visible.match(/deep-bar-row/g) || []).length, 7, 'six rows plus the remainder');
 });
 
 test('the remainder is muted, because it is not a category', () => {

@@ -776,7 +776,7 @@
      which is how the truncation got there in the first place. */
   let barSeq = 0;
 
-  function moreRow(hiddenCount, hiddenListeners, total, hiddenRowsHtml) {
+  function moreRow(hiddenCount, hiddenListeners, total, hiddenRowsHtml, why) {
     if (hiddenCount <= 0) return '';
     const pct = total ? Math.round((hiddenListeners / total) * 100) : 0;
     const id = `bar-rest-${barSeq += 1}`;
@@ -786,16 +786,36 @@
            ${expandable ? `data-bar-toggle="${id}" role="button" tabindex="0"
            aria-expanded="false" aria-controls="${id}"
            title="Show the remaining ${hiddenCount}"` : ''}>
-        <div class="deep-bar-label">${expandable ? '<span class="bar-caret">▸</span> ' : ''}${hiddenCount} more</div>
+        <div class="deep-bar-label">${expandable ? '<span class="bar-caret">▸</span> ' : ''}${hiddenCount} more${why ? `, ${esc(why)}` : ''}</div>
         <div class="deep-bar-track"><div class="deep-bar-fill" style="width:${pct}%"></div></div>
         <div class="deep-bar-val">${hiddenListeners}<span class="deep-bar-pct">${pct}%</span></div>
       </div>
       ${expandable ? `<div class="deep-bar-hidden" id="${id}" hidden>${hiddenRowsHtml}</div>` : ''}`;
   }
 
+  /* WHERE TO CUT A RANKED LIST: by SHARE, not by a fixed count.
+
+     Twelve was arbitrary, and arbitrary cuts land in the wrong place for some
+     stations and not others. On KPFK the twelfth entry was 1% and the collapsed
+     tail was 6% — so the hidden group outranked three of the rows above it,
+     which reads oddly and is a fair thing for a reader to query.
+
+     A threshold adapts instead: a station with five players shows five, and one
+     with twenty meaningful ones shows twenty. The remainder then MEANS
+     something — "each under 1%" — rather than "whatever did not fit". The
+     ceiling exists only so a pathological tail cannot fill the panel. */
+  const BAR_MIN_SHARE = 0.01;
+  const BAR_MAX_ROWS = 20;
+
   function bars(obj, total, limit) {
     const all = Object.entries(obj || {}).sort((a, b) => b[1] - a[1]);
-    const shown = all.slice(0, limit || 8);
+    const floor = total ? total * BAR_MIN_SHARE : 0;
+    const significant = all.filter(([, n]) => n >= floor).length;
+    /* A numeric `limit` is still honoured as a FLOOR on how many to show, so a
+       caller that wants at least six platforms still gets them even when only
+       three clear the threshold. */
+    const keep = Math.min(BAR_MAX_ROWS, Math.max(significant, limit || 0, 1));
+    const shown = all.slice(0, keep);
     if (!shown.length) return '<div class="muted">No data</div>';
     const hidden = all.slice(shown.length);
     const row = ([label, n]) => {
@@ -807,8 +827,13 @@
           <div class="deep-bar-val">${n}<span class="deep-bar-pct">${pct}%</span></div>
         </div>`;
     };
+    /* Named by WHY they are hidden when that is true of all of them, because
+       "each under 1%" answers the question the row provokes — is there anything
+       in there I should have seen? */
+    const allBelow = hidden.length > 0 && hidden.every(([, n]) => n < floor);
     return shown.map(row).join('')
-      + moreRow(hidden.length, hidden.reduce((a, [, n]) => a + n, 0), total, hidden.map(row).join(''));
+      + moreRow(hidden.length, hidden.reduce((a, [, n]) => a + n, 0), total,
+        hidden.map(row).join(''), allBelow ? 'each under 1%' : null);
   }
 
   /* Returning vs new listeners.

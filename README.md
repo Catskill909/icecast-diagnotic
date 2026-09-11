@@ -459,10 +459,18 @@ percentages are shares of the whole audience, so the visible rows fell short of
 100% with nothing to explain the gap — which reads as broken arithmetic rather
 than a truncated list.
 
-Every such list now ends with a muted remainder row — *"3 more · 41 · 4%"* — so
-the column always sums to the total, and the player list shows twelve rather
-than nine, because a category a station would act on should be visible without
-arithmetic.
+**The cut is by SHARE, not by a fixed count.** Twelve was arbitrary, and an
+arbitrary cut lands in the wrong place for some stations and not others: on KPFK
+the twelfth row was 1% while the collapsed tail was 6%, so the hidden group
+outranked three rows above it. Everything at or above **1%** is shown, up to a
+ceiling of 20 so a pathological tail cannot fill the panel, and a numeric limit
+is a FLOOR — the platform list still gets its six even when only three clear the
+threshold.
+
+A station with three players therefore shows three and offers no expander at
+all. The remainder row then means something specific — *"15 more, each under
+1%"* — which answers the question it provokes: is there anything in there I
+should have seen?
 
 **That row is also the expander.** Clicking it reveals the rest in place — no
 modal, no second page, and no control at all when the list already fits. The

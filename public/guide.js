@@ -218,10 +218,12 @@
          in a list always add up to the total above it, and a player you expected to
          see is either on the list or inside that last row, never simply absent.
          <strong>Click that row to open it</strong> and the rest appear underneath.`,
-        `Why they are not all shown at once: most of a long tail is a single listener
-         apiece, and a panel that opens with thirty of those is one nobody reads. The
-         busiest few answer the question; the rest are one click away when they
-         matter.`,
+        `<strong>The line is drawn at one per cent, not at a fixed number of rows.</strong>
+         Anything accounting for at least 1% of listeners is on the page, so a station
+         with three players shows three and offers nothing to expand, while a station
+         with twenty meaningful ones shows twenty. What is left over is named for the
+         reason it was left over &mdash; "15 more, each under 1%" &mdash; which answers
+         the question worth asking: is there anything in there I should have seen?`,
         `<strong>Session length</strong> is the engagement half of the story: reach says
          how many people you got, this says whether they stayed. A station can grow its
          audience and lose engagement at the same time, and the two figures side by side
