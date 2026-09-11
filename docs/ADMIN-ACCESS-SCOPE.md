@@ -614,6 +614,36 @@ address to anyone who loads the page. That is not a hypothetical failure mode: i
 is the *obvious* way to write it, and this codebase has now shipped that class of
 leak three times in one day (`/api/events`, `/api/status`, `/api/history`).
 
+#### Recorded: state is stored per device row (2026-09-11)
+
+A schema note, so what the permanent table holds is written down somewhere.
+
+`devices.place` holds ONE token per device per bucket — `US:MD`, `US:` for a
+state that failed the centroid guard, `GB:` for anywhere else, `-` for an
+excluded relay, `?` unplaceable, `''` for rows written before the column
+existed. It sits beside a **salted device hash**, not an address.
+
+This is what makes a map of a WEEK possible. Icecast reports where its currently
+connected listeners are and keeps no history, so a period map can only exist if
+the place is written down as it is seen; it cannot be reconstructed later.
+
+The two rules above are unchanged by it:
+
+- **Nothing per-device leaves the server.** The API returns counts per state and
+  per country. This is an API design rule, not a policy one — the natural way to
+  build these panels is to send the rows to the browser, which publishes every
+  listener's IP to anyone who loads the page.
+- **The IP is hashed with a stored salt and discarded.** Not a statement about
+  who is trusted with the data: a raw address retained for years is a liability
+  in a breach or a legal request, and the hash costs nothing to keep instead.
+
+Granularity is deliberately state-level, matching what the panel already
+published. Going finer (city, or anything per-listener) is a separate decision
+and a separate schema change, not something that happens by drift.
+
+`place` is one column, read only by the map. Cume does not touch it, so it can
+be coarsened or dropped without affecting any other figure.
+
 Two further decisions to make explicitly, not by default:
 
 - **Retention.** How long are per-connection rows kept? Aggregates can be kept

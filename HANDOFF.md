@@ -1,5 +1,70 @@
 # Handoff — Icecast Monitor
 
+## 2026-09-11 — Session close: audit, documentation, in-app help
+
+All three code commits from this session are deployed and verified live:
+`73a0f5b` (uptime tile), `8683177` (geography over a period), `16557ba`
+(per-station region). Both GitHub checks pass on `16557ba`, the tree is clean
+and in sync with origin, and the served `listeners.js`, `app.js` and
+`history.js` are byte-identical to local HEAD. `admin.js` differs only because
+it 302s to the login page for an anonymous request — the gate working.
+
+AUDIT FINDINGS, both fixed here:
+- `getDistinctDevices` early-returned a NARROWER object for a station with no
+  channels, omitting `places`. One case where a key is missing is how that one
+  case stops being handled. It now returns the full shape, with a test.
+- The coverage notice described relays as "people with a location". A relay was
+  looked up and excluded; it is not a located person. Reworded to "counted after
+  location recording began", which is what the count actually measures.
+
+Checked and NOT a problem: `lookupNetwork` and `lookupPlace` both catch
+internally and return miss objects, so `placeToken` cannot throw and cannot take
+down a collection pass.
+
+SWEEP for the class of the region bug — a per-station figure derived from a
+deployment-wide value. `STATION_TZ` is the only other such value and is already
+used as `stream.stationTimezone || STATION_TZ` everywhere; monitor.js:3521
+carries a comment saying the global "dates from the single-station install and
+is simply wrong". Timezone had already been fixed this way. Region was the only
+holdout. Nothing else found.
+
+DOCUMENTATION: README's "Where the audience is" now covers the two maps, why
+geography cannot be backfilled, and the per-station state; `STATION_REGION` is
+in the env reference for the first time, documented as single-station only.
+`docs/ADMIN-ACCESS-SCOPE.md` records the `devices.place` schema. `docs/DEVLOG.md`
+has the session entry. `docs/AUDIENCE-ROADMAP.md` §4.5 is the plan for the next
+session — five additions, THREE of which need no new collection at all because
+the data is already in `devices` and has never been queried.
+
+IN-APP HELP: a new "Where the audience is" topic in `public/guide.js` — the two
+maps and why their numbers differ so much, why history cannot be filled in
+backwards, that in-market is a state and not a signal area, that each station
+carries its own, why relays and low-confidence states are excluded, and what is
+never collected. `test/guide-topics.test.js` is the FIRST test of any kind over
+the guide, which is one large literal array with no build step: a stray quote or
+a missing field failed silently in the browser with every test still passing. It
+immediately reported a duplicate id, which turned out to be the test's own bug —
+`assert.deepStrictEqual` compares prototypes, and an array built inside a `vm`
+context carries that realm's `Array.prototype`. Use `Array.from`, not `.map`.
+
+Verification, Node 24.20.0: full suite 708/708, zero failures.
+
+OWNER'S POSITION ON DATA, stated explicitly and recorded so it is not
+re-litigated: collect as much as possible. Privacy here means access control and
+what leaves the server, not limits on what Pacifica gathers about its own
+audience. Both of those are already right — listener detail is behind auth, and
+the raw IP is used for the geo/relay lookups and the salted hash and is never
+written to disk (verified: seven uses, all in-memory). Do not raise collection
+itself as a concern.
+
+Status: docs, guide, the two audit fixes and their tests are LOCAL and
+uncommitted. No production change since `16557ba`.
+
+Next action: commit and push the documentation and guide work. Then §4.5 of the
+audience roadmap, starting with returning-vs-new listeners.
+
+---
+
 ## 2026-09-10 — In-market share was a deployment's figure, not a station's
 
 The owner selected WPFW — Washington DC — and the panel reported "In Texas 0%,

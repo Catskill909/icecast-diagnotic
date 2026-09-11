@@ -1110,12 +1110,11 @@
       notice = `<div class="geo-notice">
           <span class="material-symbols-outlined">hourglass_top</span>
           <div><strong>Still filling in.</strong>
-            ${esc(plural(cov.known, 'person', 'people'))} of
-            ${cov.total} in this period have a location. The other
-            ${cov.unrecorded} listened before location recording began
-            (${esc(started)}), and that cannot be filled in backwards.
-            The map grows on its own and this notice disappears once everyone in
-            the range is covered.</div>
+            ${esc(plural(cov.known, 'person', 'people'))} of ${cov.total} in this
+            period were counted after location recording began
+            (${esc(started)}). The other ${cov.unrecorded} were counted before
+            it, and that cannot be filled in backwards. The map grows on its own
+            and this notice disappears once everyone in the range is covered.</div>
         </div>`;
     }
 

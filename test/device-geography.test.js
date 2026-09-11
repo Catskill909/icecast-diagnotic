@@ -226,3 +226,19 @@ test('a relay still counts as a located row: we know where it was, and excluded 
   assert.ok(r.places.coveredFrom, 'the lookup ran; the result was "exclude this one"');
   assert.equal(r.places.unrecorded, 0, 'an excluded relay is not an unrecorded listener');
 });
+
+test('a station with no channels answers in the same shape as one with them', () => {
+  const s = freshStore();
+  s.recordDevices('kpft-main', at(1), [dev(1, 'US:TX')]);
+
+  const real = s.getDistinctDevices(['kpft-main'], since(6), NOW);
+  const none = s.getDistinctDevices([], since(6), NOW);
+
+  assert.deepEqual(
+    Object.keys(none).sort(), Object.keys(real).sort(),
+    'a narrower object in one case is how that one case stops being handled',
+  );
+  assert.deepEqual(Object.keys(none.places).sort(), Object.keys(real.places).sort());
+  assert.equal(none.places.placed, 0);
+  assert.equal(none.places.coveredFrom, null);
+});

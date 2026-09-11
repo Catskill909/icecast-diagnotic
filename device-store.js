@@ -222,7 +222,17 @@ class DeviceStore {
     const ids = (Array.isArray(streamIds) ? streamIds : [streamIds]).filter(Boolean);
     // No channels means no audience, not the whole network's.
     if (!ids.length) {
-      return { devices: 0, players: {}, platforms: {}, coveredFrom: null, partial: true };
+      // The SAME shape as a real answer, `places` included. Returning a
+      // narrower object here makes every caller test for a key that is missing
+      // in exactly one case, which is how the one case stops being handled.
+      return {
+        devices: 0, players: {}, platforms: {}, coveredFrom: null, partial: true,
+        places: {
+          countries: {}, usStates: {},
+          placed: 0, relays: 0, unplaced: 0, stateWithheld: 0, unrecorded: 0,
+          reasons: {}, coveredFrom: null,
+        },
+      };
     }
 
     const st = this.#distinctStmt(ids.length);

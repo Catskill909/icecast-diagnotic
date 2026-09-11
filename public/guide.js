@@ -219,6 +219,53 @@
       ],
     },
     {
+      id: 'geography',
+      icon: 'public',
+      title: 'Where the audience is',
+      lead: 'Which states people listen from \u2014 and which of the two numbers on that panel you are reading.',
+      body: [
+        `<strong>There are two maps, and the buttons above the panel choose between
+         them.</strong> They answer different questions and their numbers are nothing
+         like each other, which is the single most misread thing on the Audience page.`,
+        `<strong>The range button</strong> \u2014 whatever the pills at the top of the page
+         are set to \u2014 counts <em>distinct people</em> who listened over that period.
+         This is the figure for a report, a board meeting or a grant application.
+         <strong>Right now</strong> counts the <em>connections open this second</em>. It is
+         a snapshot, and it is far smaller on purpose: a station averaging 175 listeners
+         across a week, peaking at 1,060, might have 77 people connected at the moment you
+         look. Neither number is wrong; they are answers to different questions.`,
+        `<strong>Where people are is recorded as it happens, not remembered.</strong>
+         Icecast will tell you where its listeners are <em>right now</em> and keeps no
+         history of it. So the period map is built from locations this app writes down as
+         it sees them, and it <strong>cannot be filled in backwards</strong>. It starts the
+         day recording begins and reaches one day further back every day after that. While
+         the record is shorter than the period you have selected, the panel says so and
+         tells you how many people it covers. That notice disappears by itself once
+         everyone in the range is accounted for \u2014 nobody has to remember to remove it.`,
+        `<strong>"In [state]" is a STATE, not your signal area.</strong> A licence covers a
+         metro; this counts the whole state, so it reads slightly high against the
+         transmitter footprint and is labelled as a state share. The point of it is the
+         other half: how much of the audience the broadcast signal never reaches, which is
+         the part streaming adds.`,
+        `<strong>Each station has its own state, set on its card in the admin panel.</strong>
+         A station with none set shows no in-market share rather than borrowing another
+         station's \u2014 a shared setting once reported WPFW's Washington audience as
+         "0% in Texas", which is worse than showing nothing.`,
+        `<strong>Relays and datacenters are left out of the map.</strong> A connection from
+         a hosting company geolocates to the hosting company, so counting them would report
+         a server farm as an audience. They are shown as excluded rather than hidden, so
+         the number is visible.`,
+        `<strong>Some listeners are counted without a state.</strong> Location databases
+         report how sure they are, and when an answer is too vague it is a regional
+         centre rather than a real place \u2014 which would invent listeners somewhere
+         nobody lives. Those are counted in the country total and left off the state map on
+         purpose. Outside the United States the country is as far as it goes.`,
+        `<strong>What is never collected:</strong> no street address, no city, no point on a
+         map, and nothing about any individual. The page holds counts \u2014 "Maryland: 29"
+         \u2014 and the listener's address is used for the lookup and immediately discarded.`,
+      ],
+    },
+    {
       id: 'royalties',
       icon: 'hourglass_top',
       title: 'Listening hours and royalties',

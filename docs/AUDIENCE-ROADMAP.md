@@ -371,6 +371,39 @@ listener's IP address to anyone who loads the page.
 
 ---
 
+## 4.5 Next up — three of these need NO new collection (2026-09-11)
+
+Geography over a period now exists, and building it made clear how much is
+already sitting in `devices` unqueried. Three of the five below need no new
+field, no new lookup and no new collection pass — only a query and a panel.
+
+Ordered by value per unit of work.
+
+| # | Feature | What it answers | Needs |
+|---|---|---|---|
+| 1 | **Returning vs new listeners** | "3,400 people listened this week; 1,900 also listened last week." Loyalty and churn — the retention question funders and underwriters actually ask, and the one figure a competitor cannot fake | **Nothing new.** The device hash is already stable across weeks. A `GROUP BY device` over two windows |
+| 2 | **Player and device trends over time** | "Smart speakers went from 8% to 22% this year." Where to spend engineering effort, and evidence for a platform conversation | **Nothing new.** `cls` has been stored per device per bucket since cume shipped and has never been charted historically |
+| 3 | **Time of day by region** | Drive-time in New York against drive-time in Los Angeles — three time zones on one network, currently flattened into one curve | **Nothing new.** Cross `place` with the bucket timestamp, both already stored |
+| 4 | **City, for US listeners** | A licence covers a METRO; the map counts a whole STATE. This is the difference between "Texas" and "Greater Houston", i.e. between an overstated figure and the real in-footprint reach | One more field in the `place` token. GeoLite2 City is already downloaded and already read |
+| 5 | **Session length over time** | Whether people are staying longer, not just arriving more often. Currently live-only, so it cannot be trended at all | Storing `connectedSec`, which is already fetched and discarded |
+
+**Start with 1.** It is the largest figure in the table and costs a query.
+
+**Think hardest about 4.** It is the one that materially improves the number the
+station cares about, and also the one where the database is least trustworthy —
+city accuracy is materially weaker than state. The `accuracy_radius` centroid
+gate in `geo.js` already exists to handle exactly this and must be applied at
+city resolution too, or the map will invent a cluster in every metro centre.
+Note that §3 of `ADMIN-ACCESS-SCOPE.md` ruled out a dot-per-listener map; city
+COUNTS behind an accuracy gate are a different proposition from pins, but the
+decision should be made explicitly rather than inherited from this table.
+
+**5 is the one to schedule deliberately.** It is the only one that increases what
+is collected per listener, and the volume question in §4 of
+`ADMIN-ACCESS-SCOPE.md` applies to it and to nothing else here.
+
+---
+
 ## 5. What we have that they do not
 
 Worth being clear about, because it should not get lost while chasing parity:

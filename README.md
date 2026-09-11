@@ -383,10 +383,42 @@ outside the signal area".
 | **Relays are excluded from geography** | A datacenter address geolocates to the datacenter. On production this is 41 connections that would otherwise report as an audience in Virginia |
 | **In-market share is measured against US-located connections** | Any other denominator falls when the *database* gets worse, so a data-quality problem reads as an audience decline |
 
+#### Two maps, and they answer different questions
+
+The panel counts one of two things, chosen by the buttons above it, and the
+difference between them is the single most misread figure on the page.
+
+| | What it counts | Typical size |
+|---|---|---|
+| **The selected range** (default) | **Distinct people** who listened over the range set by the pills at the top of the page | The figure to put in a report |
+| **Right now** | **Connections** open at this second | Far smaller, and meant to be |
+
+Confusing the two is what makes the map look broken. On a station averaging 175
+listeners over a week with a peak of 1,060, the live map correctly showed 77 —
+a snapshot next to a week, read as a week.
+
+**Geography is recorded, not remembered.** Icecast reports where its currently
+connected listeners are and keeps no history of it, so the range map is built
+from locations this app writes down beside each device as it sees them
+(`devices.place`). It **cannot be backfilled**: it begins the day recording
+starts and reaches one day further back each day. While the record is shorter
+than the selected range the panel says so — stating how many people in the
+period were counted after recording began — and that notice **retires itself**
+when every listener in the range is covered. It is derived from listener counts,
+not from a date, so there is no banner for anyone to remember to delete.
+
 **The in-market figure is a STATE, not a coverage area.** KPFT's licence covers
 Greater Houston; this counts everyone in Texas, so it overstates the audience
-inside the footprint and is labelled as a state share. Set `STATION_REGION`;
-without it the figure is withheld rather than guessed from the largest state.
+inside the footprint and is labelled as a state share.
+
+**The state is per station, set in the admin panel.** Each station carries its
+own `region`, validated against the 50 states plus DC and editable on the
+station card. A station with none configured gets **no** in-market figure rather
+than another station's — a single deployment-wide value reported WPFW's
+Washington audience as "0% in Texas", which is worse than no figure at all.
+`STATION_REGION` survives only as the fallback for an install with exactly one
+station; on a network it is applied to none of them, because it cannot be true
+of more than one.
 
 **The map is a tile grid, not a shaped map of the US.** Area is not audience: a
 geographic choropleth makes Montana sixty times the size of Rhode Island and
@@ -823,6 +855,12 @@ WEEKLY_ROUNDUP_DAY=1            # 0=Sun … 6=Sat (default: 1, Monday)
 WEEKLY_ROUNDUP_HOUR=9           # 24h clock, in each station's OWN timezone
 STATION_TZ=America/Chicago      # fallback timezone for a station without one,
                                 # and for email timestamps
+STATION_REGION=TX               # SINGLE-STATION INSTALLS ONLY. The state used
+                                # for the listener map's in-market share. On a
+                                # multi-station install this is ignored — each
+                                # station carries its own state, set on its card
+                                # in /admin.html — because one value cannot be
+                                # true of five stations.
 
 # ── Retention ────────────────────────────────────────
 # Events are not pruned by age, but the newest MAX_EVENTS are retained. Raw

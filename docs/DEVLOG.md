@@ -1,6 +1,63 @@
 # Development log
 
 
+## 2026-09-11 — Geography over a period, per-station in-market share, in-app help
+
+Status: three commits deployed and verified live (`73a0f5b`, `8683177`,
+`16557ba`); documentation and in-app guide updates are local and uncommitted.
+
+Four defects and one feature, all arising from one reported symptom: figures on
+the Audience and History pages that looked wrong to a reader.
+
+- **Dashboard uptime tile** (`73a0f5b`). `refreshUptimeTile()` guarded its
+  success path with `uptimeFetchToken` but not its failure path. A slow 7-day
+  request that failed after the reader clicked 24h read the mutated
+  `uptimeRangeDays`, saw `=== 1`, and painted the local fallback over the live
+  24-hour figure under a "last 7 days" label. The same mutable read made the
+  partial-coverage test judge a 30-day answer against 1 day. Range is now
+  captured once as `requestedDays`. A sweep of every client script found this
+  was the last instance: `history.js` and `listeners.js` were already correct,
+  and the other five scripts make no network calls at all.
+- **The range chip claimed a panel it does not govern.** `syncRangeEcho()`
+  skipped titles marked `data-live-section`, but the attribute appeared in no
+  markup, so the guard had never run and "Where They Listen" was stamped with a
+  range it ignores.
+- **Geography over a WINDOW** (`8683177`). Icecast reports where its current
+  listeners are and keeps no history, so the map could only ever answer "right
+  now" — 77 connections under a heading saying seven days, beside a 7-day peak
+  of 1,060. `devices.place` now stores one token per device per bucket, produced
+  by the same `classifyChannel`/`lookupPlace` calls the live panel makes. The
+  fold carries it (without that the map works at 24h and empties at 30d), and
+  ALTER TABLE migrates existing installs, whose untagged rows read as
+  `unrecorded` rather than `unplaced`. `MAX(place)` so a device placed on any
+  channel is placed. The panel now offers both maps behind a toggle, with the
+  unit changing honestly between "people" and "connections".
+- **The coverage notice contradicted itself.** Shipped reading "recorded for 7
+  days of the last 7 days, so this map covers part of the period" — because
+  `period.coveredFrom` (device recording, years old) was read as
+  `places.coveredFrom` (location recording, hours old). The store now reports
+  both, and the notice is driven by counts of listeners with and without a
+  location rather than by date arithmetic. A count cannot contradict itself and
+  reaches zero unaided, so the notice still retires without anyone deleting it.
+- **In-market share was a deployment's figure, not a station's** (`16557ba`).
+  `homeRegion()` read one `STATION_REGION` env var, so WPFW reported "In Texas
+  0%". `region` is now a station property carried on the channel exactly as
+  `timezone` is, validated against the 50 states plus DC, and editable in both
+  admin forms. The env var survives only for single-station installs. A sweep
+  confirmed timezone was already scoped this way; region was the only holdout.
+
+Verification (Node 24.20.0): full suite 708/708, zero failures. 53 new tests
+across six files. Each new file was run against pre-fix code to confirm it
+fails: uptime 2/5, range chip 2/4, station region 7/11. Three failures during
+development were bugs in the tests themselves, not the code — geo.js reports a
+datacenter as network `hosting`, an id helper prefixed `dev`, and
+`assert.deepStrictEqual` compares prototypes across a `vm` realm boundary.
+
+Also: `test/guide-topics.test.js` is the first test of any kind over the in-app
+guide, which is one large literal array with no build step — a stray quote or a
+missing field failed silently in the browser with every test still passing.
+
+
 ## 2026-09-10 — Audience station selection refresh
 
 Status: implemented locally; not deployed or verified in a real browser against production.
