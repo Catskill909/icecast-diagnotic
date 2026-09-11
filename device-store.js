@@ -181,6 +181,52 @@ class DeviceStore {
            device record is years old; `place` starts the day it ships and can
            never be backfilled. Reporting the former as the latter tells a
            reader the map has seven days behind it when it has minutes. */
+        /* Devices present in BOTH windows. INTERSECT, not a join: the row
+           granularity differs between tiers, so joining would multiply a device
+           by however many buckets it happens to occupy on each side. */
+        returning: this.db.prepare(`
+          SELECT COUNT(*) AS n FROM (
+            SELECT DISTINCT device FROM devices
+            WHERE stream_id IN (${holes}) AND start_ms < ? AND end_ms > ?
+            INTERSECT
+            SELECT DISTINCT device FROM devices
+            WHERE stream_id IN (${holes}) AND start_ms < ? AND end_ms > ?
+          )
+        `),
+        /* Rows whose bucket is COARSER than a day anywhere near these windows.
+           A month bucket cannot be split across a 30-day boundary: the device
+           lands in both periods and reads as loyal. */
+        coarseRows: this.db.prepare(`
+          SELECT COUNT(*) AS n FROM devices
+          WHERE stream_id IN (${holes}) AND tier = 2 AND start_ms < ? AND end_ms > ?
+        `),
+        /* The distribution of distinct devices per time bucket.
+
+           `cls` is deterministic for a device — it is part of what the device
+           hash is made from — so a device has exactly one, and summing the
+           classes in a bucket gives the bucket's distinct device count. The
+           bucket format is bound, not interpolated, so the caller cannot
+           reach the SQL. */
+        trend: this.db.prepare(`
+          SELECT strftime(?, start_ms / 1000, 'unixepoch') AS b,
+                 cls, COUNT(DISTINCT device) AS n
+          FROM devices
+          WHERE stream_id IN (${holes}) AND start_ms < ? AND end_ms > ?
+          GROUP BY b, cls
+          ORDER BY b
+        `),
+        countDistinct: this.db.prepare(`
+          SELECT COUNT(DISTINCT device) AS n
+          FROM devices
+          WHERE stream_id IN (${holes}) AND start_ms < ? AND end_ms > ?
+        `),
+        /* When recording began for THESE channels, unbounded by any window.
+           This is what says whether an earlier window can be compared at all:
+           a window that predates the first row is not a quiet period, it is a
+           period nobody watched. */
+        earliestEver: this.db.prepare(`
+          SELECT MIN(start_ms) AS t FROM devices WHERE stream_id IN (${holes})
+        `),
         placesEarliest: this.db.prepare(`
           SELECT MIN(start_ms) AS t
           FROM devices
@@ -301,6 +347,170 @@ class DeviceStore {
       // period as though it were a whole month.
       partial: earliest == null ? true : earliest > sinceMs + HOUR_MS,
     };
+  }
+
+  /**
+   * Returning vs new listeners — how many of this period's audience were also
+   * here in the period before it.
+   *
+   * WHY THE COMPARISON IS WITHHELD RATHER THAN ESTIMATED. The earlier window is
+   * half of this figure, and if the monitor was not running through all of it
+   * the devices that WERE there simply are not recorded. Every one of them then
+   * counts as new, so a recording gap renders as a surge of first-time
+   * listeners — the most flattering possible misreading, on the one metric a
+   * station would take to a funder. `comparable: false` returns nulls, never
+   * zeros: "we cannot say" and "nobody came back" are different sentences.
+   *
+   * WHAT IT IS A FLOOR OF. A device is a salted hash of IP and user agent, so a
+   * listener whose address changed between the two periods — any mobile
+   * connection, many domestic ones — reads as new. Real loyalty is therefore
+   * HIGHER than this number, never lower, and the page has to say so.
+   */
+  getReturningDevices(streamIds, sinceMs, untilMs = Date.now()) {
+    const ids = (Array.isArray(streamIds) ? streamIds : [streamIds]).filter(Boolean);
+
+    /* SNAPPED TO WHOLE DAYS, and this is not cosmetic.
+
+       Buckets age from hours into days into months, so within a day or two of
+       history a device's timestamp IS its day. A window boundary at 09:47 falls
+       inside a day bucket, and the device in it belongs to both periods — it
+       reads as a returning listener on the strength of one morning. Whole days
+       align with the buckets and the straddle cannot happen.
+
+       It is also the question actually being asked: a report compares this week
+       with last week, not the 168 hours ending at breakfast. */
+    const untilDay = Math.floor(untilMs / DAY_MS) * DAY_MS;
+    const days = Math.max(1, Math.round((untilMs - sinceMs) / DAY_MS));
+    const sinceDay = untilDay - days * DAY_MS;
+    sinceMs = sinceDay;
+    untilMs = untilDay;
+    const windowMs = untilMs - sinceMs;
+    const blank = {
+      windowMs, days, since: new Date(sinceMs).toISOString(), until: new Date(untilMs).toISOString(),
+      current: 0, returning: null, newListeners: null, previous: null,
+      returningShare: null, comparable: false, reason: 'no-channels',
+      coveredFrom: null, previousFrom: new Date(sinceMs - windowMs).toISOString(),
+    };
+    if (!ids.length || !windowMs) return blank;
+
+    const st = this.#distinctStmt(ids.length);
+    const prevUntil = sinceMs;
+    const prevSince = sinceMs - windowMs;
+
+    const current = st.countDistinct.get(...ids, untilMs, sinceMs)?.n || 0;
+
+    const ever = st.earliestEver.get(...ids)?.t ?? null;
+    const coveredFrom = ever == null ? null : new Date(ever).toISOString();
+
+    /* An hour of slack, the same tolerance `getDistinctDevices` uses for
+       `partial`: recording that began a few minutes into a window covers it for
+       every practical purpose, and demanding the exact millisecond would
+       withhold a sound figure for ever. */
+    if (ever == null || ever > prevSince + HOUR_MS) {
+      return {
+        ...blank, current, coveredFrom,
+        reason: ever == null ? 'nothing-recorded' : 'earlier-period-not-recorded',
+      };
+    }
+
+    /* Month buckets cannot be divided by a 30- or 90-day boundary however the
+       window is snapped, so a comparison reaching them is withheld rather than
+       reported with both periods claiming the same listeners. */
+    if (st.coarseRows.get(...ids, untilMs, prevSince)?.n) {
+      return {
+        ...blank, current, coveredFrom,
+        windowMs, previousFrom: new Date(prevSince).toISOString(),
+        reason: 'resolution-too-coarse',
+      };
+    }
+
+    const returning = st.returning.get(
+      ...ids, untilMs, sinceMs,
+      ...ids, prevUntil, prevSince,
+    )?.n || 0;
+    const previous = st.countDistinct.get(...ids, prevUntil, prevSince)?.n || 0;
+
+    return {
+      windowMs,
+      days,
+      since: new Date(sinceMs).toISOString(),
+      until: new Date(untilMs).toISOString(),
+      current,
+      returning,
+      // Never negative: INTERSECT counts a subset of the current window.
+      newListeners: current - returning,
+      previous,
+      returningShare: current ? returning / current : null,
+      comparable: true,
+      reason: null,
+      coveredFrom,
+      previousFrom: new Date(prevSince).toISOString(),
+    };
+  }
+
+  /**
+   * How the player and platform mix moved over time.
+   *
+   * Needs nothing that is not already stored: `cls` has been written per device
+   * per bucket since cume shipped and has never been read as a series.
+   *
+   * THE BUCKET SIZE IS CHOSEN BY THE DATA, NOT BY THE CALLER. Records age from
+   * hours into days into calendar months, and a month-tier row carries the
+   * month's start as its timestamp. Bucketed by DAY, every one of those devices
+   * would land on the 1st — a year of listening rendered as twelve enormous
+   * spikes with empty space between them, which looks like a finding rather
+   * than an artefact. So a range that reaches month-tier data is reported
+   * monthly, and the granularity is returned so the page can say which.
+   *
+   * The final bucket is marked incomplete when it has not finished yet, because
+   * "this month so far" against eleven whole months is a decline that did not
+   * happen.
+   */
+  getDeviceTrend(streamIds, sinceMs, untilMs = Date.now()) {
+    const ids = (Array.isArray(streamIds) ? streamIds : [streamIds]).filter(Boolean);
+    if (!ids.length) {
+      return { granularity: 'day', buckets: [], reason: 'no-channels' };
+    }
+
+    const st = this.#distinctStmt(ids.length);
+    const monthly = (st.coarseRows.get(...ids, untilMs, sinceMs)?.n || 0) > 0;
+    const granularity = monthly ? 'month' : 'day';
+
+    const rows = st.trend.all(
+      monthly ? '%Y-%m' : '%Y-%m-%d',
+      ...ids, untilMs, sinceMs,
+    );
+
+    const byKey = new Map();
+    for (const r of rows) {
+      if (!byKey.has(r.b)) byKey.set(r.b, { key: r.b, devices: 0, families: {}, platforms: {} });
+      const bucket = byKey.get(r.b);
+      const [family, platform] = String(r.cls || '').split('|');
+      const n = r.n || 0;
+      bucket.devices += n;
+      if (family) bucket.families[family] = (bucket.families[family] || 0) + n;
+      if (platform) bucket.platforms[platform] = (bucket.platforms[platform] || 0) + n;
+    }
+
+    /* Completeness is judged against the REQUESTED end, not the wall clock.
+       Reading Date.now() here ignores the caller's clock, which makes every
+       figure untestable at a fixed time and quietly wrong for any query that
+       does not end at this instant. */
+    const buckets = [...byKey.values()].sort((a, b) => (a.key < b.key ? -1 : 1));
+    for (const b of buckets) {
+      const start = monthly
+        ? Date.parse(`${b.key}-01T00:00:00Z`)
+        : Date.parse(`${b.key}T00:00:00Z`);
+      const end = monthly
+        ? Date.UTC(new Date(start).getUTCFullYear(), new Date(start).getUTCMonth() + 1, 1)
+        : start + DAY_MS;
+      b.start = new Date(start).toISOString();
+      b.end = new Date(end).toISOString();
+      // A bucket still running is not a smaller bucket.
+      b.complete = end <= untilMs;
+    }
+
+    return { granularity, buckets, reason: null };
   }
 
   /** Fold hours into days into months. Resolution ages out; devices do not. */

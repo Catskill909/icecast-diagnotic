@@ -211,6 +211,25 @@ function classifyAgent(ua) {
   return { family, kind, platform, bot: kind === 'bot' };
 }
 
+/* FAMILY → KIND, recovered rather than stored.
+
+   The device record keeps `family|platform` and not `kind`, so "how much of the
+   audience is on smart speakers, and is it growing" looks at first like a
+   question needing a new column and a year of waiting. It is not: every rule in
+   PLAYER_RULES maps one family name to exactly one kind, so the mapping is
+   static and can be rebuilt at read time from the same table classification
+   used. First rule wins, exactly as in classifyAgent, so the two cannot
+   disagree about a family that appears twice. */
+const FAMILY_KIND = (() => {
+  const m = new Map();
+  for (const [, family, kind] of PLAYER_RULES) if (!m.has(family)) m.set(family, kind);
+  return m;
+})();
+
+function kindForFamily(family) {
+  return FAMILY_KIND.get(String(family || '')) || 'unknown';
+}
+
 // ── Device identity, for cume ───────────────────────────────────────────────
 
 /* A device is (IP + user agent). Neither is stored: they are hashed together
@@ -709,7 +728,7 @@ async function collectMount(baseUrl, mountPath, creds) {
 
 module.exports = {
   parseListClients,
-  deviceId, deviceIdentities, placeToken,
+  deviceId, deviceIdentities, placeToken, kindForFamily,
   classifyAgent,
   classifyChannel,
   aggregate,

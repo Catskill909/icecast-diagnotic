@@ -286,6 +286,16 @@ function getDistinctDevices(streamIds, sinceMs, untilMs = Date.now()) {
   return deviceDb().getDistinctDevices(streamIds, sinceMs, untilMs);
 }
 
+/** Player and platform mix as a series. Bucket size is chosen by the data. */
+function getDeviceTrend(streamIds, sinceMs, untilMs = Date.now()) {
+  return deviceDb().getDeviceTrend(streamIds, sinceMs, untilMs);
+}
+
+/** Returning vs new listeners over whole days. See DeviceStore for the gates. */
+function getReturningDevices(streamIds, sinceMs, untilMs = Date.now()) {
+  return deviceDb().getReturningDevices(streamIds, sinceMs, untilMs);
+}
+
 function hourKey(ts) {
   const d = new Date(ts);
   d.setUTCMinutes(0, 0, 0);
@@ -3143,7 +3153,7 @@ function getStorageInfo() {
 
 module.exports = {
   // Cume — distinct devices over a period. See the block above hourKey().
-  recordDevices, getDistinctDevices, compactDevices, deviceSalt, getMonthlyAudience,
+  recordDevices, getDistinctDevices, getReturningDevices, getDeviceTrend, compactDevices, deviceSalt, getMonthlyAudience,
   _deviceTiers: () => deviceDb().tierCounts(),
   _deviceRows: () => deviceDb().rowCount(),
   _resetDevices: () => { deviceDb().reset(); },

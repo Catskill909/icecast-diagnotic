@@ -130,6 +130,8 @@ test('listener-detail scopes mounts, totals, distribution and geography by host 
       getListenerDetail: () => ({ meta: { distinctAddresses: 40 }, mounts }), getStreams: () => streams,
       streamIdsFor: (id) => id === 'kpfk' ? ['a'] : [],
       getDistinctDevices: (ids) => ({ devices: ids.length }),
+      getReturningDevices: (ids) => ({ current: ids.length, comparable: false, reason: 'nothing-recorded' }),
+      getDeviceTrend: (ids) => ({ granularity: 'day', buckets: ids.map(() => ({ key: '2026-09-01', devices: 1, families: {}, platforms: {} })) }),
       adminHost: () => 'one.test', geoAvailable: () => ({}), geoAttribution: () => ({}), homeRegion: () => 'CA',
     },
     listenerDetail: { mergeAggregates: (rows) => ({
@@ -143,6 +145,13 @@ test('listener-detail scopes mounts, totals, distribution and geography by host 
   assert.equal(get({}).distinctAddresses, 40);
   assert.equal(get({ stationId: 'kpfk', mount: '/shared' }).distinctAddresses, 8);
   assert.equal(selected.totals.listeners, 14);
+  /* Returning vs new travels in the SAME response as the period it describes.
+     A second request would let the two panels describe two different moments. */
+  assert.ok(selected.returning, 'the route must surface returning-vs-new');
+  assert.equal(selected.returning.comparable, false);
+  assert.equal(selected.returning.current, 1, 'scoped to the selected station\'s streams');
+  assert.ok(selected.trend, 'the route must surface the device trend');
+  assert.equal(selected.trend.buckets.length, 1, 'scoped to the selected station\'s streams');
   assert.equal(selected.totals.connections, 15);
   assert.equal(selected.places.placed, 14);
   assert.equal(selected.distribution.channels.length, 2);

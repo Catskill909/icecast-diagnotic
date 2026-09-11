@@ -368,6 +368,47 @@ size a count of one would say something about a person rather than a population.
 Shares are merged across mounts by recomputing from summed counts, never by
 averaging — and a merged figure inherits the **weakest** confidence of its parts.
 
+### Returning and new listeners
+
+**Two figures, not one ratio.** *Came back* is retention; *First time* is
+growth, and a station acts on them differently. A single percentage hides the
+second — a period can hold every regular and reach nobody new, and the share
+goes **up**.
+
+The device record has been stable across weeks since cume shipped, so this
+needed no new collection: it is `GROUP BY device` over two windows, intersected.
+
+| Rule | Why |
+|---|---|
+| **Withheld — null, not zero — unless the EARLIER period was recorded too** | If the monitor was not running through it, the people who listened then are not in the record and every one of them counts as new. A recording gap would render as a surge of first-time listeners: the most flattering possible misreading, on the metric most likely to reach a funder |
+| **Withheld when the comparison reaches month-tier data** | Buckets age from hours into days into calendar months. A month cannot be divided by a 30-day boundary, so the same listener falls in both halves and reads as loyal. Measured: `returning` went from 1 to 2 on identical data purely because compaction ran |
+| **Whole days, snapped to midnight** | Within a day or two of history a device's timestamp *is* its day, so a boundary at 09:47 sits inside a bucket and the listener in it belongs to both periods. It is also the question actually being asked — this week against last week, not the 168 hours ending at breakfast |
+| **"Came back" is a FLOOR** | A listener is told from another by their connection, so an address that changed between the periods reads as a new person. Real loyalty is higher, never lower |
+
+The reason a figure is withheld is carried in `returning.reason` and shown on the
+card, because *"we could not measure it"* and *"nobody came back"* must not look
+the same.
+
+### How they listen, over time
+
+The device mix as a **series** rather than today's snapshot. Needed no new
+collection: `cls` has been written per device per bucket since cume shipped and
+had only ever been read as a single current distribution.
+
+**Grouped by KIND, not by player.** "Smart speakers went from 8% to 22%" is a
+platform decision; "Sonos 4%, Alexa 3%, Chromecast 1%" is trivia. `kind` is not
+stored — it is recovered from `family` through the same `PLAYER_RULES` table
+that classified the agent, so the answer needed a lookup rather than a column
+and a year of waiting.
+
+| Rule | Why |
+|---|---|
+| **The bucket size is chosen by the DATA, not the caller** | Records age into calendar-month buckets carrying the month's start as their timestamp. Bucketed by day, a year of history renders as twelve enormous spikes on the 1st with nothing between them — an artefact that looks exactly like a finding |
+| **The period still running is excluded** | "This month so far" against eleven finished months is a collapse that did not happen. The last bar falling off a cliff is the most convincing wrong chart this page could draw |
+| **Fewer than three finished periods draws nothing** | Two points is not a trend, and it says so rather than implying one |
+| **The headline names the category that MOVED, not the biggest** | The largest category is usually the least interesting news — it would report "phone apps are 61% of listeners" every week for ever |
+| **A tie goes to the category that ROSE** | In a two-category mix every delta is the mirror of the other, so ties are the normal case. "Phone apps fell from 90% to 70%" and "smart speakers grew from 10% to 30%" are the same fact told as a loss or as a finding; the second is actionable. Tied means tied **to the nearest displayed percentage point** — an exact comparison hands the headline to whichever mirror image carries the larger floating-point rounding error |
+
 ### Where the audience is
 
 **Counted per country and per US state — never a coordinate, never a city,

@@ -28,7 +28,11 @@ const path = require('node:path');
 const vm = require('node:vm');
 
 const src = fs.readFileSync(path.join(__dirname, '../public/listeners.js'), 'utf8');
-const slice = src.slice(src.indexOf('  function geoCoverage(d) {'), src.indexOf('  const plural ='));
+/* Anchored to the function that FOLLOWS geoCoverage, not to whichever small
+   helper happened to sit between them — moving an unrelated one-line const
+   otherwise breaks seven tests that have nothing to do with it. */
+const start = src.indexOf('  function geoCoverage(d) {');
+const slice = src.slice(start, src.indexOf('  async function renderGeo(d) {', start));
 
 const DAY = 24 * 60 * 60 * 1000;
 

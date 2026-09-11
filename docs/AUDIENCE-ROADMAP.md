@@ -381,13 +381,46 @@ Ordered by value per unit of work.
 
 | # | Feature | What it answers | Needs |
 |---|---|---|---|
-| 1 | **Returning vs new listeners** | "3,400 people listened this week; 1,900 also listened last week." Loyalty and churn — the retention question funders and underwriters actually ask, and the one figure a competitor cannot fake | **Nothing new.** The device hash is already stable across weeks. A `GROUP BY device` over two windows |
-| 2 | **Player and device trends over time** | "Smart speakers went from 8% to 22% this year." Where to spend engineering effort, and evidence for a platform conversation | **Nothing new.** `cls` has been stored per device per bucket since cume shipped and has never been charted historically |
+| 1 | ✅ **SHIPPED 2026-09-11. Returning vs new listeners** | "3,400 people listened this week; 1,900 also listened last week." Loyalty and churn — the retention question funders and underwriters actually ask, and the one figure a competitor cannot fake | **Nothing new**, as predicted: `GROUP BY device` over two windows, intersected |
+| 2 | ✅ **SHIPPED 2026-09-11. Player and device trends over time** | "Smart speakers went from 8% to 22% this year." Where to spend engineering effort, and evidence for a platform conversation | **Nothing new**, as predicted. `kind` was not stored either, and did not need to be — it is recovered from `family` through the same `PLAYER_RULES` table that classified the agent |
 | 3 | **Time of day by region** | Drive-time in New York against drive-time in Los Angeles — three time zones on one network, currently flattened into one curve | **Nothing new.** Cross `place` with the bucket timestamp, both already stored |
 | 4 | **City, for US listeners** | A licence covers a METRO; the map counts a whole STATE. This is the difference between "Texas" and "Greater Houston", i.e. between an overstated figure and the real in-footprint reach | One more field in the `place` token. GeoLite2 City is already downloaded and already read |
 | 5 | **Session length over time** | Whether people are staying longer, not just arriving more often. Currently live-only, so it cannot be trended at all | Storing `connectedSec`, which is already fetched and discarded |
 
-**Start with 1.** It is the largest figure in the table and costs a query.
+**1 shipped 2026-09-11**, as two tiles — *Came back* and *First time* — rather
+than one ratio, because retention and growth are different questions and a
+single share hides the second entirely.
+
+Building it surfaced a limit worth recording before items 2 and 3 reuse the same
+table. **The tiers are not neutral for period-over-period work.** Buckets age
+hour → day → calendar month, so a device folded into a month bucket overlaps any
+30-day window and appears in BOTH halves of a comparison — measured, `returning`
+went from 1 to 2 on identical data purely because compaction ran, reading as
+loyalty. Two rules follow, and anything comparing one period with another needs
+both:
+
+- **Snap windows to whole days.** Day buckets divide exactly at midnight; a
+  boundary at 09:47 sits inside one and the listener belongs to both periods.
+- **Refuse when the comparison reaches the month tier.** No snapping fixes it.
+  Withhold with a reason rather than report a figure that inflates on its own.
+
+**2 shipped the same day.** It confirmed the tier rule above from the other
+side: rather than refusing, a trend picks its BUCKET SIZE from the coarsest tier
+its range touches — daily while the data is fine-grained, monthly once it
+reaches compacted records — and says which on the panel. Refuse when a boundary
+cannot be drawn honestly; re-bucket when it can.
+
+Two further rules came out of it that any future series work inherits:
+**exclude the period still running** (a period measured so far always looks
+smaller than the finished ones beside it), and **lead with what moved, not what
+is biggest** — otherwise the headline reports the dominant category for ever.
+
+Item 3 (time of day by region) is the one to watch: an hour-of-day cross is
+finer than a DAY bucket, so it is exact only inside the hour tier —
+`hourRetentionH`, 48 hours by default. Unlike item 2 there is no coarser bucket
+to fall back to, because the question IS the hour. So it must either restrict
+itself to the hour tier and say so, or read day-resolution data and state that
+the hour is approximate. Decide that before building, not after.
 
 **Think hardest about 4.** It is the one that materially improves the number the
 station cares about, and also the one where the database is least trustworthy —

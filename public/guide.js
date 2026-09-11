@@ -206,6 +206,43 @@
          listener from another needs admin access to the streaming server, so the card is
          shown as unavailable rather than filled in with a number that would mean
          something else.`,
+        `<strong>Came back</strong> and <strong>First time</strong> split that audience by
+         whether each person was also here in the period before. They are separate numbers
+         because they answer different questions \u2014 <em>retention</em> and
+         <em>growth</em> \u2014 and a station acts on them differently. A single
+         percentage would hide the second: a month can keep every regular and reach nobody
+         new, and the share goes <em>up</em>.`,
+        `<strong>How they listen, over time</strong> is the same device mix shown as a
+         series rather than as today's snapshot \u2014 the form a platform decision is
+         actually made from. It groups by KIND of device, not by individual player,
+         because "smart speakers went from 8% to 22%" is a sentence somebody can act on
+         and "Sonos 4%, Alexa 3%, Chromecast 1%" is not. The line above the bars names
+         the category that MOVED most, which is rarely the biggest one: the largest
+         category is usually the least interesting news.`,
+        `Two things that panel deliberately will not do. It <strong>ignores the period
+         still running</strong> \u2014 today, or this month \u2014 because a period
+         measured so far always looks smaller than the finished ones beside it, and the
+         last bar falling off a cliff is the most convincing wrong chart this page could
+         draw. And it <strong>will not draw a trend from fewer than three finished
+         periods</strong>; it says so instead.`,
+        `<strong>The bars get wider on longer ranges, and that is the data speaking.</strong>
+         Listener records are kept in full detail for days and then compacted into
+         calendar months. Once a range reaches that older material the chart switches to
+         monthly bars, because a month's worth of listening carries the month's start as
+         its date \u2014 drawn by day, a year of history would appear as twelve enormous
+         spikes on the 1st of each month and nothing in between.`,
+        `<strong>"Came back" is a floor.</strong> One listener is told from another by
+         their connection, so somebody whose address changed between the two periods
+         \u2014 most mobile listening, and plenty of home connections \u2014 reads as a
+         new person. Real loyalty is therefore higher than the figure shown, never lower.`,
+        `<strong>Both are blank unless the earlier period was also recorded</strong>, and
+         the card says which reason. This matters more than it sounds: if the monitor was
+         not running through the previous period, the people who listened then are not in
+         the record, so every one of them would count as a first-time listener \u2014 a
+         gap in the recording would render as a surge of new audience. The comparison is
+         withheld instead, because "we could not measure it" and "nobody came back" are
+         not the same sentence. It is also measured in <em>whole days</em>, so today
+         joins the figure once it has finished.`,
         `<strong>At once</strong> is the most people connected at a single moment, every
          channel summed — a fact about server load rather than reach.
          <strong>Typically</strong> is the average. Both are kept, ranked below the reach

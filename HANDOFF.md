@@ -1,5 +1,125 @@
 # Handoff — Icecast Monitor
 
+## 2026-09-11 — Player and device trends over time (roadmap §4.5 item 2)
+
+Built alongside item 1 and, as the roadmap predicted, needing no new collection.
+`kind` was not stored either and did not need to be: every rule in PLAYER_RULES
+maps one family to exactly one kind, so `kindForFamily()` recovers it from data
+already written. Rolled up server-side, because shipping the table to the page
+would be a second copy to keep in agreement with the first.
+
+Grouped by KIND, not by player: "smart speakers went from 8% to 22%" is a
+platform decision, "Sonos 4%, Alexa 3%, Chromecast 1%" is trivia.
+
+FOUR RULES, each preventing a chart that would look like a finding:
+
+- **The bucket size is chosen by the data.** Month-tier rows carry the month's
+  start as their timestamp, so bucketed by day a year of history renders as
+  twelve enormous spikes on the 1st. A range touching compacted records is
+  reported monthly and the panel says why. This is the complement of item 1's
+  rule: refuse when a boundary cannot be drawn honestly, RE-BUCKET when it can.
+- **The period still running is excluded.** "This month so far" against eleven
+  finished months is a collapse that did not happen.
+- **Fewer than three finished periods draws nothing** and says so.
+- **The headline names what MOVED, not what is biggest** — otherwise it reports
+  "phone apps are 61% of listeners" every week for ever.
+
+TWO BUGS THE TESTS CAUGHT, both mine:
+
+- `complete` was judged against `Date.now()` rather than the caller's `untilMs`,
+  which ignores the passed clock. Same class as the date-sensitive CI failures
+  of 2026-09-10: untestable at a fixed time, and quietly wrong for any query not
+  ending at this instant.
+- The headline tie-break compared deltas exactly. In a two-category mix every
+  delta is the mirror of the other, so ties are the NORMAL case — but
+  `0.7 - 0.9` is -0.20000000000000007 while `0.3 - 0.1` is 0.19999999999999998,
+  so the headline went to whichever mirror image carried the larger rounding
+  error. It announced "phone apps fell from 90% to 70%" where the news was
+  "smart speakers grew from 10% to 30%". Tied now means tied to the nearest
+  displayed percentage point, and a tie goes to the category that rose.
+
+Verification, Node 24.20.0: full suite 741/741, zero failures. New
+`test/device-trend.test.js` (12) and `test/device-trend-render.test.js` (9) —
+the second exists because this panel makes a claim in WORDS, and a sentence is
+worth testing in a way a chart is not. Its assertions run against the text with
+markup and template indentation stripped; matching raw HTML tests line wrapping
+rather than the claim. Booted on a scratch data dir: clean, no SQL preparation
+error, `/api/listener-detail` answers 401 behind its gate.
+
+Docs: README gains "How they listen, over time" with the four rules; the roadmap
+marks item 2 shipped. Recorded there for whoever builds item 3: an hour-of-day
+cross is finer than a DAY bucket and, unlike item 2, has no coarser bucket to
+fall back to — the question IS the hour. It must either restrict itself to the
+hour tier (`hourRetentionH`, 48h) and say so, or read day-resolution data and
+state that the hour is approximate. Decide before building.
+
+Status: local and tested, NOT committed or deployed. Carries item 1 from the
+entry below, also uncommitted.
+
+Next action: commit and push both items, confirm CI, deploy.
+
+---
+
+## 2026-09-11 — Returning vs new listeners (roadmap §4.5 item 1)
+
+Built from data already in `devices`: no new field, no new lookup, no new
+collection pass. `getReturningDevices()` intersects the distinct devices of a
+window with those of the equal window before it. Surfaced in the SAME
+`/api/listener-detail` response as the period it describes — a second request is
+how two panels end up describing two different moments — and rendered as TWO
+tiles, "Came back" and "First time", not one ratio: retention and growth are
+different questions, and a single share hides the second entirely (a period can
+keep every regular, reach nobody new, and the percentage goes UP).
+
+THE LIMIT THIS WORK FOUND, and it applies to everything period-over-period that
+reuses this table. Buckets age hour → day → calendar month. A device folded into
+a month bucket overlaps any 30-day window, so it lands in BOTH halves of a
+comparison and reads as a loyal returning listener. Measured on identical data:
+`returning` was 1 before `compactDevices` ran and 2 after. Two rules follow:
+
+- **Windows snap to whole days.** Day buckets divide exactly at midnight; a
+  boundary at 09:47 falls inside one and the listener in it belongs to both
+  periods. It is also the question actually being asked.
+- **A comparison reaching the month tier is WITHHELD** (`resolution-too-coarse`).
+  No snapping fixes a calendar month cut by a 30-day boundary.
+
+Plus the gate that was the point of the feature: if the EARLIER period was not
+recorded, everyone in it is missing, so everyone now counts as new and a
+recording gap renders as a surge of first-time listeners. Withheld as null with
+a reason, never zero — "we could not measure it" and "nobody came back" are
+different sentences, and the card says which.
+
+"Came back" is a FLOOR and is labelled so: a listener whose connection changed
+address between the periods reads as new, so real loyalty is higher, never lower.
+
+Verification, Node 24.20.0: full suite 720/720, zero failures. New
+`test/returning-listeners.test.js` (12) covers the split being exhaustive, both
+withholding gates, station scoping, one person on two channels, the day fold,
+the month-tier refusal and the snapping. Booted on a scratch data dir: clean
+start, no SQL preparation error, `/api/listener-detail` answers 401 behind its
+gate.
+
+Two existing tests needed updating, both legitimately: `audience-refresh`'s
+`monitor` stub predated the new call, and `geo-coverage-notice` sliced the page
+source using `const plural =` as a boundary marker — moving that one-line helper
+broke seven tests that have nothing to do with it. It is now anchored to
+`renderGeo`, the function that actually follows the one under test.
+
+Docs: README gains "Returning and new listeners" with the four rules;
+`docs/AUDIENCE-ROADMAP.md` §4.5 marks item 1 shipped and records the tier limit
+for items 2 and 3 — note that item 3 (time of day by region) is finer than a day
+bucket, so it is exact only inside the hour tier (`hourRetentionH`, 48h) and must
+say so or refuse. The in-app guide's Audience topic explains both tiles, why
+they are separate, why "Came back" is a floor, and why either can be blank.
+
+Status: local and tested, NOT committed or deployed.
+
+Next action: commit, push, confirm both checks, deploy. The figure will be
+withheld at first — recording reaches back far enough for a 24-hour comparison
+within two days, and a 7-day one within two weeks.
+
+---
+
 ## 2026-09-11 — Session close: audit, documentation, in-app help
 
 All three code commits from this session are deployed and verified live:

@@ -44,6 +44,7 @@
   }
 
   const fmt = (n) => (n == null ? '—' : Math.round(n * 10) / 10);
+  const plural = (n, one, many) => `${n} ${n === 1 ? one : many}`;
 
   /* ── Station picker ──────────────────────────────────────────────────── */
 
@@ -762,6 +763,168 @@
     }).join('');
   }
 
+  /* Returning vs new listeners.
+
+     WHY THIS IS TWO TILES AND NOT ONE RATIO. "62% came back" and "1,300 people
+     found us this week" are different questions — retention and growth — and a
+     station acts on them differently. A single share hides the second one
+     entirely: a period can hold its regulars and reach nobody new, and the
+     percentage goes UP.
+
+     WHY IT IS EVER BLANK. The earlier period is half of the figure, and if the
+     monitor was not running through it the listeners who were there are simply
+     not recorded — every one of them then counts as new. The store withholds
+     rather than guess; the tile says which reason, because "we could not
+     measure it" and "nobody came back" must not look the same. */
+  const RETURNING_BLANK = {
+    'nothing-recorded': 'No listener history has been recorded yet.',
+    'earlier-period-not-recorded': 'Needs the period before this one as well, and measuring had not started then.',
+    'resolution-too-coarse': 'Records this old are kept by calendar month, which cannot be divided across this period without counting the same listener in both halves.',
+    'no-channels': 'No channels in this selection.',
+  };
+
+  function returningTiles(d) {
+    const r = d.returning;
+    if (!r) return '';
+    const span = plural(r.days || 0, 'day', 'days');
+
+    if (!r.comparable) {
+      const why = RETURNING_BLANK[r.reason] || 'Not available for this selection.';
+      return `
+        <div class="deep-tile">
+          <div class="deep-tile-label">Came back</div>
+          <div class="deep-tile-value">—</div>
+          <div class="deep-tile-note">${esc(why)}</div>
+        </div>`;
+    }
+
+    const pct = r.returningShare == null ? null : Math.round(r.returningShare * 100);
+    return `
+      <div class="deep-tile">
+        <div class="deep-tile-label">Came back</div>
+        <div class="deep-tile-value">${pct == null ? '—' : pct + '%'}</div>
+        <div class="deep-tile-note">${r.returning.toLocaleString()} of
+          ${r.current.toLocaleString()} also listened in the previous ${esc(span)}.
+          <strong>A floor</strong> — a listener whose connection changed address
+          in between reads as a new one, so real loyalty is higher, never lower.</div>
+      </div>
+      <div class="deep-tile">
+        <div class="deep-tile-label">First time</div>
+        <div class="deep-tile-value">${r.newListeners.toLocaleString()}</div>
+        <div class="deep-tile-note">not seen in the previous ${esc(span)},
+          when ${r.previous.toLocaleString()} listened. Whole days, so today is
+          counted once it ends.</div>
+      </div>`;
+  }
+
+  /* ── How they listen, over time ──────────────────────────────────────────
+     The mix above is a snapshot; this is the same thing as a series, which is
+     the form a platform decision is actually made from. Grouped by KIND rather
+     than by player, because "smart speakers went from 8% to 22%" is a sentence
+     somebody can act on and "Sonos 4%, Alexa 3%, Chromecast 1%" is not. */
+  const KIND_LABELS = {
+    'app': 'Phone / tablet app',
+    'smart-speaker': 'Smart speaker',
+    'desktop-player': 'Desktop player',
+    'tv': 'TV / streaming box',
+    'aggregator': 'Aggregator',
+    'library': 'Script / library',
+    'unknown': 'Unidentified',
+  };
+  // Stable per kind, so a colour means the same thing in the bars and the legend.
+  const KIND_ORDER = ['app', 'smart-speaker', 'desktop-player', 'tv', 'aggregator', 'library', 'unknown'];
+  const kindLabel = (k) => KIND_LABELS[k] || String(k || '').replace(/-/g, ' ');
+
+  function trendBlock(d) {
+    const t = d.trend;
+    if (!t || !Array.isArray(t.buckets)) return '';
+
+    /* Only FINISHED buckets. A period still running is not a smaller period,
+       and the last column falling off a cliff is the most convincing wrong
+       chart this page could draw. */
+    const buckets = t.buckets.filter((b) => b.complete);
+    const unit = t.granularity === 'month' ? 'months' : 'days';
+
+    if (buckets.length < 3) {
+      return `
+        <div class="deep-sub">How they listen · over time</div>
+        <div class="geo-note-line">Not enough finished ${esc(unit)} in this range to
+          show a trend yet. It needs at least three, and a longer range gives a
+          clearer one.</div>`;
+    }
+
+    // Kinds actually present, in the fixed order, so colours stay put.
+    const present = KIND_ORDER.filter((k) => buckets.some((b) => (b.kinds || {})[k]));
+    for (const b of buckets) {
+      for (const k of Object.keys(b.kinds || {})) if (!present.includes(k)) present.push(k);
+    }
+
+    const share = (b, k) => (b.devices ? ((b.kinds || {})[k] || 0) / b.devices : 0);
+    const fmtKey = (b) => {
+      const dt = new Date(b.start);
+      return t.granularity === 'month'
+        ? dt.toLocaleDateString('en-US', { month: 'short', year: 'numeric', timeZone: 'UTC' })
+        : dt.toLocaleDateString('en-US', { month: 'short', day: 'numeric', timeZone: 'UTC' });
+    };
+
+    const first = buckets[0];
+    const last = buckets[buckets.length - 1];
+    /* The headline is the kind that MOVED most, not the biggest one — the
+       largest category is usually the least interesting news. */
+    let moved = null;
+    for (const k of present) {
+      const delta = share(last, k) - share(first, k);
+      if (!moved) { moved = { kind: k, delta }; continue; }
+      const bigger = Math.abs(delta) - Math.abs(moved.delta);
+      /* Ties go to the one that ROSE. In a mix of two categories every delta is
+         the mirror of the other, so a tie is the normal case rather than an
+         edge one — and "phone apps fell from 90% to 70%" and "smart speakers
+         grew from 10% to 30%" are the same fact told as a loss or as a finding.
+         The second is the one somebody can act on.
+
+         TIED MEANS TIED ON SCREEN, not bit-for-bit. 0.7 - 0.9 is
+         -0.20000000000000007 and 0.3 - 0.1 is 0.19999999999999998, so an exact
+         comparison hands the headline to whichever mirror image carries the
+         larger rounding error. Half a percentage point is below what the panel
+         prints, so two moves inside it are indistinguishable to the reader. */
+      if (bigger > 0.005) moved = { kind: k, delta };
+      else if (bigger > -0.005 && delta > moved.delta) moved = { kind: k, delta };
+    }
+    const headline = moved && Math.abs(moved.delta) >= 0.01
+      ? `<div class="trend-headline"><strong>${esc(kindLabel(moved.kind))}</strong>
+           went from ${Math.round(share(first, moved.kind) * 100)}% to
+           ${Math.round(share(last, moved.kind) * 100)}% of listeners between
+           ${esc(fmtKey(first))} and ${esc(fmtKey(last))}.</div>`
+      : `<div class="trend-headline">The mix has held steady across this range.</div>`;
+
+    const columns = buckets.map((b) => {
+      const segs = present.map((k) => {
+        const pct = share(b, k) * 100;
+        return pct <= 0 ? '' : `<div class="trend-seg kind-${esc(k)}" style="height:${pct}%"></div>`;
+      }).join('');
+      const detail = present
+        .filter((k) => (b.kinds || {})[k])
+        .map((k) => `${kindLabel(k)} ${Math.round(share(b, k) * 100)}%`)
+        .join(', ');
+      return `<div class="trend-col" title="${esc(fmtKey(b))} — ${esc(plural(b.devices, 'listener', 'listeners'))}: ${esc(detail)}">${segs}</div>`;
+    }).join('');
+
+    return `
+      <div class="deep-sub">How they listen · over time</div>
+      ${headline}
+      <div class="trend">
+        <div class="trend-cols">${columns}</div>
+        <div class="trend-axis"><span>${esc(fmtKey(first))}</span><span>${esc(fmtKey(last))}</span></div>
+        <div class="trend-legend">
+          ${present.map((k) => `<span><i class="kind-${esc(k)}"></i>${esc(kindLabel(k))}</span>`).join('')}
+        </div>
+        <div class="trend-note">Share of the distinct listeners counted in each
+          ${esc(t.granularity)}. ${t.granularity === 'month'
+            ? 'Shown by month because records this old are kept by calendar month — bucketing them by day would put a whole month of listening on the 1st.'
+            : 'Shown by day. Longer ranges switch to months as older records are compacted.'}</div>
+      </div>`;
+  }
+
   async function renderDeep(version) {
     const panel = document.getElementById('deep-panel');
     const hint = document.getElementById('deep-hint');
@@ -931,6 +1094,7 @@
           <div class="deep-tile-value">${cume ? cume.toLocaleString() : '—'}</div>
           <div class="deep-tile-note">different devices reached${per.partial ? ' — a floor, measuring began inside this window' : ''}</div>
         </div>
+        ${returningTiles(d)}
         <div class="deep-tile">
           <div class="deep-tile-label">Listening right now</div>
           <div class="deep-tile-value">${listeners}</div>
@@ -968,6 +1132,8 @@
           ${bars(platforms, cume, 6)}
         </div>
       </div>
+
+      ${trendBlock(d)}
 
       <div class="deep-sub">Per mount · right now</div>
       <div class="table-scroll">
@@ -1055,7 +1221,6 @@
     };
   }
 
-  const plural = (n, one, many) => `${n} ${n === 1 ? one : many}`;
 
   async function renderGeo(d) {
     const panel = document.getElementById('geo-panel');

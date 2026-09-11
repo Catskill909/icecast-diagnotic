@@ -743,6 +743,27 @@ app.get('/api/listener-detail', auth.requireAuth, (req, res) => {
      page renders either through one code path and a reader can switch between
      "this week" and "right now" without the two being drawn differently. */
   if (period.places) period.places.homeRegion = monitor.homeRegion(station);
+  /* Returning vs new. Same request, because it answers a question about the
+     same period and a second round trip is how two panels end up describing
+     two different moments. */
+  const returning = monitor.getReturningDevices(streamIds, sinceMs);
+  /* The mix over time, on the SAME range as everything else on the page. The
+     bucket size is the store's decision, not this route's — it depends on how
+     far the record has aged, which only the store knows. */
+  const trend = monitor.getDeviceTrend(streamIds, sinceMs);
+  /* KIND is rolled up HERE rather than in the browser. The family → kind table
+     is the same one that classified the agent in the first place, and it lives
+     server-side; shipping it to the page would be a second copy to keep in
+     agreement with the first. "Smart speakers" is a kind, which is why this
+     exists at all — the device record stores family and platform, and the kind
+     is recovered from the family rather than stored a second time. */
+  for (const bucket of trend.buckets || []) {
+    bucket.kinds = {};
+    for (const [family, n] of Object.entries(bucket.families || {})) {
+      const kind = listenerDetail.kindForFamily(family);
+      bucket.kinds[kind] = (bucket.kinds[kind] || 0) + n;
+    }
+  }
 
   // A path alone is not unique: stations can use the same mount on different
   // hosts. Scope every live aggregate before computing totals and geography.
@@ -767,6 +788,8 @@ app.get('/api/listener-detail', auth.requireAuth, (req, res) => {
       ? (mounts.length === 1 ? mounts[0].distinctAddresses ?? null : null)
       : detail.meta.distinctAddresses,
     period,
+    returning,
+    trend,
     enabled: monitor.LISTENER_DETAIL_ENABLED,
     everyCycles: monitor.LISTENER_DETAIL_EVERY,
     // Named so a reader can see WHICH server the credential covers, without the
