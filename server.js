@@ -223,7 +223,19 @@ app.get('/api/history', (req, res) => {
 });
 
 app.get('/api/config', (req, res) => {
-  res.json(monitor.getConfig());
+  res.json({
+    ...monitor.getConfig(),
+    /* SIGN-IN CAPABILITY, as booleans. Never the secret, never the hash — the
+       same shape as `emailConfigured` and `geo`, and for the same reason: a
+       deployment that forgot SESSION_SECRET works perfectly until it restarts
+       and then silently logs everybody out, which an operator experiences as
+       "the login keeps forgetting me" with nothing on screen to explain it. */
+    auth: {
+      passwordConfigured: auth.isConfigured(),
+      sessionSecretConfigured: auth.SESSION_SECRET_CONFIGURED,
+      sessionHours: auth.SESSION_HOURS,
+    },
+  });
 });
 
 // ── Station Configuration ───────────────────────────────────────────────────

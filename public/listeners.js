@@ -1026,7 +1026,7 @@
             <div class="deep-locked-title">Sign in to view</div>
             <div class="deep-locked-note">${esc(why)}</div>
           </div>
-          ${res.status === 401 ? '<a class="deep-signin" href="/login.html">Sign in</a>' : ''}
+          ${res.status === 401 ? `<a class="deep-signin" href="/login.html?next=${encodeURIComponent(location.pathname + location.search)}">Sign in</a>` : ''}
         </div>`;
       if (hint) hint.textContent = '';
       blankGeo(res.status === 401 ? 'Sign in to see where the audience is.' : 'Protected sections are switched off.');

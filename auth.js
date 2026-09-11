@@ -33,6 +33,15 @@ const attempts = new Map();   // ip → { count, until }
 // misconfigured deployment working rather than crashing, at the cost of logging
 // everyone out on restart — which is announced, not silent.
 let SESSION_SECRET = process.env.SESSION_SECRET || '';
+/* WHETHER IT WAS CONFIGURED, reported as a capability flag.
+
+   An ephemeral secret is silently wrong in the one way nobody reports as a bug:
+   sign-in works, the session works, and then a redeploy logs everybody out
+   again. The operator experiences "the login keeps forgetting me" and has no
+   way to see why, because the warning is in a container log and the difference
+   is invisible from outside. Published in /api/config beside emailConfigured,
+   it becomes a thing a deploy can be checked against. */
+const SESSION_SECRET_CONFIGURED = !!SESSION_SECRET;
 if (!SESSION_SECRET) {
   SESSION_SECRET = crypto.randomBytes(32).toString('hex');
   console.warn('[Auth] SESSION_SECRET is not set — generated an ephemeral one. Sessions will not survive a restart.');
@@ -233,5 +242,5 @@ module.exports = {
   readCookie, setSessionCookie, clearSessionCookie,
   clientKey, lockoutRemaining, recordFailure, clearFailures,
   currentSession, requireAuth,
-  SESSION_HOURS, MAX_ATTEMPTS, LOCKOUT_MS,
+  SESSION_HOURS, MAX_ATTEMPTS, LOCKOUT_MS, SESSION_SECRET_CONFIGURED,
 };

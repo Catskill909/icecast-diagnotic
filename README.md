@@ -561,6 +561,28 @@ node scripts/hash-password.js          # prints ADMIN_PASSWORD_HASH=...
 
 Set `ADMIN_USER`, `ADMIN_PASSWORD_HASH` and `SESSION_SECRET` in the hosting panel.
 
+**`SESSION_SECRET` is not optional in production, and forgetting it is silent.**
+Without one the app generates an ephemeral secret at boot, so sign-in works
+perfectly until the next restart and then every session is invalid. The operator
+experiences "the login keeps forgetting me" with nothing on screen to explain it,
+and a redeploy is a restart — so an actively developed deployment logs everyone
+out several times a day. `GET /api/config` reports it, no sign-in required:
+
+```bash
+curl -s https://<your-host>/api/config | jq .auth
+# { "passwordConfigured": true, "sessionSecretConfigured": true, "sessionHours": 12 }
+```
+
+`sessionSecretConfigured: false` is the fault. Generate one and set it in the
+hosting panel:
+
+```bash
+node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
+```
+
+Sessions last `SESSION_HOURS` (default 12). Changing the secret invalidates every
+existing session, which is also how you sign everybody out deliberately.
+
 **Protected routes fail closed.** With no password configured they return 503
 rather than allowing the request. This is deliberate: `/api/test-alert` sends mail
 through the station's SMTP, and before this gate existed anyone who found the

@@ -1,5 +1,51 @@
 # Handoff — Icecast Monitor
 
+## 2026-09-11 — Two sign-in faults, neither of them in the login
+
+Reported by the owner: "login is not persistent and I keep needing to log in
+again", and "when I log in on the listeners page it sends me back to the site
+front". Different causes; both fixed.
+
+THE RETURN PATH. `public/listeners.js` linked to `/login.html` with no `next`,
+so `login.js` fell back to '/'. Every other caller passes it — `admin.js` builds
+`?next=` on a 401, and its logout deliberately does not. One link. It now passes
+`pathname + search`, so the selected STATION survives the round trip too;
+arriving back at a different station would be its own small bug.
+
+`login.js` already refused anything but a same-origin path, which is what makes
+accepting `next` safe at all. Now tested, since it is being fed user-visible
+data: absolute URLs, protocol-relative `//host` and `javascript:` all fall back.
+
+THE SESSIONS. Almost certainly `SESSION_SECRET` unset in Coolify: auth.js
+generates an ephemeral one at boot and warns that sessions will not survive a
+restart. A redeploy is a restart, and this deployment has had many today. I
+cannot read the production environment, so this is not asserted from evidence —
+it is the only mechanism that produces exactly this symptom.
+
+What IS fixed is that the fault was invisible. The warning goes to a container
+log; from outside, a deployment with no secret is indistinguishable from a
+healthy one until it forgets you. `/api/config` now carries an `auth` block
+beside `emailConfigured` and `geo` — `passwordConfigured`,
+`sessionSecretConfigured`, `sessionHours`, booleans and a duration, never a
+secret or a hash on a public endpoint. Checked with:
+
+    curl -s https://<host>/api/config | jq .auth
+
+OWNER ACTION: if `sessionSecretConfigured` is false, generate one
+(`node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"`) and
+set SESSION_SECRET in Coolify. Changing it later signs everybody out, which is
+also the deliberate way to do that.
+
+Verification, Node 24.20.0: full suite 775/775. New `test/sign-in-return.test.js`
+(8) covers the link, the station surviving the round trip, the open-redirect
+guard, and that the capability flag reports the fault without leaking anything.
+README's "Admin authentication" section now states that SESSION_SECRET is not
+optional in production and how to check it.
+
+Status: local and tested, NOT committed or deployed.
+
+---
+
 ## 2026-09-11 — When each region listens (roadmap §4.5 item 3)
 
 The daypart question, and the one §4.5 item that needed NEW STORAGE rather than
