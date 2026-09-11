@@ -340,6 +340,123 @@ own.
 
 ---
 
+## Phase 8 — export and import, for moving the deployment
+
+**Entry: any time; it gates nothing and it unblocks the move to Pacifica.**
+**Exit:** a deployment can be reproduced on a different host from one file, and
+the figures on the new host are continuous with the old.
+
+**Why it is worth doing before it is needed.** There is no backup today. The
+README already says the volume must be persistent or every redeploy resets the
+record to zero — an export endpoint IS the backup, and the first phase below is
+useful on its own even if the move never happens.
+
+### What is actually on the volume
+
+| File | Holds |
+|---|---|
+| `events.json` | the event record, the **station/channel/host configuration**, and the meta store |
+| `samples.json` | rolling telemetry — 7 days raw, then hourly rollups kept indefinitely |
+| `devices.db` | SQLite: device records (cume, places, sessions) and `region_hours` |
+| `history.json` | legacy, migrated on load |
+
+Meta keys worth naming because they are operational state, not derivable:
+`deviceSalt`, `storms`, `compactCarry`, `lastWeeklyRoundup`,
+`lastWeeklyRoundupDay`, and four one-shot migration markers
+(`alertRecipientsSeeded`, `jsonImported`, `mountCollisionRepaired`,
+`tuneInsRepaired`).
+
+### THE ONE THAT WOULD RUIN THE MIGRATION SILENTLY
+
+**`deviceSalt` and `devices.db` are ONE ARTEFACT and must never travel apart.**
+
+A device is a salted hash of IP and user agent. The salt lives in
+`events.json`; the hashes live in `devices.db`. Copy the database without the
+salt and every returning listener hashes to a new value: cume jumps by the whole
+audience on day one, and **"came back" reads zero for ever** because no device
+on the new host matches any device on the old.
+
+`store.js` already carries this warning for an unclean restart — *"Nothing
+errors and nothing looks wrong; the graph just goes up."* A migration is the
+same failure, permanent, and on the figures a station would notice last.
+
+So the export is a **bundle, not a set of files**, and the import refuses a
+bundle whose salt is missing.
+
+### The second hazard: a bundle is a file, and files get emailed
+
+`host.statusUrl` may carry credentials — `https://user:pass@host/admin/stats.xml`
+— which is why `redact.js` withholds it from public responses. An export is
+worse than an API response: it gets downloaded, forwarded, and left in a
+Downloads folder. **The export must strip credentials from every URL it emits
+and say in the manifest that it did**, so the operator knows to re-enter them
+rather than wondering why discovery fails.
+
+### The third: SQLite is not a file you can copy while it is running
+
+The database runs in WAL mode, so recent commits live in `devices.db-wal` and a
+plain copy is torn. `VACUUM INTO` produces a consistent single-file snapshot
+without stopping the app, and is the only correct way to take it.
+
+### What is deliberately NOT in the bundle
+
+Every secret: SMTP, `ADMIN_PASSWORD_HASH`, `SESSION_SECRET`, and
+`ICECAST_ADMIN_CREDS`. None of them is on the volume — they are environment, by
+design. **So a bundle can never reproduce a deployment on its own**, and
+pretending otherwise is how a migration ends with a running app that mails
+nobody. The manifest therefore carries a **checklist of the environment
+variables the new host needs, by NAME and never by value**, generated from what
+this instance actually has configured.
+
+### Format
+
+One gzipped JSON file — `icecast-monitor-<host>-<date>.json.gz`.
+
+| Decision | Why |
+|---|---|
+| **Single file** | A migration is carried by a person. Four files is three chances to move three of them |
+| **JSON, gzipped with `zlib`** | Node built-in; this project has three dependencies and should keep it that way. `tar` would mean a fourth or a hand-written writer |
+| **`devices.db` base64 inside it** | Binary in a text bundle costs ~33% before compression and gzip takes most of it back. Worth it for one inspectable artefact |
+| **A `manifest` first** | `gunzip -c bundle.json.gz \| jq .manifest` must answer "what is this, from where, from when, how much" without parsing megabytes |
+
+The manifest carries: app version, bundle schema version, source host, created-at,
+counts (stations, channels, events, samples, devices), byte sizes, a SHA-256 per
+part, the env-var checklist, and whether any URL was redacted.
+
+### Phasing, smallest useful thing first
+
+| | Scope | Why this order |
+|---|---|---|
+| **8a** | **Export only.** `GET /api/export` (authenticated), streamed, plus `scripts/export.js` for a shell | It is the backup. Useful the day it ships, with no import risk, and it can be verified by inspecting the file |
+| **8b** | **Import into an EMPTY volume.** `POST /api/import`, refuses if any data exists | The migration case. Replace-only semantics: merging two event logs and two device databases is a correctness problem nobody needs |
+| **8c** | **Import OVER an existing volume**, with the old data renamed aside rather than deleted, and an explicit confirmation | Only if 8b proves insufficient. Rollback matters more than convenience here |
+
+### Rules the import must follow
+
+- **Refuse a bundle from a NEWER app version.** Schema moves forward; an old
+  binary reading a new bundle is the one failure that corrupts rather than stops.
+- **Verify every checksum before writing anything.** A truncated download must
+  fail loudly, not half-import.
+- **Replace, never merge.** Two event logs cannot be interleaved without
+  duplicate ids, and two device databases cannot be unioned across different
+  salts at all.
+- **Write to a temporary directory, then swap.** A crash mid-import must leave
+  the previous volume intact.
+- **Require a restart afterwards**, and say so in the response: configuration,
+  streams, storm state and the salt are all held in memory after `load()`.
+- **Report what was NOT restored** — the env checklist — in the same response,
+  so the operator sees it at the moment they need it.
+
+### Acceptance, stated as a test rather than a feeling
+
+> Export from the live deployment, import into a clean container with only the
+> environment variables the manifest listed, restart, and: the station list is
+> identical, the oldest event predates the move, uptime for last month is the
+> same figure to two decimal places, and **"came back" is non-zero on the first
+> read** — which is the one that proves the salt travelled.
+
+---
+
 ## Keeping every avenue open
 
 **Decided 2026-08-31: the destination is undecided and dev must not close any
