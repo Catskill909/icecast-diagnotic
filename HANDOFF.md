@@ -1,5 +1,53 @@
 # Handoff — Icecast Monitor
 
+## 2026-09-11 — An Icecast admin credential per HOST
+
+The owner asked whether a mechanism existed to switch advanced figures on for a
+station once its Icecast admin password arrives. It did not: credentials came
+from ICECAST_ADMIN_USER/PASSWORD scoped to the single `adminHost()`, and there
+is no credential field anywhere in the admin panel. WBAI's and KPFA's passwords
+would have had nowhere to go.
+
+DECIDED WITH THE OWNER: environment variables now, admin panel later. The
+passwords are several weeks away, and `AUDIENCE-ROADMAP.md` §4.1's design —
+entered in the station setup flow, stored against the host — collides with a
+decision the owner is deliberately deferring: per-user accounts and roles, to be
+settled at the move from this dev deployment to Pacifica production. Who may
+enter a credential, see that one exists, or rotate it are role questions.
+Building the entry UI first means building it twice.
+
+`ICECAST_ADMIN_CREDS` is JSON, host → {user, password}. The single-host pair
+still works unchanged; the map wins where a host appears in both, so a
+credential can be corrected without touching it. One server's password is never
+sent to another — the scoping test asserts this directly.
+
+A REAL BUG THAT ENABLING MULTI-HOST WOULD HAVE INTRODUCED, found before it
+shipped: `collectListenerDetail` declared its address Set and assigned
+`listenerDetailMeta.host` INSIDE the per-host loop, so with three credentialed
+hosts the last server's distinct-address count would have been reported as the
+whole collection's — a silently smaller number with nothing to show why. The Set
+now spans the pass (one household listening to two of the network's stations is
+one address, which is what the figure is for) and `hosts` carries every server
+read, with `host` kept as the first for anything still reading it.
+
+Verification, Node 24.20.0: full suite 794/794. New
+`test/icecast-credentials.test.js` (11) covers per-host scoping, backwards
+compatibility with the single-host pair, precedence, malformed JSON, half-filled
+entries, arrays and bare strings, and that `credentialedHosts()` returns
+hostnames and never a password. Hostnames are not secret — they are already in
+the public station config, and naming the server is what makes the coverage band
+actionable.
+
+OWNER ACTION when the passwords arrive: add them to ICECAST_ADMIN_CREDS in
+Coolify. No code change, no redeploy of anything else. Every per-listener figure
+already built then switches on for WBAI and KPFA Berkeley.
+
+Status: local and tested, NOT committed at the time of writing.
+
+Next: roadmap §4.5 item 4 — city-level geography behind a tighter accuracy gate.
+
+---
+
 ## 2026-09-11 — Which figures need an Icecast admin password, said once
 
 The owner asked how to signal credential-gated figures without the UI becoming a

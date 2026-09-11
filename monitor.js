@@ -986,22 +986,21 @@ function init() {
   if (!LISTENER_DETAIL_ENABLED) {
     console.log('[Monitor] Listener detail: DISABLED (LISTENER_DETAIL_ENABLED=false)');
   } else {
-    const host = adminHost();
-    const hasUser = Boolean((process.env.ICECAST_ADMIN_USER || '').trim());
-    const hasPass = Boolean(process.env.ICECAST_ADMIN_PASSWORD);
-    if (host && hasUser && hasPass) {
+    // Every credentialed host, because a station on an uncredentialed one gets
+    // no per-listener figures at all and that is worth seeing at startup rather
+    // than deducing from an empty panel.
+    const hosts = credentialedHosts();
+    const host = hosts.join(', ');
+    if (hosts.length) {
       console.log(
         `[Monitor] Listener detail: ON for ${host} — individual listeners (cume), ` +
         `device and session detail, every ${LISTENER_DETAIL_EVERY} cycle(s)`,
       );
     } else {
-      const missing = [
-        !host && 'a monitored stream to derive the host from',
-        !hasUser && 'ICECAST_ADMIN_USER',
-        !hasPass && 'ICECAST_ADMIN_PASSWORD',
-      ].filter(Boolean);
       console.warn(
-        `[Monitor] Listener detail: OFF — missing ${missing.join(', ')}. ` +
+        '[Monitor] Listener detail: OFF — no Icecast admin credential for any monitored host. ' +
+        'Set ICECAST_ADMIN_CREDS (JSON: {"host":{"user":"…","password":"…"}}), or ' +
+        'ICECAST_ADMIN_USER and ICECAST_ADMIN_PASSWORD for a single host. ' +
         'Individual listeners (cume), device and session breakdowns will stay empty. ' +
         'Everything else is unaffected.',
       );
@@ -1639,13 +1638,75 @@ function adminHost() {
   return best[0];
 }
 
+/* MORE THAN ONE SERVER, because a network is not one server.
+
+   Five Pacifica stations share streams.pacifica.org, but WBAI is on
+   streaming.wbai.org and KPFA is on BOTH Pacifica's host and its own. One
+   credential covers one of the three, so the other two stations get no
+   per-listener figures at all — not a limitation of the product, just of where
+   the password could be put.
+
+   ICECAST_ADMIN_CREDS is a JSON object, host → {user, password}:
+
+     {"streaming.wbai.org":{"user":"admin","password":"..."},
+      "streams.kpfa.org:8443":{"user":"admin","password":"..."}}
+
+   WHY ENV RATHER THAN THE ADMIN PANEL, for now. `AUDIENCE-ROADMAP.md` §4.1 says
+   these belong in the station setup flow, stored against the host — and they
+   do. But who may enter a credential, who may see that one exists, and who may
+   rotate it are questions about ROLES, and this deployment has one shared admin
+   login with per-user accounts deferred to the move to Pacifica production.
+   Building the entry UI before that decision means building it twice. Env is
+   the same "env seeds, the store owns" path every other secret takes. */
+function adminCredsMap() {
+  const raw = (process.env.ICECAST_ADMIN_CREDS || '').trim();
+  if (!raw) return {};
+  let parsed;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    // Announced once, not swallowed: a malformed map means a station silently
+    // loses every per-listener figure, which reads as "the feature is broken".
+    if (!adminCredsMap.warned) {
+      adminCredsMap.warned = true;
+      console.warn('[Monitor] ICECAST_ADMIN_CREDS is not valid JSON — ignoring it. Expected {"host":{"user":"…","password":"…"}}');
+    }
+    return {};
+  }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {};
+  const out = {};
+  for (const [host, v] of Object.entries(parsed)) {
+    const user = String(v?.user || '').trim();
+    const password = String(v?.password || '');
+    if (host && user && password) out[host.trim()] = { user, password };
+  }
+  return out;
+}
+
 function adminCredsFor(host) {
+  if (!host) return null;
+  // The map wins, so a host listed there can be corrected without touching the
+  // single-host variables an existing deployment already relies on.
+  const mapped = adminCredsMap()[host];
+  if (mapped) return mapped;
+
   const user = (process.env.ICECAST_ADMIN_USER || '').trim();
   const password = process.env.ICECAST_ADMIN_PASSWORD || '';
   if (!user || !password) return null;
   const scoped = adminHost();
   if (!scoped || host !== scoped) return null;
   return { user, password };
+}
+
+/** Every host this deployment can read per-listener detail from. Never creds. */
+function credentialedHosts() {
+  const hosts = new Set(Object.keys(adminCredsMap()));
+  const user = (process.env.ICECAST_ADMIN_USER || '').trim();
+  if (user && process.env.ICECAST_ADMIN_PASSWORD) {
+    const scoped = adminHost();
+    if (scoped) hosts.add(scoped);
+  }
+  return [...hosts];
 }
 
 /* How often per-listener detail is collected, in check cycles. Session length
@@ -1676,19 +1737,28 @@ async function collectListenerDetail(hosts) {
 
   const next = {};
   let lastError = null;
-  let hostDistinct = null;
+
+  /* Distinct addresses have to be unioned ACROSS mounts — and, now that more
+     than one server can be credentialed, ACROSS HOSTS — while the rows are in
+     hand. Summing each mount's own count would double-count anyone listening to
+     two mounts, and the per-mount counts cannot be merged afterwards for the
+     same reason a median cannot: the set is gone by then.
+
+     DECLARED FOR THE WHOLE PASS, not per host. Scoped inside the host loop it
+     was overwritten by each server in turn, so three credentialed hosts would
+     have reported the LAST one's address count as the whole collection's — a
+     silently smaller number with nothing to show why. One household listening
+     to two of the network's stations is one address, which is what this figure
+     is for.
+
+     The addresses live in this Set and nowhere else; only its SIZE is kept. */
+  const seen = new Set();
+  const hostsRead = [];
   for (const h of withCreds) {
     const snap = snapshot?.byHost?.[h.host];
     const mountPaths = Object.keys(snap?.mounts || {});
     const base = h.statusUrl.replace(/\/[^/]*$/, '');
 
-    /* Distinct addresses have to be unioned ACROSS mounts while the rows are in
-       hand. Summing each mount's own count would double-count anyone listening
-       to two mounts, and the per-mount counts cannot be merged afterwards for
-       the same reason a median cannot — the set is gone by then.
-
-       The addresses live in this Set and nowhere else; only its SIZE is kept. */
-    const seen = new Set();
 
     /* Which CHANNEL each mount belongs to. Cume is a station-facing figure, so
        it is recorded against the channel a listener would name — not against
@@ -1730,15 +1800,19 @@ async function collectListenerDetail(hosts) {
     // so a channel's bitrate variants land in one bucket rather than racing.
     const nowIso = new Date().toISOString();
     for (const [streamId, ids] of perChannel) store.recordDevices(streamId, nowIso, ids);
-    hostDistinct = seen.size;
-    listenerDetailMeta.host = h.host;
+    hostsRead.push(h.host);
   }
 
   listenerDetail = next;
   listenerDetailMeta.lastRunAt = new Date().toISOString();
   listenerDetailMeta.lastError = lastError;
   listenerDetailMeta.mounts = Object.keys(next).length;
-  listenerDetailMeta.distinctAddresses = hostDistinct;
+  listenerDetailMeta.distinctAddresses = hostsRead.length ? seen.size : null;
+  /* Both, because one server was the assumption everywhere and several is now
+     the case. `host` stays as the first for anything still reading it; `hosts`
+     is the truth and is what the page names. */
+  listenerDetailMeta.host = hostsRead[0] || null;
+  listenerDetailMeta.hosts = hostsRead;
   // Folds hours past the hourly window into days and drops days past retention.
   // Cheap, and running it here keeps it on the same cadence as collection.
   store.compactDevices();
@@ -4196,7 +4270,7 @@ module.exports = {
   // IP or raw user agent is in here. Served behind the admin gate regardless,
   // because the audience breakdown is not something to publish by default.
   getListenerDetail: () => ({ meta: { ...listenerDetailMeta }, mounts: { ...listenerDetail } }),
-  collectListenerDetail, adminCredsFor, adminHost,
+  collectListenerDetail, adminCredsFor, adminHost, credentialedHosts,
   getDistinctDevices: (ids, since, until) => store.getDistinctDevices(ids, since, until),
   getReturningDevices: (ids, since, until) => store.getReturningDevices(ids, since, until),
   getDeviceTrend: (ids, since, until) => store.getDeviceTrend(ids, since, until),

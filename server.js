@@ -850,6 +850,9 @@ app.get('/api/listener-detail', auth.requireAuth, (req, res) => {
     // Named so a reader can see WHICH server the credential covers, without the
     // credential itself ever being in a response.
     credentialedHost: monitor.adminHost() || null,
+    // Every server this deployment can read listener detail from. `detailCoverage`
+    // says which of the SELECTION's channels those cover.
+    credentialedHosts: monitor.credentialedHosts(),
     /* WHICH SIGNALS WERE ACTUALLY AVAILABLE. The proxied share means something
        different with an ASN database than without one — a floor rather than an
        estimate — so the page cannot render the figure honestly without knowing

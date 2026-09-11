@@ -1263,7 +1263,9 @@
         <div class="deep-tile">
           <div class="deep-tile-label">Mounts measured</div>
           <div class="deep-tile-value">${mounts.length}</div>
-          <div class="deep-tile-note">on ${esc(d.credentialedHost)}</div>
+          <div class="deep-tile-note">on ${(d.credentialedHosts || []).length > 1
+            ? esc(`${d.credentialedHosts.length} servers`)
+            : esc(d.credentialedHost || '—')}</div>
         </div>
       </div>
 

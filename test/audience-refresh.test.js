@@ -132,6 +132,7 @@ test('listener-detail scopes mounts, totals, distribution and geography by host 
       // and an admin password for only one of them.
       streamIdsFor: (id) => (id === 'kpfk' ? ['a'] : id === 'split' ? ['a', 'b'] : []),
       adminCredsFor: (host) => (host === 'one.test' ? { user: 'u', password: 'p' } : null),
+      credentialedHosts: () => ['one.test'],
       getDistinctDevices: (ids) => ({ devices: ids.length }),
       getReturningDevices: (ids) => ({ current: ids.length, comparable: false, reason: 'nothing-recorded' }),
       getDeviceTrend: (ids) => ({ granularity: 'day', buckets: ids.map(() => ({ key: '2026-09-01', devices: 1, families: {}, platforms: {} })) }),

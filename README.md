@@ -385,13 +385,26 @@ server that stream is served from.
 | | Relay / proxied share |
 
 **The password belongs to the HOST, not the station**, and a station's channels
-need not share one. On this deployment:
+need not share one. Set them with `ICECAST_ADMIN_CREDS` — JSON, host to
+`{user, password}` — so a network can credential each server independently. One
+server's password is never sent to another. On this deployment:
 
 | Host | Credential | Carries |
 |---|---|---|
 | `streams.pacifica.org:9000` | yes | KPFT ×3, WPFW, KPFK, **and one KPFA channel** |
 | `streaming.wbai.org` | no | WBAI ×3 |
 | `streams.kpfa.org:8443` | no | KPFA Berkeley |
+
+Adding the two missing credentials switches on every per-listener figure for
+WBAI and KPFA Berkeley with no code change — which is worth more than any
+remaining feature on the roadmap.
+
+**Why this is an environment variable and not a field in the admin panel, for
+now.** `docs/AUDIENCE-ROADMAP.md` §4.1 says it belongs in the station setup
+flow, stored against the host — and it does. But *who may enter a credential,
+who may see that one exists, and who may rotate it* are questions about **roles**,
+and per-user accounts are deferred to the move to Pacifica production. Building
+the entry UI before that decision means building it twice.
 
 **So KPFA is split, and that used to be silent.** Its individual-listener,
 geography and daypart figures covered the HiRes stream only and were presented
@@ -1029,6 +1042,23 @@ STATION_LABEL=KPFT              # Station name used in operator-facing evidence 
 # Two vendors, one format, so switching is a path and not a code change:
 #   DB-IP Lite       CC BY 4.0, NO ACCOUNT, 9 MB (ASN)  https://db-ip.com/db/lite.php
 #   MaxMind GeoLite2 free, but needs an account + licence key + EULA
+# ── Icecast admin credentials — PER HOST ─────────────────────────────
+# Unlocks per-listener figures for the servers named here. Everything else
+# works without them. A network is not one server: five Pacifica stations
+# share streams.pacifica.org, WBAI is on streaming.wbai.org, and KPFA is on
+# BOTH Pacifica's host and its own — so one credential covers one of three.
+#
+# JSON, host → {user, password}. A host not named here gets no credential;
+# one server's password is never sent to another.
+ICECAST_ADMIN_CREDS={"streaming.wbai.org":{"user":"admin","password":"..."}}
+#
+# The original single-host pair still works and is unchanged. Where a host
+# appears in both, ICECAST_ADMIN_CREDS wins, so it can be corrected without
+# touching these.
+ICECAST_ADMIN_USER=
+ICECAST_ADMIN_PASSWORD=
+ICECAST_ADMIN_HOST=              # defaults to the host in ICECAST_STATUS_URL
+
 GEOIP_ASN_DB=                    # identifies relays and aggregators (5.4)
 GEOIP_CITY_DB=                   # in-market share and the map (5.9, not built)
 GEOIP_MAX_ACCURACY_RADIUS_KM=200 # wider than this is a CENTROID, not a place
