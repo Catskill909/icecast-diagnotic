@@ -173,7 +173,20 @@ function setSessionCookie(req, res, token) {
     `${COOKIE_NAME}=${encodeURIComponent(token)}`,
     'Path=/',
     'HttpOnly',                       // unreadable from JavaScript, so XSS cannot steal it
-    'SameSite=Strict',                // not sent cross-site, which blocks CSRF on write routes
+    /* LAX, NOT STRICT, and the difference is felt daily.
+
+       Strict withholds the cookie on ANY navigation originating off-site, so
+       opening the dashboard from a link in mail, a chat or a bookmark manager
+       arrives without a session and renders signed out. The reader logs in
+       again, it works, and it happens again tomorrow — experienced as "the
+       login keeps forgetting me", with nothing to point at.
+
+       Lax still withholds it on cross-site POST, PUT and DELETE, which is the
+       CSRF that matters. It sends it on a top-level GET navigation — which is
+       safe only because no GET on this server changes anything: sending a test
+       alert and sending a roundup are POST routes for exactly this reason. IF A
+       GET IS EVER GIVEN A SIDE EFFECT, THIS SETTING BECOMES A HOLE. */
+    'SameSite=Lax',
     `Max-Age=${SESSION_HOURS * 3600}`,
   ];
   if (secure) bits.push('Secure');
@@ -181,7 +194,7 @@ function setSessionCookie(req, res, token) {
 }
 
 function clearSessionCookie(res) {
-  res.setHeader('Set-Cookie', `${COOKIE_NAME}=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0`);
+  res.setHeader('Set-Cookie', `${COOKIE_NAME}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0`);
 }
 
 // ── Rate limiting ───────────────────────────────────────────────────────────

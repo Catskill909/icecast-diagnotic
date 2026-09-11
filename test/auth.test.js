@@ -12,6 +12,8 @@
 
 const test = require('node:test');
 const assert = require('node:assert');
+const fs = require('node:fs');
+const path = require('node:path');
 
 process.env.SESSION_SECRET = 'test-secret-for-signing-only';
 const auth = require('../auth');
@@ -89,15 +91,52 @@ test('a missing cookie header is not an error', () => {
   assert.equal(auth.readCookie({}, auth.COOKIE_NAME), null);
 });
 
-test('the cookie is HttpOnly and SameSite=Strict', () => {
-  // HttpOnly keeps XSS from reading it; SameSite=Strict is what blocks CSRF
-  // against the write routes this gate protects.
+/* CHANGED 2026-09-11 from Strict to Lax, and the pair of tests below is why
+   that is safe. Strict withheld the cookie on ANY navigation arriving from
+   off-site, so opening the dashboard from a link in mail or chat rendered
+   signed out — experienced as "the login keeps forgetting me", daily, with
+   nothing on screen to point at. */
+
+test('the cookie is HttpOnly, Secure over https, and SameSite=Lax', () => {
   let header = null;
   const res = { setHeader: (_, v) => { header = v; } };
   auth.setSessionCookie({ headers: { 'x-forwarded-proto': 'https' }, secure: false }, res, 'tok');
-  assert.match(header, /HttpOnly/);
-  assert.match(header, /SameSite=Strict/);
+  assert.match(header, /HttpOnly/, 'XSS must not be able to read it');
+  assert.match(header, /SameSite=Lax/);
+  assert.doesNotMatch(header, /SameSite=Strict/, 'Strict signs the reader out on every inbound link');
   assert.match(header, /Secure/, 'Secure must be set when the request arrived over https');
+});
+
+test('THE CONDITION THAT MAKES Lax SAFE: no authenticated GET changes anything', () => {
+  /* Lax withholds the cookie on cross-site POST, PUT and DELETE — the CSRF that
+     matters — but SENDS it on a top-level GET navigation. That is safe only
+     while no GET on this server has a side effect. Sending a test alert and
+     sending the weekly roundup were both GETs, and a crafted link would have
+     made a signed-in admin's browser mail an arbitrary address as the station.
+
+     This test is the other half of the cookie setting. If a GET is ever given a
+     side effect, the cookie becomes a hole and this fails first. */
+  const server = fs.readFileSync(path.join(__dirname, '..', 'server.js'), 'utf8');
+
+  assert.match(server, /app\.post\('\/api\/test-alert'/, 'sending a test alert must be a POST');
+  assert.match(server, /app\.post\('\/api\/weekly-roundup'/, 'sending a roundup must be a POST');
+
+  // The GET survivors must be refusals or read-only previews, never sends.
+  const testAlertGet = server.slice(server.indexOf("app.get('/api/test-alert'"));
+  assert.match(testAlertGet.slice(0, 400), /405/, 'GET must refuse, with a reason rather than a 404');
+
+  /* A crude but durable guard: no authenticated GET route may call a sender.
+     Named explicitly, because the failure is silent — the route keeps working
+     and only the CSRF property quietly disappears. */
+  const senders = ['sendTestAlert', 'sendWeeklyRoundup'];
+  for (const m of server.matchAll(/app\.get\('([^']+)',\s*auth\.requireAuth[\s\S]{0,1200}?\n\}\)/g)) {
+    for (const sender of senders) {
+      assert.ok(
+        !m[0].includes(`monitor.${sender}(`),
+        `GET ${m[1]} calls monitor.${sender} — a GET that sends mail makes SameSite=Lax unsafe`,
+      );
+    }
+  }
 });
 
 test('Secure is omitted on plain http so local development still works', () => {

@@ -1218,8 +1218,9 @@ as a whole one.
 ### `GET /api/weekly-roundup`
 | Query | Effect |
 |---|---|
-| `?preview=1` | renders the email in the browser **without sending it** — works with no SMTP configured |
-| `?to=user@example.com` | sends it to one address instead of the configured recipients |
+| `GET` (any query) | renders the email in the browser **without sending it** — works with no SMTP configured |
+| `POST` | sends it to the station's recipients |
+| `POST ?to=user@example.com` | sends it to one address instead of the configured recipients |
 | `?days=7` | window to report on (default 7) |
 
 **One report per station**, named for it in the subject, and addressed to that
@@ -1287,8 +1288,15 @@ shipped with relay detection would mean signing in, since everything else about
 it is behind the admin gate. Filesystem paths and error strings are **not** in
 it — those stay in the authenticated `/api/listener-detail` response.
 
-### `GET /api/test-alert?to=user@example.com`
-Sends a formatted test email alert to the requested address for deliverability verification.
+### `POST /api/test-alert?to=user@example.com`
+Sends a formatted test email alert to the requested address for deliverability
+verification. **POST, not GET** — a GET that sends mail can be fired by anything
+that follows a link, and with a `SameSite=Lax` session cookie a crafted link
+would have carried a signed-in admin's session into it. `GET` returns 405 with
+that explanation rather than a bare 404.
+
+The same rule applies to the weekly roundup: `GET /api/weekly-roundup` renders
+the preview and changes nothing, `POST` sends it.
 
 ### `GET /health`
 Container health check endpoint (used by Docker and Coolify probes). Returns `200 OK`.
@@ -1307,14 +1315,14 @@ npm run dev
 # 3. Test API endpoint locally
 curl http://localhost:3000/api/status
 
-# 4. Trigger a test email locally
-curl "http://localhost:3000/api/test-alert?to=your-email@example.com"
+# 4. Trigger a test email locally — POST, because it sends mail
+curl -X POST "http://localhost:3000/api/test-alert?to=your-email@example.com"
 
 # 5. Look at the weekly roundup without sending it (no SMTP needed)
 open "http://localhost:3000/api/weekly-roundup?preview=1&days=7"
 
-# 6. Send this week's roundup to yourself right now
-curl "http://localhost:3000/api/weekly-roundup?to=your-email@example.com"
+# 6. Send this week's roundup to yourself right now — POST sends, GET previews
+curl -X POST "http://localhost:3000/api/weekly-roundup?to=your-email@example.com"
 
 # 7. See the alert email a past incident produced
 curl -s 'http://localhost:3000/api/events?severity=outage&limit=1' | jq -r '.events[0].id' \

@@ -939,8 +939,16 @@ app.get('/api/diagnostics', (req, res) => {
 // PROTECTED: sends mail through the station's SMTP. Open to the internet this
 // was a way for anyone who found the URL to fire station-branded email at
 // arbitrary addresses and burn the sending reputation.
-app.get('/api/test-alert', auth.requireAuth, async (req, res) => {
-  const to = (req.query.to || '').trim();
+/* POST, NOT GET, because it SENDS MAIL.
+
+   A GET is meant to be safe to follow, and browsers, crawlers, link previewers
+   and chat clients all follow them unasked. It also interacts with the session
+   cookie: `SameSite=Lax` sends the cookie on a top-level GET navigation, so a
+   crafted link could have made a signed-in admin's browser mail an arbitrary
+   address as the station. On POST the cookie is withheld cross-site and the
+   whole class disappears. */
+const sendTestAlert = async (req, res) => {
+  const to = (req.query.to || req.body?.to || '').trim();
   const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
   if (!to || !emailRegex.test(to)) {
     return res.status(400).json({ error: 'Provide a valid email address via ?to=user@example.com' });
@@ -953,6 +961,16 @@ app.get('/api/test-alert', auth.requireAuth, async (req, res) => {
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
+};
+
+app.post('/api/test-alert', auth.requireAuth, sendTestAlert);
+
+// An old bookmark or script deserves a reason, not a 404 that reads as "gone".
+app.get('/api/test-alert', auth.requireAuth, (req, res) => {
+  res.status(405).json({
+    error: 'Sending a test alert is a POST. A GET that sends mail can be triggered by any link.',
+    use: 'POST /api/test-alert?to=user@example.com',
+  });
 });
 
 // ── Alert Email Preview ─────────────────────────────────────────────────────
@@ -969,8 +987,11 @@ app.get('/api/events/:id/email-preview', (req, res) => {
 // The scheduled job sends this on its own; this route is for proving it works
 // without waiting a week, and for re-sending one on request.
 // PROTECTED: can send the roundup to an arbitrary address.
-app.get('/api/weekly-roundup', auth.requireAuth, async (req, res) => {
-  const to = (req.query.to || '').trim();
+/* GET renders the preview, which changes nothing. POST sends. Split for the
+   same reason as the test alert: following a link must never mail anybody. */
+const weeklyRoundup = async (req, res) => {
+  const sending = req.method === 'POST';
+  const to = (req.query.to || req.body?.to || '').trim();
   const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
   if (to && !emailRegex.test(to)) {
     return res.status(400).json({ error: 'Invalid email address in ?to=' });
@@ -983,7 +1004,7 @@ app.get('/api/weekly-roundup', auth.requireAuth, async (req, res) => {
 
   // ?preview=1 renders the message in the browser instead of mailing it, so it
   // can be checked before a real one goes out — and without needing SMTP at all.
-  if (req.query.preview === '1' || req.query.preview === 'true') {
+  if (!sending || req.query.preview === '1' || req.query.preview === 'true') {
     const { subject, html } = monitor.previewWeeklyRoundup(windowMs, stationId);
     res.setHeader('X-Roundup-Subject', encodeURIComponent(subject));
     return res.type('html').send(html);
@@ -998,7 +1019,12 @@ app.get('/api/weekly-roundup', auth.requireAuth, async (req, res) => {
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
-});
+};
+
+// Preview only — safe to follow, and works with no SMTP configured at all.
+app.get('/api/weekly-roundup', auth.requireAuth, weeklyRoundup);
+// Actually sends.
+app.post('/api/weekly-roundup', auth.requireAuth, weeklyRoundup);
 
 // ── Health Check (for Docker / Coolify) ─────────────────────────────────────
 app.get('/health', (req, res) => {

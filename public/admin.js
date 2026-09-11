@@ -878,8 +878,11 @@
     // the test is for and falls back to showing every stream the monitor
     // watches — which is what shipped: a test for a KPFT address arrived listing
     // all four stations' listener counts.
+    /* POST, because it sends mail. A GET that mails somebody can be fired by
+       any link a browser or chat client decides to follow. */
     const res = await api(
       `/api/test-alert?to=${encodeURIComponent(to)}&stationId=${encodeURIComponent(s.id)}`,
+      { method: 'POST' },
     );
     if (!res) return;
     if (!res.ok) return show(msg, failureText(res, 'send the test message'));
