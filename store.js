@@ -3071,6 +3071,36 @@ function ensureStreams(streamIds = []) {
  * of all — and handing out the live object would let an edit take effect without
  * ever being saved, producing configuration that vanishes on the next restart.
  */
+/**
+ * A consistent copy of the device database, as a Buffer.
+ *
+ * Goes through DeviceStore.snapshotTo (VACUUM INTO) rather than reading the
+ * file: WAL mode keeps recent commits in a sidecar, so a plain read is short by
+ * however much of the last checkpoint interval was outstanding. It opens fine
+ * and is quietly missing data, which is the worst shape a backup can take.
+ */
+function snapshotDeviceDb() {
+  const os = require('os');
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'devsnap-'));
+  const out = path.join(tmp, 'devices.db');
+  try {
+    const db = deviceDb();
+    /* The ROW COUNT travels with the snapshot, because it decides whether a
+       missing salt is fatal. Hashes without their salt are unrecoverable; an
+       EMPTY database has nothing to orphan and must not block a migration. */
+    const rows = db.rowCount();
+    db.snapshotTo(out);
+    return { buffer: fs.readFileSync(out), rows };
+  } catch (err) {
+    // No database yet is a legitimate state — a fresh install has never run a
+    // listener-detail pass. An empty bundle part is correct; a thrown export
+    // is not.
+    return null;
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+}
+
 function getStationConfig() {
   return config ? JSON.parse(JSON.stringify(config)) : null;
 }
@@ -3171,6 +3201,7 @@ module.exports = {
   getPeriodRollup,
   getStatusCache, setStatusCache, getStorageInfo, getMeta, setMeta,
   ensureStreams, getStationConfig, setStationConfig,
+  DATA_DIR, snapshotDeviceDb,
   backfillAudience,
   backfillRecoveries,
   isUnconfirmedSeverity, settledImpact, costListeners, isFailureEvent,

@@ -1298,6 +1298,66 @@ that explanation rather than a bare 404.
 The same rule applies to the weekly roundup: `GET /api/weekly-roundup` renders
 the preview and changes nothing, `POST` sends it.
 
+### `GET /api/export`
+**Authenticated.** The whole deployment's state as one gzipped JSON bundle —
+configuration, events, telemetry and the device database — for moving hosts, and
+for the backup this app otherwise does not have.
+
+```bash
+curl -b cookies.txt https://<host>/api/export -o monitor-backup.json.gz
+gunzip -c monitor-backup.json.gz | jq .manifest     # what is in it, without parsing the body
+```
+
+**The device salt is why this is a bundle and not a file copy.** A device is a
+salted hash of IP and user agent: the hashes are in `devices.db`, the salt is in
+`events.json`. Move the database without the salt and the new host invents a
+fresh one, so every returning listener hashes to a new value — cume jumps by the
+whole audience and **"came back" reads zero for ever**. Nothing errors. The
+response carries `X-Device-Salt-Included: yes|no` so a scripted backup can
+assert it without unpacking.
+
+If `DEVICE_HASH_SALT` is set in the environment, the salt is **not on the volume
+and cannot travel in the bundle** — the manifest says so (`saltSource:
+"environment"`) and the same value must be set on the new host by hand.
+
+| In the bundle | Not in the bundle |
+|---|---|
+| `events.json` — config, events, meta (including the salt) | Every secret: SMTP, `ADMIN_PASSWORD_HASH`, `SESSION_SECRET`, `ICECAST_ADMIN_CREDS`, `DEVICE_HASH_SALT` |
+| `samples.json` — telemetry and rollups | |
+| `devices.db` — a `VACUUM INTO` snapshot, consistent while the app runs | |
+
+Secrets are environment, never volume state, so **a bundle cannot reproduce a
+deployment on its own.** The manifest carries `env` — the variable **names** the
+new host needs and whether each was set on the source, never a value.
+
+Credentials embedded in URLs (`https://user:pass@host/…`) are stripped at export
+and counted in `manifest.redactedCredentials`, because a bundle is a file that
+gets downloaded and forwarded.
+
+### `POST /api/import/preview` · `POST /api/import`
+**Authenticated.** Body: `{"bundle": "<base64 of the .json.gz>"}`; import also
+requires `"replace": true`.
+
+Preview validates and reports without writing: checksums, schema version, the
+manifest, and what the target volume currently holds.
+
+**Import always REPLACES.** It was originally specified as "import into an empty
+volume", which the end-to-end test proved impossible — the app seeds its
+configuration on first boot, so the volume is never empty by the time anyone can
+sign in. The safety is elsewhere: an explicit `"replace": true`, the preview
+above, and **displaced files renamed aside rather than deleted**
+(`events.json.replaced-<timestamp>`), so a mistaken import is undone by hand.
+
+Refused outright: a bundle from a newer app version, a failed checksum, and a
+device database carrying identities with no salt to match them.
+
+A restart is required afterwards — configuration, streams, storm state and the
+salt are all held in memory after `load()`. The response says so.
+
+`IMPORT_MAX_MB` (default 256) bounds the upload. Import has its own body parser
+mounted after the auth check, so the 256kb limit protecting every other route is
+not raised for anyone unauthenticated.
+
 ### `GET /health`
 Container health check endpoint (used by Docker and Coolify probes). Returns `200 OK`.
 

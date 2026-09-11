@@ -428,8 +428,20 @@ part, the env-var checklist, and whether any URL was redacted.
 | | Scope | Why this order |
 |---|---|---|
 | **8a** | **Export only.** `GET /api/export` (authenticated), streamed, plus `scripts/export.js` for a shell | It is the backup. Useful the day it ships, with no import risk, and it can be verified by inspecting the file |
-| **8b** | **Import into an EMPTY volume.** `POST /api/import`, refuses if any data exists | The migration case. Replace-only semantics: merging two event logs and two device databases is a correctness problem nobody needs |
-| **8c** | **Import OVER an existing volume**, with the old data renamed aside rather than deleted, and an explicit confirmation | Only if 8b proves insufficient. Rollback matters more than convenience here |
+| **8b** | **Import, which is always a REPLACE.** `POST /api/import` with `"replace": true`, preceded by `POST /api/import/preview` | The migration case. Replace, never merge: two event logs cannot be interleaved without duplicate ids, and two device databases cannot be unioned across different salts at all |
+
+**CORRECTED 2026-09-11, by the end-to-end test that was written to prove it.**
+8b was originally "import into an EMPTY volume, refuse if any data exists", with
+replacement deferred to an 8c. That rule cannot be satisfied: **the app seeds its
+configuration on first boot**, so by the time an operator can sign in to import,
+the volume is already occupied. A safety rule nobody can obey is not a safety
+rule — it just gets worked around.
+
+Import is therefore always a replace, and the safety lives in three places
+instead: an explicit `"replace": true` in the request, a preview endpoint that
+shows the bundle and the target before committing, and displaced files RENAMED
+ASIDE rather than deleted, so a mistaken import is recoverable by hand. There is
+no 8c.
 
 ### Rules the import must follow
 

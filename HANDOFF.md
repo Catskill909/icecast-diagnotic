@@ -1,5 +1,61 @@
 # Handoff — Icecast Monitor
 
+## 2026-09-11 — Phase 8a/8b built: export and import
+
+One gzipped JSON bundle carries the deployment's whole state — configuration,
+events, telemetry and the device database. `GET /api/export`,
+`POST /api/import/preview`, `POST /api/import`. New module `backup.js`, and
+`DeviceStore.snapshotTo` (VACUUM INTO, because WAL mode makes a plain file copy
+short and it opens fine anyway).
+
+It is also the backup this deployment did not have.
+
+TWO THINGS THE END-TO-END TEST FOUND, both of which would have shipped:
+
+1. **The salt guard was too strict.** A deployment with listener detail off, or
+   one that has never run a pass, has an EMPTY devices.db and no salt — the salt
+   is created the first time a device is hashed. Refusing that bundle blocked a
+   migration with nothing to lose. The rule now keys on device ROWS: refuse when
+   there are identities to orphan, allow when there are none, and treat an
+   exporter that cannot count as "assume there are" — a wrong refusal is an
+   inconvenience, a wrong import is unrecoverable.
+
+2. **"Import into an empty volume" is impossible**, which was the original 8b
+   and is now corrected in the phase plan. The app seeds its configuration on
+   first boot, so by the time an operator can sign in to import, the volume is
+   occupied. A safety rule nobody can obey just gets worked around. Import is
+   always a replace; the safety is an explicit `"replace": true`, the preview
+   endpoint, and displaced files RENAMED ASIDE rather than deleted. There is no
+   8c.
+
+A THIRD, found while writing the test rather than by it: `store.deviceSalt()`
+prefers `DEVICE_HASH_SALT` when set, and then the salt is never written to the
+volume at all. So it could not travel in a bundle AND it was missing from the
+env checklist — the single most important variable to carry. It is now first on
+that list, the manifest reports `saltSource: 'environment'`, and validation
+warns loudly rather than refusing, since refusing would block every deployment
+that sets it.
+
+Also caught, by the existing suite rather than by me: `backup.js` was not in the
+Dockerfile. That is the trap this HANDOFF already warns about — the Dockerfile
+copies files individually — and `test/dockerfile.test.js` exists for exactly it.
+
+Verification, Node 24.20.0: full suite 852/852. New
+`test/backup-bundle.test.js` (28) covers the salt refusal and its wording, the
+round trip proving a listener recognised before the move is recognised after,
+credential stripping at any depth, that no secret VALUE is exported, checksums,
+a newer-schema refusal, replace-not-merge, stale WAL sidecar removal, and that a
+rejected bundle writes nothing at all. Two live servers were driven end to end:
+export from one, import into the other with `"replace": true`, restart, verify.
+
+NOT BUILT: a UI. Export and import are API-only for now, which suits a move done
+once by the person who also sets the environment variables. A button belongs
+with the admin panel work.
+
+Status: local and tested, NOT committed at the time of writing.
+
+---
+
 ## 2026-09-11 — Session length (roadmap §4.5 item 5) — §4.5 IS COMPLETE
 
 TSL is the engagement metric station managers say they watch. Reach says how

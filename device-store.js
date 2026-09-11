@@ -760,6 +760,32 @@ class DeviceStore {
     }
   }
 
+  /**
+   * A consistent single-file copy, for backup and migration.
+   *
+   * NOT `fs.copyFile`. The database runs in WAL mode, so the most recent
+   * commits live in `devices.db-wal` and have not been folded into the main
+   * file yet — copying it while the app is running yields a database missing
+   * however much of the last checkpoint interval happened to be outstanding.
+   * It opens fine and is quietly short.
+   *
+   * VACUUM INTO writes a fully checkpointed, defragmented copy while readers
+   * and writers carry on, which is exactly what a backup taken from a live
+   * service needs.
+   */
+  /** How many device rows exist. Zero is a real and common state. */
+  rowCount() {
+    return this.stmt.count.get()?.n || 0;
+  }
+
+  snapshotTo(destPath) {
+    // A bound parameter is not allowed here by SQLite, so the path is quoted
+    // by doubling single quotes — the standard SQL escape.
+    const quoted = String(destPath).replace(/'/g, "''");
+    this.db.exec(`VACUUM INTO '${quoted}'`);
+    return destPath;
+  }
+
   /** Fold hours into days into months. Resolution ages out; devices do not. */
   compactDevices(now, { hourRetentionH, dayRetentionDays, monthRetention }) {
     const foldInto = (fromTier, toTier, cutoff) => {

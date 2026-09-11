@@ -14,11 +14,25 @@ const geoUpdate = require('./geo-update');
 const discover = require('./discover');
 const safeUrl = require('./safe-url');
 const diagnose = require('./diagnose');
+const backup = require('./backup');
+const store = require('./store');
 
 const app = express();
 const PORT = parseInt(process.env.PORT, 10) || 3000;
 
 app.use(express.json({ limit: '256kb' }));
+
+/* A BUNDLE IS NOT A REQUEST BODY, and 256kb is the right ceiling for every
+   other route on this server. Import gets its own parser rather than raising
+   the global limit, which would let any unauthenticated caller make the process
+   buffer hundreds of megabytes.
+
+   Mounted AFTER auth.requireAuth on each route, so the body is only read once
+   the caller is known. Sized by env because the bundle grows with the audience:
+   a year of the Pacifica network is tens of megabytes of device records. */
+const importBody = express.json({
+  limit: `${Math.max(1, parseInt(process.env.IMPORT_MAX_MB, 10) || 256)}mb`,
+});
 
 // ── Security & Search Engine Deterrence Middleware ─────────────────────────
 app.use((req, res, next) => {
@@ -1025,6 +1039,103 @@ const weeklyRoundup = async (req, res) => {
 app.get('/api/weekly-roundup', auth.requireAuth, weeklyRoundup);
 // Actually sends.
 app.post('/api/weekly-roundup', auth.requireAuth, weeklyRoundup);
+
+/* ── Export and import ──────────────────────────────────────────────────────
+   Phase 8. One bundle carries the whole deployment's STATE — configuration,
+   events, telemetry and the device database — so a move is export, deploy,
+   import rather than a file-by-file copy that can leave the device salt behind.
+   See backup.js for why that one field decides the shape of all of this.
+
+   Both are authenticated: the bundle contains the full station configuration
+   and every recipient address. */
+app.get('/api/export', auth.requireAuth, (req, res) => {
+  try {
+    const bundle = backup.buildBundle({
+      dataDir: store.DATA_DIR,
+      snapshotDeviceDb: store.snapshotDeviceDb,
+      appVersion: require('./package.json').version,
+      sourceHost: req.headers.host || null,
+    });
+    const gz = backup.packBundle(bundle);
+    const stamp = new Date().toISOString().slice(0, 10);
+    const host = String(req.headers.host || 'monitor').replace(/[^a-z0-9.-]+/gi, '-');
+    res.setHeader('Content-Type', 'application/gzip');
+    res.setHeader('Content-Disposition', `attachment; filename="icecast-monitor-${host}-${stamp}.json.gz"`);
+    // Named in a header too, so a scripted backup can assert the salt travelled
+    // without unpacking the body.
+    res.setHeader('X-Device-Salt-Included', bundle.manifest.hasDeviceSalt ? 'yes' : 'no');
+    res.send(gz);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/* A dry run. An operator about to replace a volume should be able to see what
+   is in the bundle, and what the new host will still need, BEFORE committing. */
+app.post('/api/import/preview', auth.requireAuth, importBody, (req, res) => {
+  try {
+    const bundle = backup.unpackBundle(Buffer.from(req.body?.bundle || '', 'base64'));
+    const check = backup.validateBundle(bundle);
+    res.json({
+      ok: check.ok,
+      errors: check.errors,
+      warnings: check.warnings,
+      manifest: bundle.manifest,
+      target: backup.dataDirOccupied(store.DATA_DIR),
+    });
+  } catch (err) {
+    res.status(400).json({ error: `Could not read the bundle: ${err.message}` });
+  }
+});
+
+app.post('/api/import', auth.requireAuth, importBody, (req, res) => {
+  let bundle;
+  try {
+    bundle = backup.unpackBundle(Buffer.from(req.body?.bundle || '', 'base64'));
+  } catch (err) {
+    return res.status(400).json({ error: `Could not read the bundle: ${err.message}` });
+  }
+
+  const check = backup.validateBundle(bundle);
+  if (!check.ok) return res.status(400).json({ error: 'Bundle rejected', errors: check.errors });
+
+  /* IMPORT IS ALWAYS A REPLACE, and it always needs saying out loud.
+
+     The original plan was "import into an EMPTY volume", which the end-to-end
+     migration test proved impossible: the app seeds its configuration on first
+     boot, so by the time an operator can sign in to import, the volume is
+     already occupied. A rule nobody can satisfy is not a safety rule.
+
+     So instead: the caller must acknowledge the replacement explicitly, and the
+     displaced files are renamed aside rather than deleted (see applyBundle), so
+     the wrong bundle is recoverable by hand. `POST /api/import/preview` shows
+     what is in the bundle and what is in the target before committing. */
+  const target = backup.dataDirOccupied(store.DATA_DIR);
+  if (target.occupied && req.body?.replace !== true) {
+    return res.status(409).json({
+      error: 'This deployment already holds data. Importing REPLACES it.',
+      files: target.files,
+      how: 'Check it with POST /api/import/preview, then send "replace": true alongside the bundle to confirm.',
+      note: 'The replaced files are renamed aside, not deleted, so a mistaken import can be undone by hand.',
+    });
+  }
+
+  try {
+    const result = backup.applyBundle(bundle, store.DATA_DIR);
+    res.json({
+      ok: true,
+      ...result,
+      manifest: bundle.manifest,
+      /* Said HERE rather than only in a document, because this is the moment
+         the operator is looking. The app holds configuration, streams, storm
+         state and the salt in memory after load(). */
+      restartRequired: true,
+      next: 'Restart the app, then set the environment variables listed in manifest.env that are not yet set on this host.',
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
 
 // ── Health Check (for Docker / Coolify) ─────────────────────────────────────
 app.get('/health', (req, res) => {

@@ -69,6 +69,7 @@ COPY listener-detail.js ./
 COPY geo.js ./
 COPY geo-update.js ./
 COPY device-store.js ./
+COPY backup.js ./
 COPY scripts/ ./scripts/
 COPY seed/ ./seed/
 COPY public/ ./public/
