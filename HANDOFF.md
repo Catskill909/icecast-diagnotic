@@ -1,5 +1,64 @@
 # Handoff — Icecast Monitor
 
+## 2026-09-11 — Metro-level geography (roadmap §4.5 item 4)
+
+The number this corrects: a licence covers a METRO, and the map counts a whole
+STATE. "In Texas" includes Dallas, so the in-market figure reads high and
+"outside our signal area" — the figure that justifies streaming to a board —
+reads low.
+
+THE GATE IS TIGHTER THAN THE STATE'S, which is the whole safety of it.
+`GEOIP_MAX_CITY_ACCURACY_RADIUS_KM` defaults to 50 km against the state's 200.
+200 km is sound evidence for a state — it is inside one — and worthless for a
+city, since that far from Houston reaches Austin. A record that clears the state
+gate but not the city one KEEPS ITS STATE and loses only its city: a place named
+at the resolution the evidence supports. No state means no city either, because
+such a record was already too vague; outside the US there is no city, exactly as
+there is no state; and a database with no `accuracy_radius` at all (DB-IP City
+Lite) publishes neither.
+
+A BOUNDARY WAS DELIBERATELY MOVED, and it had a test defending it.
+`test/geo.test.js` asserted "THE BOUNDARY: no city name survives a lookup", on
+the grounds that the published resolutions were state and country. That was
+correct while city was out of scope. It is now seven tests describing the
+narrower rule, and the revision is recorded in the file itself.
+
+THE COORDINATE BOUNDARY IS UNTOUCHED and must never move — no latitude or
+longitude survives a lookup, so a dot-per-listener map stays impossible to build
+downstream by accident. Counts per metro are not pins, and §3 of
+ADMIN-ACCESS-SCOPE.md still rules pins out.
+
+Cities are keyed `TX/Houston`, never by bare name: there is a Houston in Alaska,
+a Paris in Texas and a Portland in two states at once. The stored token gains a
+third segment ('US:TX:Houston'); readers that split for country and state are
+unaffected, and MAX(place) still prefers the more informative token because a
+longer string sharing a prefix sorts above the shorter one. A colon in a city
+name is replaced rather than escaped, so it cannot shift every reader's parse.
+Two-segment tokens written before this still read correctly and report the city
+as withheld, which is exactly right for them.
+
+DELIBERATELY NOT BUILT: an in-market share computed against a station's own
+metro. It needs a per-station metro setting whose value must match the geo
+database's city string exactly, and a near-miss produces a confident wrong share
+rather than a visible error. The metro LIST beside the state figure answers the
+same question without that fragility — shares use the same denominator as the
+in-market tile, so "412 of Texas's 700 are in Houston" can be read directly
+against it — and can be promoted later if it earns it.
+
+Verification, Node 24.20.0: full suite 811/811. New
+`test/city-resolution.test.js` (11) covers the token, the colon, non-US, legacy
+two-segment tokens, MAX precedence, the state/city key, that a metro count can
+never exceed its state count, merging, and that the gate sits exactly at the
+configured radius. `test/geo.test.js` gains seven. Booted on a scratch data dir:
+clean.
+
+Status: local and tested, NOT committed at the time of writing.
+
+Next: item 5, session length — as six DURATION_BUCKETS per day frozen at
+compaction, like `region_hours`, not a duration per listener.
+
+---
+
 ## 2026-09-11 — An Icecast admin credential per HOST
 
 The owner asked whether a mechanism existed to switch advanced figures on for a

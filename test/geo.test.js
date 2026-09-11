@@ -157,11 +157,86 @@ test('THE BOUNDARY: no latitude or longitude survives a lookup', () => {
   assert.ok(!json.includes('-95.36'), `a longitude value leaked: ${json}`);
 });
 
-test('THE BOUNDARY: no city name survives a lookup', () => {
-  // The published resolutions are state and country. A city is neither, and
-  // returning one invites a panel to render it.
+/* REVISED 2026-09-11. This test previously asserted that NO city name survives
+   a lookup, on the grounds that the published resolutions were state and
+   country. That was right while city was out of scope; a licence covers a
+   METRO, so counting all of Texas reports Greater Houston's audience as the
+   state's and understates how much of the audience the broadcast signal never
+   reaches — the figure that justifies streaming to a board.
+
+   So a city is now published, and the boundary moved rather than dissolved:
+   it survives only when the record can support the claim. The COORDINATE
+   boundary above is untouched and must never move. */
+
+test('a city survives only when the record is precise enough to support it', () => {
+  const p = geo.placeFromRecord(US_PRECISE);   // accuracy_radius 20 km
+  assert.equal(p.city, 'Houston');
+  assert.equal(p.cityWithheld, null);
+});
+
+test('THE CITY GATE IS TIGHTER THAN THE STATE GATE, because the claim is smaller', () => {
+  /* 120 km is sound evidence for a state — it is inside one. It is worthless
+     evidence for a city: that far from Houston reaches most of east Texas, and
+     naming a city would be confidently and specifically wrong. */
+  const coarse = geo.placeFromRecord({
+    ...US_PRECISE,
+    location: { accuracy_radius: 120, latitude: 29.76, longitude: -95.36 },
+  });
+  assert.equal(coarse.region, 'TX', 'the state still clears its own gate');
+  assert.equal(coarse.city, null, 'the city does not');
+  assert.equal(coarse.cityWithheld, 'radius');
+  assert.ok(!JSON.stringify(coarse).includes('Houston'), 'and the name does not leak anyway');
+});
+
+test('a record with no state gets no city, because it was already too vague', () => {
+  const centroid = geo.placeFromRecord({ ...US_CENTROID, city: { names: { en: 'Wichita' } } });
+  assert.equal(centroid.region, null);
+  assert.equal(centroid.city, null, 'a city from a centroid is worth less than the state it failed');
+  assert.ok(!JSON.stringify(centroid).includes('Wichita'));
+});
+
+test('outside the US there is no city, exactly as there is no state', () => {
+  const p = geo.placeFromRecord({
+    country: { iso_code: 'GB' },
+    city: { names: { en: 'London' } },
+    location: { accuracy_radius: 5 },
+  });
+  assert.equal(p.city, null);
+  assert.equal(p.cityWithheld, 'non-us');
+  assert.ok(!JSON.stringify(p).includes('London'),
+    'sub-national accuracy outside the US is materially weaker, however small the radius');
+});
+
+test('a database that cannot report its own accuracy publishes no city', () => {
+  // DB-IP City Lite ships no accuracy_radius at all. Without it the centroid
+  // guard cannot run, so the state is already withheld — and so is the city.
+  const p = geo.placeFromRecord({
+    country: { iso_code: 'US' },
+    subdivisions: [{ iso_code: 'TX' }],
+    city: { names: { en: 'Houston' } },
+    location: { latitude: 29.76, longitude: -95.36 },
+  });
+  assert.equal(p.region, null);
+  assert.equal(p.city, null);
+  assert.equal(p.cityWithheld, 'no-accuracy-radius');
+});
+
+test('a precise record with no city name says so rather than inventing one', () => {
+  const p = geo.placeFromRecord({
+    country: { iso_code: 'US' },
+    subdivisions: [{ iso_code: 'TX' }],
+    location: { accuracy_radius: 10 },
+  });
+  assert.equal(p.region, 'TX');
+  assert.equal(p.city, null);
+  assert.equal(p.cityWithheld, 'no-city');
+});
+
+test('THE BOUNDARY THAT DOES NOT MOVE: still no coordinates, city or not', () => {
   const p = geo.placeFromRecord(US_PRECISE);
-  assert.ok(!JSON.stringify(p).includes('Houston'));
+  const json = JSON.stringify(p);
+  assert.ok(!/latitude|longitude/i.test(json), `coordinates leaked: ${json}`);
+  assert.ok(!json.includes('29.76') && !json.includes('-95.36'), `a coordinate value leaked: ${json}`);
 });
 
 // ── Misses are distinguishable from each other ──────────────────────────────

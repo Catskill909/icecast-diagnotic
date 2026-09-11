@@ -384,7 +384,7 @@ Ordered by value per unit of work.
 | 1 | ✅ **SHIPPED 2026-09-11. Returning vs new listeners** | "3,400 people listened this week; 1,900 also listened last week." Loyalty and churn — the retention question funders and underwriters actually ask, and the one figure a competitor cannot fake | **Nothing new**, as predicted: `GROUP BY device` over two windows, intersected |
 | 2 | ✅ **SHIPPED 2026-09-11. Player and device trends over time** | "Smart speakers went from 8% to 22% this year." Where to spend engineering effort, and evidence for a platform conversation | **Nothing new**, as predicted. `kind` was not stored either, and did not need to be — it is recovered from `family` through the same `PLAYER_RULES` table that classified the agent |
 | 3 | ✅ **SHIPPED 2026-09-11. Time of day by region** | Drive-time in New York against drive-time in Los Angeles — three time zones on one network, previously flattened into one curve | **The one that DID need storage.** `place` and the timestamp are both stored, but the hour is compacted away after 48h, so a `region_hours` aggregate is frozen as the hour tier folds |
-| 4 | **City, for US listeners** | A licence covers a METRO; the map counts a whole STATE. This is the difference between "Texas" and "Greater Houston", i.e. between an overstated figure and the real in-footprint reach | One more field in the `place` token. GeoLite2 City is already downloaded and already read |
+| 4 | ✅ **SHIPPED 2026-09-11. City, for US listeners** | A licence covers a METRO; the map counts a whole STATE. This is the difference between "Texas" and "Greater Houston", i.e. between an overstated figure and the real in-footprint reach | One more field in the `place` token. GeoLite2 City is already downloaded and already read |
 | 5 | **Session length over time** | Whether people are staying longer, not just arriving more often. Currently live-only, so it cannot be trended at all | Storing `connectedSec`, which is already fetched and discarded |
 
 **1 shipped 2026-09-11**, as two tiles — *Came back* and *First time* — rather
@@ -434,10 +434,32 @@ So the rule for anything finer than the surviving tier is: not "refuse" and not
 That decision has to be made BEFORE the data ages out — it cannot be backfilled,
 and the record begins the day it ships.
 
-Remaining: **4 (city)** and **5 (session length)**. Both still need a deliberate
-decision before building — 4 because city accuracy is materially weaker than
-state and the centroid gate must be applied at that resolution too, 5 because it
-is the only item that increases what is collected per listener.
+**4 shipped 2026-09-11**, and the caution above was the right one: the centroid
+gate is applied at city resolution with a TIGHTER radius
+(`GEOIP_MAX_CITY_ACCURACY_RADIUS_KM`, 50 km against the state's 200). 200 km is
+sound evidence for a state — it is inside one — and worthless for a city, since
+that far from Houston reaches Austin. A record clearing the state gate but not
+the city one keeps its state and loses only its city, which is the correct
+degradation: a place named at the resolution the evidence supports.
+
+This also moved a boundary that `test/geo.test.js` explicitly defended
+("no city name survives a lookup"), which was right while city was out of scope.
+The COORDINATE boundary is untouched and must never move — a dot-per-listener
+map remains impossible to build downstream by accident, and §3 of
+`ADMIN-ACCESS-SCOPE.md` still rules it out. Counts per metro are not pins.
+
+Deliberately NOT built: an in-market share computed against a station's own
+metro. It needs a per-station metro setting whose value must match the geo
+database's city string exactly, and a near-miss there produces a confident wrong
+share rather than a visible error. The metro LIST beside the state figure gives
+a manager the same answer without that fragility — "412 of Texas's 700 are in
+Houston" — and can be promoted to a computed share later if it earns it.
+
+Remaining: **5 (session length)**, the only item that increases what is
+collected per listener. Store the six DURATION_BUCKETS per day, frozen as the
+hour tier compacts, exactly as `region_hours` is — six integers a day rather
+than a duration per listener, which sidesteps the volume question in §4 of
+`ADMIN-ACCESS-SCOPE.md` entirely.
 
 **Think hardest about 4.** It is the one that materially improves the number the
 station cares about, and also the one where the database is least trustworthy —

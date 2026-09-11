@@ -284,7 +284,16 @@ function placeToken(row, cls, geo = NO_GEO) {
 
   const pl = lookupPlace(row.ip);
   if (!pl.resolved || !pl.countryCode) return '?';
-  return pl.countryCode === 'US' ? `US:${pl.region || ''}` : `${pl.countryCode}:`;
+  if (pl.countryCode !== 'US') return `${pl.countryCode}:`;
+  /* Three segments now: 'US:TX:Houston'. Readers that split for country and
+     state are unaffected — they take the first two and ignore the rest — and
+     MAX(place) still prefers the more informative token, because a longer
+     string sharing a prefix sorts above the shorter one.
+
+     A colon in a city name would create a fourth segment and silently shift
+     every reader's parse, so it is replaced rather than escaped. */
+  const city = pl.city ? String(pl.city).replace(/:/g, ' ').trim() : '';
+  return `US:${pl.region || ''}${city ? `:${city}` : ''}`;
 }
 
 /**
@@ -393,6 +402,12 @@ const NO_GEO = {
 function emptyPlaces() {
   return {
     countries: {}, usStates: {},
+    /* Keyed "TX/Houston", never a bare city name: there is a Houston in
+       Alaska, a Paris in Texas and a Portland in two states at once, and a
+       merged list of bare names would silently add them together. */
+    usCities: {},
+    // Located, US, precise enough for a state, but not for a city.
+    cityWithheld: 0,
     placed: 0, relays: 0, unplaced: 0,
     // States withheld because the record could not clear the centroid guard.
     stateWithheld: 0,
@@ -487,8 +502,15 @@ function aggregate(rows, { mount = '', host = '', fetchedAt = new Date().toISOSt
         places.placed += 1;
         tally(places.countries, pl.countryCode);
         if (pl.countryCode === 'US') {
-          if (pl.region) tally(places.usStates, pl.region);
-          else {
+          if (pl.region) {
+            tally(places.usStates, pl.region);
+            /* A licence covers a METRO, and the state map counts a whole state,
+               so this is what tells Greater Houston from the rest of Texas.
+               Published only when the record cleared the tighter city gate;
+               otherwise the state stands alone and the miss is counted. */
+            if (pl.city) tally(places.usCities, `${pl.region}/${pl.city}`);
+            else places.cityWithheld += 1;
+          } else {
             places.stateWithheld += 1;
             tally(places.reasons, pl.regionWithheld || 'no-region');
           }
@@ -616,12 +638,12 @@ function mergeAggregates(parts, { mount = '', host = '', fetchedAt = new Date().
     /* Places merge by simple addition: they are COUNTS of connections, and the
        same listener appearing on two mounts of one channel is two connections
        in both the numerator and the denominator, so the shares stay right. */
-    for (const key of ['countries', 'usStates', 'reasons']) {
+    for (const key of ['countries', 'usStates', 'usCities', 'reasons']) {
       for (const [k, v] of Object.entries(p.places?.[key] || {})) {
         out.places[key][k] = (out.places[key][k] || 0) + v;
       }
     }
-    for (const key of ['placed', 'relays', 'unplaced', 'stateWithheld']) {
+    for (const key of ['placed', 'relays', 'unplaced', 'stateWithheld', 'cityWithheld']) {
       out.places[key] += p.places?.[key] || 0;
     }
     if (p.proxied?.networkCoverage != null) {

@@ -1504,6 +1504,52 @@
           : 'No US states located in this window.'
       }</div>`;
 
+    /* METRO, which is the resolution a licence actually covers.
+
+       The state map above counts everyone in Texas, so it reports Greater
+       Houston's audience as the state's — the in-market figure reads high and
+       "outside our signal area", the number that justifies streaming to a
+       board, reads low. This is the list that tells them apart.
+
+       Shares are of LOCATED US listeners, the same denominator the in-market
+       tile uses, so the two can be read together. */
+    const cityRows = Object.entries(places.usCities || {})
+      .map(([key, n]) => {
+        const [st, ...rest] = key.split('/');
+        return { st, name: rest.join('/'), n };
+      })
+      .filter((c) => c.name && c.n > 0)
+      .sort((a, b) => b.n - a.n)
+      .slice(0, 8);
+
+    const usPlaced = Object.entries(places.usStates || {}).reduce((a, [, n]) => a + n, 0);
+    const cityBlock = cityRows.length
+      ? `<div class="deep-sub">Metro area</div>
+         ${cityRows.map((c) => {
+        const share = usPlaced ? Math.round((c.n / usPlaced) * 100) : 0;
+        return `
+           <div class="deep-bar-row">
+             <div class="deep-bar-label">${esc(c.name)}, ${esc(c.st)}</div>
+             <div class="deep-bar-track"><div class="deep-bar-fill" style="width:${share}%"></div></div>
+             <div class="deep-bar-val">${c.n}<span class="deep-bar-pct">${share}%</span></div>
+           </div>`;
+      }).join('')}
+         <div class="geo-note-line">Share of located US ${esc(unit.many)}, the same
+           denominator as the in-market figure above &mdash; so a metro can be read
+           against its state. ${places.cityWithheld
+    ? `<strong>${places.cityWithheld}</strong> more ${places.cityWithheld === 1 ? 'was' : 'were'}
+              precise enough to place in a state but not in a metro, and ${places.cityWithheld === 1 ? 'is' : 'are'}
+              counted in the state map and not here.`
+    : ''}</div>`
+      : (places.cityWithheld
+        ? `<div class="deep-sub">Metro area</div>
+           <div class="geo-note-line">No ${esc(unit.many)} could be placed to a metro in
+             this selection. ${places.cityWithheld} were precise enough for a state but not
+             for a city &mdash; a metro is a much smaller claim, so it takes a much better
+             record, and naming one on weaker evidence would put listeners in the wrong
+             city.</div>`
+        : '');
+
     const countryBlock = countryRows.length
       ? `<div class="deep-sub">Country</div>
          ${countryRows.map((c) => `
@@ -1518,7 +1564,7 @@
       ? `<div class="deep-attribution">${(d.attribution || []).map((a) => `<a href="${esc(a.url)}" target="_blank" rel="noopener noreferrer">${esc(a.text)}</a>`).join(' \u00b7 ')}</div>`
       : '';
 
-    panel.innerHTML = toggle + notice + marketBlock + mapBlock + foot + countryBlock + attribution;
+    panel.innerHTML = toggle + notice + marketBlock + mapBlock + foot + cityBlock + countryBlock + attribution;
 
     // NAME THE CLOCK. This section is the one panel below the range selector
     // that does not simply obey it, so a reader comparing it with the figures

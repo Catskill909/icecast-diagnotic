@@ -316,6 +316,20 @@
          a hosting company geolocates to the hosting company, so counting them would report
          a server farm as an audience. They are shown as excluded rather than hidden, so
          the number is visible.`,
+        `<strong>The metro list is the number a licence actually covers.</strong> A
+         station's licence covers a city and its surroundings, but the map counts a
+         whole state \u2014 so "in Texas" includes Dallas, and reads higher than the
+         audience the transmitter reaches. The metro list under the map uses the same
+         denominator, so the two can be read together: <em>412 of Texas's 700 are in
+         Houston</em> is the in-footprint figure, and the rest is the audience
+         streaming adds.`,
+        `<strong>A metro needs much better evidence than a state, so fewer listeners
+         get one.</strong> Location databases report how sure they are, and an answer
+         good to within 200 km is genuinely inside one state \u2014 but 200 km from
+         Houston reaches Austin, so the same answer is useless for naming a city.
+         Listeners whose record is precise enough for a state but not a metro stay in
+         the state map and are reported as such, rather than being quietly assigned to
+         the nearest city.`,
         `<strong>Some listeners are counted without a state.</strong> Location databases
          report how sure they are, and when an answer is too vague it is a regional
          centre rather than a real place \u2014 which would invent listeners somewhere

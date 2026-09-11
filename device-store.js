@@ -344,9 +344,9 @@ class DeviceStore {
       return {
         devices: 0, players: {}, platforms: {}, coveredFrom: null, partial: true,
         places: {
-          countries: {}, usStates: {},
-          placed: 0, relays: 0, unplaced: 0, stateWithheld: 0, unrecorded: 0,
-          reasons: {}, coveredFrom: null,
+          countries: {}, usStates: {}, usCities: {},
+          placed: 0, relays: 0, unplaced: 0, stateWithheld: 0, cityWithheld: 0,
+          unrecorded: 0, reasons: {}, coveredFrom: null,
         },
       };
     }
@@ -361,6 +361,9 @@ class DeviceStore {
        the two views cannot drift apart in how they count. */
     const places = {
       countries: {}, usStates: {},
+      // "TX/Houston" — a bare city name would merge the Houston in Alaska.
+      usCities: {},
+      cityWithheld: 0,
       placed: 0, relays: 0, unplaced: 0, stateWithheld: 0,
       reasons: {},
       // Devices carrying no geography at all: seen before the column existed.
@@ -387,13 +390,22 @@ class DeviceStore {
       if (place === '-') { places.relays += 1; continue; }
       if (place === '?') { places.unplaced += 1; places.reasons.unknown = (places.reasons.unknown || 0) + 1; continue; }
 
-      const [country, region] = place.split(':');
+      // 'US:TX:Houston'. Tokens written before the city existed have two
+      // segments and simply yield no city, which is exactly right for them.
+      const [country, region, city] = place.split(':');
       if (!country) { places.unplaced += 1; continue; }
       places.placed += 1;
       places.countries[country] = (places.countries[country] || 0) + 1;
       if (country === 'US') {
-        if (region) places.usStates[region] = (places.usStates[region] || 0) + 1;
-        else {
+        if (region) {
+          places.usStates[region] = (places.usStates[region] || 0) + 1;
+          if (city) {
+            const key = `${region}/${city}`;
+            places.usCities[key] = (places.usCities[key] || 0) + 1;
+          } else {
+            places.cityWithheld += 1;
+          }
+        } else {
           places.stateWithheld += 1;
           places.reasons['no-region'] = (places.reasons['no-region'] || 0) + 1;
         }

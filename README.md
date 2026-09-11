@@ -509,8 +509,9 @@ outside the signal area".
 
 | Rule | Why |
 |---|---|
-| **US → state; everywhere else → country** | Sub-national accuracy outside the US, Canada, Western Europe and Australia is materially weaker, and a wrong region is worse than an admitted country |
+| **US → state, and metro where the record supports it; everywhere else → country** | Sub-national accuracy outside the US, Canada, Western Europe and Australia is materially weaker, and a wrong region is worse than an admitted country |
 | **A state is published only if `accuracy_radius` clears the gate** | A wide radius is a region **centroid**, not a place. Ungated, it manufactures listeners where nobody lives |
+| **A metro needs a TIGHTER gate than a state** (`GEOIP_MAX_CITY_ACCURACY_RADIUS_KM`, default 50 km) | 200 km is sound evidence for a state — it is inside one. It is worthless for a city: 200 km from Houston reaches Austin. A record clearing the state gate but not this one **keeps its state and loses only its city** |
 | **Relays are excluded from geography** | A datacenter address geolocates to the datacenter. On production this is 41 connections that would otherwise report as an audience in Virginia |
 | **In-market share is measured against US-located connections** | Any other denominator falls when the *database* gets worse, so a data-quality problem reads as an audience decline |
 
@@ -541,6 +542,16 @@ not from a date, so there is no banner for anyone to remember to delete.
 **The in-market figure is a STATE, not a coverage area.** KPFT's licence covers
 Greater Houston; this counts everyone in Texas, so it overstates the audience
 inside the footprint and is labelled as a state share.
+
+**The METRO list beside it is what corrects that.** Shares use the same
+denominator as the in-market tile — located US listeners — so a metro can be
+read directly against its state: *"412 of Texas's 700 are in Houston"* is the
+in-footprint figure the state share cannot give. Listeners precise enough for a
+state but not a metro are counted in the state map and reported as withheld, not
+dropped and not guessed into the nearest city.
+
+Cities are keyed `TX/Houston`, never by bare name: there is a Houston in Alaska,
+a Paris in Texas, and a Portland in two states at once.
 
 **The state is per station, set in the admin panel.** Each station carries its
 own `region`, validated against the 50 states plus DC and editable on the
@@ -1062,6 +1073,11 @@ ICECAST_ADMIN_HOST=              # defaults to the host in ICECAST_STATUS_URL
 GEOIP_ASN_DB=                    # identifies relays and aggregators (5.4)
 GEOIP_CITY_DB=                   # in-market share and the map (5.9, not built)
 GEOIP_MAX_ACCURACY_RADIUS_KM=200 # wider than this is a CENTROID, not a place
+GEOIP_MAX_CITY_ACCURACY_RADIUS_KM=50
+                                 # TIGHTER, because a metro is a smaller claim.
+                                 # 200 km is inside one state but spans several
+                                 # cities, so a record that clears the state gate
+                                 # keeps its state and loses only its city.
 
 # Optional JSON array replacing the three default streams. Include `mounts` to
 # list a channel every bitrate variant, so listener counts cover the whole

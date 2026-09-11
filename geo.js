@@ -56,6 +56,28 @@ const MAX_ACCURACY_RADIUS_KM = Math.max(
   parseInt(process.env.GEOIP_MAX_ACCURACY_RADIUS_KM, 10) || 200,
 );
 
+/* A TIGHTER GATE FOR THE CITY, because the claim is smaller.
+
+   A radius of 200 km is sound evidence for a STATE — it is inside one, usually.
+   It is worthless evidence for a CITY: 200 km from Houston reaches Austin, and
+   a map that answered "Houston" for a listener in Austin would be confidently,
+   specifically wrong in a way nobody could see. 50 km is about a metropolitan
+   area, which is the resolution a licence actually covers and therefore the
+   only city-level claim worth publishing.
+
+   WHY THIS MATTERS TO A STATION. A licence covers a METRO; the state map counts
+   everyone in Texas, so the in-market figure reads high and the "outside our
+   signal area" figure — the one that justifies streaming to a board — reads
+   low. Cities are what tell Greater Houston from the rest of Texas.
+
+   A record that clears the state gate but not this one keeps its state and
+   loses only its city, which is the correct degradation: a real place named at
+   the resolution the evidence supports. */
+const MAX_CITY_ACCURACY_RADIUS_KM = Math.max(
+  1,
+  parseInt(process.env.GEOIP_MAX_CITY_ACCURACY_RADIUS_KM, 10) || 50,
+);
+
 // ── Private and non-routable addresses ──────────────────────────────────────
 
 /* These are not listeners in a place. An address from RFC1918 or loopback
@@ -401,8 +423,8 @@ function lookupNetwork(ip) {
  */
 function placeMiss(reason) {
   return {
-    resolved: false, reason, countryCode: null, region: null,
-    isEU: false, accuracyRadius: null, regionWithheld: null,
+    resolved: false, reason, countryCode: null, region: null, city: null,
+    isEU: false, accuracyRadius: null, regionWithheld: null, cityWithheld: null,
   };
 }
 
@@ -451,8 +473,27 @@ function placeFromRecord(rec) {
     }
   }
 
+  /* The city, only when the record can support the claim and only inside the
+     US — the same rule the state follows, for the same reason. `cityWithheld`
+     says WHY there is none, so an empty city list is never mistaken for an
+     audience that lives nowhere in particular. */
+  let city = null;
+  let cityWithheld = null;
+  if (countryCode !== 'US') {
+    cityWithheld = 'non-us';
+  } else if (!region) {
+    // No state means the record was already too vague, or the database cannot
+    // report its own accuracy. A city from it would be worth less, not more.
+    cityWithheld = regionWithheld || 'no-region';
+  } else {
+    const name = String(rec.city?.names?.en || '').trim();
+    if (!name) cityWithheld = 'no-city';
+    else if (accuracyRadius > MAX_CITY_ACCURACY_RADIUS_KM) cityWithheld = 'radius';
+    else city = name;
+  }
+
   return {
-    resolved: true, reason: null, countryCode: String(countryCode), region, isEU, accuracyRadius,
+    resolved: true, reason: null, countryCode: String(countryCode), region, city, cityWithheld, isEU, accuracyRadius,
     // WHY there is no state, when there is none. A map that is empty because
     // the wrong database is installed must not look like a map of an audience
     // that happens to be outside the US.
@@ -485,5 +526,5 @@ module.exports = {
   networkFromRecord,
   placeFromRecord,
   reset,
-  MAX_ACCURACY_RADIUS_KM,
+  MAX_ACCURACY_RADIUS_KM, MAX_CITY_ACCURACY_RADIUS_KM,
 };
