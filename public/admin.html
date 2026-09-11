@@ -84,6 +84,45 @@
     <div id="stations" class="stations">Loading…</div>
   </section>
 
+  <!-- Backup and move.
+       Deliberately the LAST panel and deliberately plain: it is used rarely,
+       by one person, and the cost of a mistaken import is the whole record. -->
+  <section class="panel">
+    <h2>Backup &amp; move</h2>
+    <p class="hint">
+      One file holds everything this monitor knows: the stations, the incident
+      record, the listener history and the settings. Use it to keep a backup, or
+      to move the monitor to a different server.
+    </p>
+
+    <div class="backup-row">
+      <div>
+        <h3>Download a backup</h3>
+        <p class="hint">
+          Nothing on the server changes. Keep the file somewhere safe &mdash; it
+          is the only copy of the incident history if the server is lost.
+        </p>
+      </div>
+      <button id="export-btn" class="primary">Download backup</button>
+    </div>
+    <div class="msg" id="export-msg"></div>
+
+    <div class="backup-row">
+      <div>
+        <h3>Restore from a backup</h3>
+        <p class="hint">
+          <strong>This replaces everything currently on this server.</strong>
+          You will see exactly what is in the file before anything is changed,
+          and the current data is renamed aside rather than deleted.
+        </p>
+      </div>
+      <input type="file" id="import-file" accept=".gz,.json" hidden>
+      <button id="import-pick" class="ghost">Choose a backup file…</button>
+    </div>
+    <div class="msg" id="import-msg"></div>
+    <div id="import-preview" class="import-preview" hidden></div>
+  </section>
+
 </div>
 
 <!-- Confirmation. Destructive actions state what stops, what is kept, and how

@@ -1394,6 +1394,148 @@
     loadStations();
   }
 
+  /* ── Backup and move ──────────────────────────────────────────────────────
+     Rare, done by one person, and the cost of getting it wrong is the whole
+     record. So: plain words, the file's contents shown before anything is
+     touched, and the destructive step behind the same confirmation every other
+     destructive action here uses. */
+
+  const fmtBytes = (n) => (n > 1024 * 1024
+    ? `${(n / 1024 / 1024).toFixed(1)} MB`
+    : `${Math.max(1, Math.round(n / 1024))} KB`);
+
+  $('export-btn').addEventListener('click', async () => {
+    const btn = $('export-btn');
+    const label = btn.textContent;
+    btn.disabled = true; btn.textContent = 'Preparing…';
+    clear($('export-msg'));
+    try {
+      const r = await fetch('/api/export');
+      if (r.status === 401) { location.href = '/login.html?next=/admin.html'; return; }
+      if (!r.ok) {
+        const body = await r.json().catch(() => ({}));
+        return show($('export-msg'), body.error || `Could not build the backup (${r.status}).`);
+      }
+      const blob = await r.blob();
+      /* The filename comes from the server so the host and date are in it —
+         three backups in a Downloads folder need telling apart. */
+      const name = (r.headers.get('content-disposition') || '').match(/filename="([^"]+)"/)?.[1]
+        || 'icecast-monitor-backup.json.gz';
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url; a.download = name;
+      document.body.appendChild(a); a.click(); a.remove();
+      URL.revokeObjectURL(url);
+
+      /* Named explicitly, because a backup missing it looks identical to one
+         that has it until the day it is restored. */
+      const salted = r.headers.get('x-device-salt-included') === 'yes';
+      show($('export-msg'),
+        `Saved ${name} (${fmtBytes(blob.size)}).` + (salted
+          ? ' Listener history will carry across intact.'
+          : ' NOTE: this deployment sets DEVICE_HASH_SALT itself, so that value is not in the file — set the same one on any server you restore to.'),
+        salted ? 'ok' : 'err');
+    } catch (err) {
+      show($('export-msg'), `Could not build the backup: ${err.message}`);
+    } finally {
+      btn.disabled = false; btn.textContent = label;
+    }
+  });
+
+  /* base64 in chunks. A one-shot String.fromCharCode over a multi-megabyte
+     array overflows the argument stack, which presents as a silent failure on
+     exactly the large backups that matter most. */
+  function toBase64(buffer) {
+    const bytes = new Uint8Array(buffer);
+    let binary = '';
+    for (let i = 0; i < bytes.length; i += 0x8000) {
+      binary += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
+    }
+    return btoa(binary);
+  }
+
+  $('import-pick').addEventListener('click', () => $('import-file').click());
+
+  $('import-file').addEventListener('change', async (e) => {
+    const file = e.target.files && e.target.files[0];
+    e.target.value = '';                    // so the same file can be picked twice
+    if (!file) return;
+    clear($('import-msg'));
+    $('import-preview').hidden = true;
+    show($('import-msg'), `Reading ${file.name}…`, 'warn');
+
+    let b64;
+    try {
+      b64 = toBase64(await file.arrayBuffer());
+    } catch (err) {
+      return show($('import-msg'), `Could not read that file: ${err.message}`);
+    }
+
+    const pre = await api('/api/import/preview', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ bundle: b64 }),
+    });
+    if (!pre) return;
+    if (!pre.ok && pre.status !== 200) {
+      return show($('import-msg'), failureText(pre, 'read that backup'));
+    }
+    const info = pre.body;
+    if (!info.ok) {
+      return showList($('import-msg'), info.errors || ['The file could not be used.'],
+        'This backup cannot be restored:');
+    }
+
+    const m = info.manifest || {};
+    const c = m.counts || {};
+    const made = m.createdAt ? new Date(m.createdAt).toLocaleString('en-US') : 'unknown';
+    const willReplace = (info.target?.files || []).length;
+
+    $('import-preview').hidden = false;
+    $('import-preview').innerHTML = `
+      <h3>What is in this file</h3>
+      <ul>
+        <li><strong>${esc(String(c.stations ?? '?'))}</strong> station(s),
+            <strong>${esc(String(c.channels ?? '?'))}</strong> channel(s)</li>
+        <li><strong>${esc(String((c.events ?? 0).toLocaleString()))}</strong> incident record(s)</li>
+        <li><strong>${esc(String((c.deviceRows ?? 0).toLocaleString()))}</strong> listener record(s)</li>
+        <li>Made ${esc(made)}${m.sourceHost ? ` on ${esc(m.sourceHost)}` : ''}</li>
+      </ul>
+      <p class="hint">${esc(m.deviceSaltNote || '')}</p>
+      ${(info.warnings || []).length
+    ? `<p class="hint"><strong>Before you restore:</strong></p><ul>${
+      info.warnings.map((w) => `<li>${esc(w)}</li>`).join('')}</ul>`
+    : ''}
+      <button id="import-go" class="confirm-go">Replace everything with this backup</button>`;
+    clear($('import-msg'));
+
+    $('import-go').addEventListener('click', async () => {
+      const ok = await confirmAction({
+        title: 'Replace all data on this server?',
+        body: willReplace
+          ? `Everything currently on this server is replaced by the contents of ${esc(file.name)}.`
+          : `This server has no data yet. It will be filled from ${esc(file.name)}.`,
+        keep: 'The current files are renamed and left on the server, so this can be undone by hand. '
+          + 'Passwords and settings held outside the data folder are untouched.',
+        confirmLabel: 'Replace',
+      });
+      if (!ok) return;
+
+      show($('import-msg'), 'Restoring…', 'warn');
+      const r = await api('/api/import', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ bundle: b64, replace: true }),
+      });
+      if (!r) return;
+      if (!r.ok) return show($('import-msg'), failureText(r, 'restore that backup'));
+      $('import-preview').hidden = true;
+      show($('import-msg'),
+        'Restored. RESTART THE APP NOW — until it restarts it is still running the old data in memory. '
+        + 'The previous files were renamed and kept.', 'ok');
+    });
+  });
+
   $('logout').addEventListener('click', async () => {
     await fetch('/api/logout', { method: 'POST' });
     location.href = '/login.html';

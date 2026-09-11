@@ -1,5 +1,44 @@
 # Handoff — Icecast Monitor
 
+## 2026-09-11 — Backup & move, in the admin panel
+
+Export and import now have a UI, last on `/admin.html` because it is used rarely
+and is the one control in the product that can destroy the record.
+
+The shape is deliberate. Choosing a file does NOT restore it: the file is read,
+described — stations, channels, incidents, listener records, when and where it
+was made — and only then is a Replace button rendered, behind the same
+confirmation every other destructive action here uses. That confirmation states
+what SURVIVES (the displaced files are renamed and kept; anything outside the
+data folder is untouched) rather than asking a question the reader cannot answer.
+
+The export says out loud when it cannot carry the salt. A deployment that sets
+DEVICE_HASH_SALT itself keeps the salt outside the volume, so the file looks
+identical to a complete one until the day it is restored — that case is reported
+in the error style, naming the variable.
+
+Two browser-specific traps handled: base64 is chunked at 0x8000, because a
+one-shot `String.fromCharCode` over a multi-megabyte array overflows the
+argument stack and fails silently on exactly the large backups that matter; and
+the file input is cleared after each pick, or choosing the same file twice fires
+no change event and the panel appears dead.
+
+Verification, Node 24.20.0: full suite 863/863. New `test/admin-backup-ui.test.js`
+(11) pins the ordering (preview before import, confirmation before the request),
+the wording about what survives and the restart, the salt warning, the chunked
+base64, and that the panel is last on the page. Driven through a real browser
+path against a running server: login, panel present, export with
+`X-Device-Salt-Included: yes`, preview returning counts (86 device rows), and
+import refused without `replace: true`.
+
+Status: local and tested, NOT committed at the time of writing.
+
+Next: the owner asked what OTHER exports would serve station management. The two
+existing ones (audience CSV, history JSON) are data dumps for a spreadsheet.
+Nothing produces a DOCUMENT — see the proposal in the next session.
+
+---
+
 ## 2026-09-11 — Phase 8a/8b built: export and import
 
 One gzipped JSON bundle carries the deployment's whole state — configuration,

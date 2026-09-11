@@ -330,3 +330,62 @@ label input { margin-top: 6px; }
 .tz-select:focus { border-color: var(--primary); box-shadow: 0 0 0 3px rgba(124,106,239,.18); }
 .tz-select optgroup { background: var(--surface-1); color: var(--text-muted); font-style: normal; }
 .tz-select option { background: var(--surface-1); color: var(--text-primary); padding: 6px; }
+
+/* ── Backup & move ───────────────────────────────────────────────────────────
+   Used rarely, by one person, where a mistake costs the whole record. Styled
+   plainly on purpose: nothing here should invite a casual click, and the
+   restore path is a quiet outline until the file has been read and described. */
+.backup-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 20px;
+  padding: 14px 0;
+  border-top: 1px solid var(--surface-3);
+}
+
+.backup-row:first-of-type { border-top: none; }
+
+.backup-row h3 {
+  margin: 0 0 4px;
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.backup-row .hint { margin: 0; max-width: 56ch; }
+
+.backup-row button { flex-shrink: 0; }
+
+/* What is in the file, shown BEFORE anything is replaced. The whole point of
+   the panel is that this appears first. */
+.import-preview {
+  margin-top: 12px;
+  padding: 14px 16px;
+  border: 1px solid var(--surface-3);
+  border-radius: 8px;
+  background: var(--surface-2);
+}
+
+.import-preview h3 {
+  margin: 0 0 8px;
+  font-size: 13px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-tertiary);
+}
+
+.import-preview ul {
+  margin: 0 0 10px;
+  padding-left: 18px;
+  font-size: 13px;
+  line-height: 1.7;
+}
+
+.import-preview .hint { margin: 0 0 10px; }
+
+.import-preview button { margin-top: 4px; }
+
+@media (max-width: 620px) {
+  .backup-row { flex-direction: column; align-items: stretch; gap: 10px; }
+  .backup-row button { width: 100%; }
+}
