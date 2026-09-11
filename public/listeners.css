@@ -1390,3 +1390,24 @@
   vertical-align: -2px;
   margin-left: 4px;
 }
+
+/* ── The remainder of a truncated list ───────────────────────────────────────
+   Every ranked list on this page shows a top N. Silently dropping the rest made
+   a real figure disappear — "iOS app is not showing for KPFK" — and left the
+   visible percentages short of 100% with nothing to explain the gap.
+
+   Muted, because it is not a category: it is the answer to "is that all of
+   them", which the reader should be able to get without counting rows. */
+.deep-bar-rest .deep-bar-label,
+.deep-bar-rest .deep-bar-val {
+  color: var(--text-tertiary);
+  font-style: italic;
+}
+
+.deep-bar-rest .deep-bar-fill { background: var(--surface-3); }
+
+.rh-rest .rh-name,
+.rh-rest .rh-total {
+  color: var(--text-tertiary);
+  font-style: italic;
+}

@@ -115,11 +115,24 @@ test('it states that this measures when listening happens, not how many people',
   assert.match(text(html), /not a count of people/);
 });
 
-test('at most eight regions are drawn, so the panel stays readable', () => {
+test('at most eight regions are drawn, and the rest are COUNTED not dropped', () => {
+  /* A list that silently truncates makes a real figure disappear. It happened
+     on the Player/App list — "iOS app is not showing for KPFK" — where the
+     tenth entry simply did not exist and the visible percentages fell short of
+     100% with nothing to explain the gap. */
   const many = Array.from({ length: 20 }, (_, i) => region(`US:R${i}`, curve(i % 24)));
   const html = render({ timeZone: 'UTC', regions: many });
+
   const rows = html.split('rh-row').length - 1;
-  assert.equal(rows, 9, 'eight regions plus the header');
+  assert.equal(rows, 10, 'eight regions, the header, and the remainder');
+  assert.match(html, /rh-rest/, 'the remainder must be drawn');
+  assert.match(text(html), /12 more/, 'and must say how many were left out');
+});
+
+test('no remainder row when nothing was left out', () => {
+  const few = Array.from({ length: 3 }, (_, i) => region(`US:R${i}`, curve(i)));
+  const html = render({ timeZone: 'UTC', regions: few });
+  assert.doesNotMatch(html, /rh-rest/, 'a complete list must not imply there is more');
 });
 
 test('a region with a flat curve still renders and names one hour', () => {

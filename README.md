@@ -447,6 +447,23 @@ does not change shape depending on which station is selected. The explanation is
 given **once**, at the top of the gated section; repeating it per panel is a wall
 of apologies that a reader learns to scroll past.
 
+### Ranked lists say when they are truncated
+
+Player/app, platform, metro and country are all **top-N lists**. They used to
+drop the remainder silently, which produced a real report: *"iOS app is not
+showing for KPFK — the other stations have it."* It was there, at tenth, on a
+list that showed nine.
+
+Two things were wrong, and only one of them was the missing row. The
+percentages are shares of the whole audience, so the visible rows fell short of
+100% with nothing to explain the gap — which reads as broken arithmetic rather
+than a truncated list.
+
+Every such list now ends with a muted remainder row — *"3 more · 41 · 4%"* — so
+the column always sums to the total, and the player list shows twelve rather
+than nine, because a category a station would act on should be visible without
+arithmetic.
+
 ### Returning and new listeners
 
 **Two figures, not one ratio.** *Came back* is retention; *First time* is

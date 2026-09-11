@@ -749,10 +749,37 @@
     return m ? `${h}h ${m}m` : `${h}h`;
   }
 
+  /* A TRUNCATED LIST HAS TO SAY SO.
+
+     This showed the top nine players and silently dropped the rest, so a
+     station whose audience uses ten kinds of app saw the tenth simply not
+     exist — reported as "iOS app is not showing for KPFK, but the other
+     stations have it". It is the same failure this page has had to fix
+     repeatedly: an absent figure is indistinguishable from a zero one.
+
+     It also breaks the arithmetic on screen. The percentages are shares of the
+     whole audience, so a reader adding the visible rows finds they fall short
+     of 100% with nothing to explain the gap.
+
+     So the remainder is drawn as its own row: how many were left out, and how
+     many listeners they account for between them. */
+  function moreRow(hiddenCount, hiddenListeners, total) {
+    if (hiddenCount <= 0) return '';
+    const pct = total ? Math.round((hiddenListeners / total) * 100) : 0;
+    return `
+      <div class="deep-bar-row deep-bar-rest">
+        <div class="deep-bar-label">${hiddenCount} more</div>
+        <div class="deep-bar-track"><div class="deep-bar-fill" style="width:${pct}%"></div></div>
+        <div class="deep-bar-val">${hiddenListeners}<span class="deep-bar-pct">${pct}%</span></div>
+      </div>`;
+  }
+
   function bars(obj, total, limit) {
-    const rows = Object.entries(obj || {}).sort((a, b) => b[1] - a[1]).slice(0, limit || 8);
-    if (!rows.length) return '<div class="muted">No data</div>';
-    return rows.map(([label, n]) => {
+    const all = Object.entries(obj || {}).sort((a, b) => b[1] - a[1]);
+    const shown = all.slice(0, limit || 8);
+    if (!shown.length) return '<div class="muted">No data</div>';
+    const hidden = all.slice(shown.length);
+    const rows = shown.map(([label, n]) => {
       const pct = total ? Math.round((n / total) * 100) : 0;
       return `
         <div class="deep-bar-row">
@@ -761,6 +788,7 @@
           <div class="deep-bar-val">${n}<span class="deep-bar-pct">${pct}%</span></div>
         </div>`;
     }).join('');
+    return rows + moreRow(hidden.length, hidden.reduce((a, [, n]) => a + n, 0), total);
   }
 
   /* Returning vs new listeners.
@@ -1070,7 +1098,9 @@
     }
 
     const zone = rh.timeZone === 'UTC' ? 'UTC' : rh.timeZone.split('/').pop().replace(/_/g, ' ');
-    const rows = rh.regions.slice(0, 8).map((r) => {
+    const shownRegions = rh.regions.slice(0, 8);
+    const hiddenRegions = rh.regions.slice(8);
+    const rows = shownRegions.map((r) => {
       const peakN = Math.max(...r.hours);
       const peakHour = r.hours.indexOf(peakN);
       const name = r.region
@@ -1107,6 +1137,11 @@
           <div class="rh-total">listeners</div>
         </div>
         ${rows}
+        ${hiddenRegions.length
+    ? `<div class="rh-row rh-rest"><div class="rh-name">${hiddenRegions.length} more</div>
+         <div class="rh-cells"></div><div class="rh-peak"></div>
+         <div class="rh-total">${hiddenRegions.reduce((a, r) => a + r.total, 0).toLocaleString()}</div></div>`
+    : ''}
         <div class="rh-note">Each row is shaded against <strong>its own</strong> busiest
           hour, so a smaller region's pattern is visible rather than flattened by the
           largest one; the count beside it is the size. Hours are the
@@ -1318,7 +1353,12 @@
       <div class="deep-split">
         <div>
           <div class="deep-sub">Player / app · ${esc(rangeName)}</div>
-          ${bars(players, cume, 9)}
+          ${/* Twelve, not nine. A real station's mix is longer than the list
+                was: KPFK's iOS audience sat at tenth and was therefore not on
+                the page at all. The remainder row below makes any truncation
+                honest, but a category a station would act on should be visible
+                without arithmetic. */ ''}
+          ${bars(players, cume, 12)}
         </div>
         <div>
           <div class="deep-sub">Platform · ${esc(rangeName)}</div>
@@ -1567,13 +1607,14 @@
         return { st, name: rest.join('/'), n };
       })
       .filter((c) => c.name && c.n > 0)
-      .sort((a, b) => b.n - a.n)
-      .slice(0, 8);
+      .sort((a, b) => b.n - a.n);
+    const cityShown = cityRows.slice(0, 8);
+    const cityHidden = cityRows.slice(8);
 
     const usPlaced = Object.entries(places.usStates || {}).reduce((a, [, n]) => a + n, 0);
-    const cityBlock = cityRows.length
+    const cityBlock = cityShown.length
       ? `<div class="deep-sub">Metro area</div>
-         ${cityRows.map((c) => {
+         ${cityShown.map((c) => {
         const share = usPlaced ? Math.round((c.n / usPlaced) * 100) : 0;
         return `
            <div class="deep-bar-row">
@@ -1582,6 +1623,7 @@
              <div class="deep-bar-val">${c.n}<span class="deep-bar-pct">${share}%</span></div>
            </div>`;
       }).join('')}
+         ${moreRow(cityHidden.length, cityHidden.reduce((a, c) => a + c.n, 0), usPlaced)}
          <div class="geo-note-line">Share of located US ${esc(unit.many)}, the same
            denominator as the in-market figure above &mdash; so a metro can be read
            against its state. ${places.cityWithheld
@@ -1605,7 +1647,15 @@
              <div class="deep-bar-label">${esc(c.code)}</div>
              <div class="deep-bar-track"><div class="deep-bar-fill" style="width:${Math.round(c.share * 100)}%"></div></div>
              <div class="deep-bar-val">${c.listeners}<span class="deep-bar-pct">${Math.round(c.share * 100)}%</span></div>
-           </div>`).join('')}`
+           </div>`).join('')}
+         ${(() => {
+        /* GeoMap.countries() returns only the rows it kept, so the remainder is
+           counted here from the full set rather than inferred from the page. */
+        const every = Object.entries(places.countries || {});
+        const total = every.reduce((a, [, n]) => a + n, 0);
+        const shownTotal = countryRows.reduce((a, c) => a + c.listeners, 0);
+        return moreRow(every.length - countryRows.length, total - shownTotal, total);
+      })()}`
       : '';
 
     const attribution = (d.attribution || []).length
