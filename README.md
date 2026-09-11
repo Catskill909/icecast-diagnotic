@@ -88,6 +88,12 @@ If you are an AI assistant or developer picking up this project, here is the ess
 - **`public/audience-stats.js`**: The audience arithmetic — concurrent peaks, floors, per-mount averages, daily grouping. Separate from the page so Node can test it; loads as `window.AudienceStats` in the browser and `require()`s in tests.
 - **`public/listeners.html` / `listeners.js` / `listeners.css`**: Audience analytics — listening hours (ATH) against the SoundExchange allowance, every channel on one scale, the per-mount split that every other figure sums away, hour-of-day profile, and CSV export. Station-scoped like the history page.
 
+The History station selector supports All stations and each individual station.
+Every refresh uses the same station and date range for incident, uptime and
+audience data. Rapid selection changes cannot mix previous and current results.
+Old figures are hidden while loading; a failed request offers Retry, and export
+is unavailable until the current selection loads.
+
 The Audience station selector refreshes every panel automatically, including
 Player/App, platform, live mount counts and geography; no page refresh is needed.
 Switching stations preserves the chosen date range. Previous figures clear while

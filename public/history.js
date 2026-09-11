@@ -89,6 +89,7 @@
   }
 
 
+  let reloadVersion = 0;
   let allEvents = [];      // everything fetched for the current range
   let filtered = [];       // after client-side filters
   let rendered = 0;
@@ -138,44 +139,73 @@
   }
 
   async function reload() {
+    const version = ++reloadVersion;
     const days = rangeDays();
     const isAllTime = $('#f-range').value === 'all';
-    const [statsRes, eventsRes, uptimeRes] = await Promise.all([
-      fetch(`/api/stats?days=${days}${scope()}`).then((r) => r.json()),
-      fetch(`/api/events?days=${days}&limit=2000${scope()}`).then((r) => r.json()),
-      // Supplementary — the incident record must never depend on it. A monitor
-      // mid-deploy serves the new page from a process that lacks this route,
-      // and a rejection here would take every summary tile, the heatmap and
-      // the timeline down with it.
-      fetch(`/api/uptime?days=${days}${scope()}`)
-        .then((r) => (r.ok ? r.json() : null))
-        .catch(() => null),
-    ]);
+    // Capture scope once: every request in this refresh describes the same
+    // selection, even when another selection starts while responses are pending.
+    const query = `days=${days}${scope()}`;
+    const view = $('#history-view');
+    const status = $('#history-load-status');
+    view.classList.add('history-pending');
+    $('#export-btn').disabled = true;
+    status.hidden = false;
+    $('#history-load-message').textContent = 'Updating history…';
+    $('#history-retry').hidden = true;
 
-    stats = statsRes;
-    allEvents = eventsRes.events || [];
-    streams = statsRes.streams || [];
+    const read = async (url, required = false) => {
+      try {
+        const r = await fetch(url);
+        if (!r.ok) throw new Error('History request failed');
+        return await r.json();
+      } catch (err) {
+        if (required) throw err;
+        return null;
+      }
+    };
 
-    lastUptime = uptimeRes;
-    lastRangeIsAllTime = isAllTime;
+    try {
+      const [statsRes, eventsRes, uptimeRes, listenersRes, rollupRes] = await Promise.all([
+        read(`/api/stats?${query}`, true),
+        read(`/api/events?${query}&limit=2000`, true),
+        // Supplementary data cannot prevent the incident record from loading.
+        read(`/api/uptime?${query}`),
+        read(`/api/listeners?${query}`),
+        read(`/api/rollup?${query}`),
+      ]);
+      if (version !== reloadVersion) return;
+      if (!statsRes || !eventsRes) throw new Error('Missing history response');
 
-    // Same defensive contract as /api/uptime: audience is supplementary, and a
-    // monitor mid-deploy may serve this page from a process without the route.
-    [lastListeners, lastRollup] = await Promise.all([
-      fetch(`/api/listeners?days=${days}${scope()}`).then((r) => (r.ok ? r.json() : null)).catch(() => null),
-      fetch(`/api/rollup?days=${days}${scope()}`).then((r) => (r.ok ? r.json() : null)).catch(() => null),
-    ]);
+      // Publish a complete selection together, never part of an older station
+      // paired with part of the current one.
+      stats = statsRes;
+      allEvents = eventsRes.events || [];
+      streams = statsRes.streams || [];
+      lastUptime = uptimeRes;
+      lastRangeIsAllTime = isAllTime;
+      lastListeners = listenersRes;
+      lastRollup = rollupRes;
 
-    populateStreamFilter();
-    populateCauseFilter();
-    renderStorage();
-    syncRangePills();
-    renderOverviewRange();
-    renderImpactHero();
-    renderAudience();
-    renderHeatmap();
-    renderCauses();
-    applyFilters();
+      populateStreamFilter();
+      populateCauseFilter();
+      renderStorage();
+      syncRangePills();
+      renderOverviewRange();
+      renderImpactHero();
+      renderAudience();
+      renderHeatmap();
+      renderCauses();
+      applyFilters();
+      view.classList.remove('history-pending');
+      status.hidden = true;
+      $('#export-btn').disabled = false;
+    } catch (err) {
+      if (version !== reloadVersion) return;
+      // Keep old figures concealed under the new station heading. Retrying
+      // must not require a full reload or leave an unhandled rejection.
+      $('#history-load-message').textContent = 'Could not load history for this selection. Try again.';
+      $('#history-retry').hidden = false;
+    }
   }
 
   // ── Period control ──────────────────────────────────────────────────────
@@ -1405,6 +1435,8 @@
       if (event.key !== 'Escape') return;
       infoPopovers.forEach((popover) => { popover.open = false; });
     });
+
+    $('#history-retry').onclick = () => reload();
 
     $('#f-range').onchange = () => { dayFilter = null; reload(); };
 

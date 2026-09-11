@@ -1104,3 +1104,15 @@ a.help-btn { text-decoration: none; }
 }
 .station-picker select option { background: var(--surface-2); color: var(--text-primary); }
 .station-picker.hidden { display: none; }
+
+
+/* Keep station/range controls usable while concealing the previous selection. */
+#history-view.history-pending > :not(.header):not(.section-title):not(.filters):not(.history-load-status) {
+  visibility: hidden;
+}
+#history-view.history-pending .section-hint,
+#history-view.history-pending #storage-badge {
+  visibility: hidden;
+}
+.history-load-status { margin: 16px 0; }
+.history-load-status button { margin-left: 12px; }

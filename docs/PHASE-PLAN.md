@@ -442,3 +442,32 @@ Status: **Complete** — all local exit criteria verified on 2026-09-10.
 Release remains pending: push the correction and confirm GitHub CI is green
 before the owner deploys through Coolify. Audience browser acceptance remains
 open in the preceding section.
+
+
+### Audience deployment follow-up — 2026-09-10
+
+Status: **In progress** — owner reports live deployment but signed-in acceptance
+remains unresolved. Live JS matches HEAD f81a407; fresh Chromium sends both
+station-scoped requests. Full protected-panel dropdown/reload equivalence passes
+with synthetic API responses; real signed-in detail values have not been tested.
+See the latest HANDOFF.md entry for evidence and the next diagnostic action.
+
+
+## History selection consistency — 2026-09-10
+
+Status: **In progress** — race reproduced and fixed locally; live release
+acceptance remains open.
+
+- [x] All stations and all five individual stations remain selectable.
+- [x] Five History endpoints capture one station/range per refresh, with atomic
+  rendering and protection against old responses, JSON bodies and errors.
+- [x] Previous numbers are hidden while loading/failed; controls remain usable;
+  export is disabled until current data loads; Retry recovers a failed refresh.
+- [x] Six regression tests pass; full suite 662/662, no skips/failures.
+- [x] Chromium verifies all six choices against real public APIs with patched
+  assets, plus the delayed-response reproduction, range change and error/retry.
+- [ ] Push, confirm green CI, deploy through Coolify and verify live selections
+  after loading the new script once. Record evidence before closing this phase.
+
+Broader audit remains In progress. Protected Audience API/UI checks have not
+been completed in a verified authenticated browser session.
