@@ -1,5 +1,99 @@
 # Handoff — Icecast Monitor
 
+> **START HERE.** Everything below this section is a dated log, newest first.
+> This part is the current state and is rewritten rather than appended to.
+
+## Where the project is — 2026-09-11
+
+**Live, healthy, and fully deployed.** 5 stations, 10 channels, 3 Icecast hosts.
+10/10 streams up, 99.79% audio uptime over 7 days, 1,032 events retained since
+2026-08-04, both geo databases loaded (MaxMind city, so states AND metros
+resolve). **883 tests pass.** Local, `origin/main` and production are all the
+same commit.
+
+Verify a deploy without signing in:
+
+```bash
+curl -s https://kpft-icecast.supersoul.top/api/config | jq '.auth, .geo'
+# auth: passwordConfigured, sessionSecretConfigured, sessionHours
+```
+
+### What exists now, in one paragraph
+
+The monitor watches Icecast streams, names which side of the handoff broke, and
+emails only when listeners actually lost audio. On top of that sits an audience
+product: reach and listening hours, returning vs new listeners, the device and
+player mix over time, where listeners are by state and metro, when each region
+listens, and how long sessions last. Everything per-listener needs an Icecast
+admin password for that stream's server, and the page says so per channel.
+`/api/export` produces one file holding the whole deployment; the admin panel
+has Backup & move.
+
+### What is NOT done, in priority order
+
+1. **Icecast admin credentials for `streaming.wbai.org` and
+   `streams.kpfa.org:8443`.** No code required — one env var,
+   `ICECAST_ADMIN_CREDS`. This is worth more than any remaining feature: it
+   switches on every per-listener figure already built, for two more stations.
+   The owner expects the passwords in a few weeks.
+2. **A monthly station report.** The two existing exports (audience CSV, history
+   JSON) are data dumps for a spreadsheet; nothing produces a DOCUMENT a manager
+   can attach to an email. `previewWeeklyRoundup()` already composes this shape,
+   so a monthly variant is largely a window change plus the audience figures.
+3. **Month-vs-month, by name.** Blocked until **2026-11-01**, not by code:
+   recording began 2026-08-04, so September is the first complete month and
+   October the second. Shipping a comparison whose earlier term is partial is
+   the `+376%` artefact wearing a different label.
+4. **Admin panel build-out.** The owner wants this to be where operational UI
+   lives. Backup & move is there now and is the pattern to follow.
+
+### Decisions already taken, so they are not re-litigated
+
+| | |
+|---|---|
+| **One login for all**, until the move to Pacifica production | Phase 7: the split is by SENSITIVITY, not by user. The figures that matter in an emergency need no credential at all |
+| **Icecast credentials live in the environment**, not the admin panel | A password belongs to a SERVER, not a person, so it never belongs to a role. Building the entry UI before the access model exists means building it twice |
+| **Collect as much as possible** | The owner's explicit position. "Privacy" here means access control and what leaves the server, not limits on what Pacifica gathers about its own audience. Both are already right: detail is behind auth, IPs are hashed and never written to disk |
+| **Import always REPLACES** | "Into an empty volume" is impossible — the app seeds config on first boot. Safety is an explicit `replace: true`, a preview endpoint, and displaced files renamed aside |
+
+### The traps that outlive the features
+
+This data is **sampled, tiered and folded**, and each of those does something
+different to a figure computed naively over it. Every one of these produced a
+plausible, confident, wrong number before it was caught:
+
+| Hazard | What it produced | The rule |
+|---|---|---|
+| **Tiers smear a boundary** | `returning` went 1 → 2 on identical data purely because compaction ran — loyalty manufactured by a maintenance job | Snap windows to the tier, or refuse. Re-bucket where a coarser answer is still honest |
+| **Detail is lost at compaction** | An hour-of-day profile is impossible 48 hours after the fact | Pre-aggregate the cross-tab BEFORE the detail goes. It cannot be backfilled |
+| **Repeated sampling is length-biased** | A six-hour session appears in ~72 readings, a two-minute one in at most one | Store per device and reduce; never tally per reading and sum |
+| **A gate sized for one claim is wrong for a smaller one** | 200 km is inside one state and spans several cities | Tighten the gate with the claim; degrade to the coarser answer rather than refusing |
+| **An absent figure reads as a zero one** | "iOS app is not showing for KPFK" — it was tenth on a list that drew nine | A truncated list must say so, and say why the rest are hidden |
+
+**And the one that would ruin a migration silently:** `deviceSalt` and
+`devices.db` are ONE artefact. The hashes are in the database, the salt is in
+`events.json`. Separate them and every returning listener hashes anew — cume
+jumps by the whole audience and "came back" reads zero for ever, with no error.
+`backup.js` refuses a bundle that would do it.
+
+### Conventions worth knowing before editing
+
+- **The Dockerfile copies files individually.** A new top-level module must be
+  added to it; `test/dockerfile.test.js` catches this and has, twice.
+- **`assert.deepStrictEqual` compares prototypes**, so an array built inside a
+  `vm` fails on the prototype rather than the contents. Use `Array.from`, never
+  `.map`, on anything out of `vm.runInContext`. This has bitten three times.
+- **Backticks inside a JS template literal close it.** The SQL schema in
+  `device-store.js` is a template literal; do not wrap words in backticks there.
+- **Tests slice page source by anchor strings.** Moving a helper can break tests
+  that have nothing to do with it — anchor to a function that follows, not to
+  whichever one-liner happens to sit between.
+- **Every figure that can be withheld is withheld as `null`, never `0`**, with a
+  reason the page renders. "We could not measure it" and "it was zero" are
+  different sentences and must never look alike.
+
+---
+
 ## 2026-09-11 — Backup & move, in the admin panel
 
 Export and import now have a UI, last on `/admin.html` because it is used rarely

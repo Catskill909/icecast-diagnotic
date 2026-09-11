@@ -14,7 +14,7 @@
 
 ## Where the project actually is
 
-**Live and healthy.** 5 stations, 10 channels, 3 Icecast hosts, **823 tests**,
+**Live and healthy.** 5 stations, 10 channels, 3 Icecast hosts, **883 tests**,
 99.63% audio uptime over 7 days, data volume intact since 2026-08-04.
 (Station/uptime figures re-verified against production 2026-09-02; test count
 2026-09-11.)

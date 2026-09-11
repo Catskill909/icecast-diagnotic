@@ -1,6 +1,56 @@
 # Development log
 
 
+## 2026-09-11 — Audience build-out, migration, and the sign-in fixes
+
+A long session. `AUDIENCE-ROADMAP.md` §4.5 closed entirely, export/import
+shipped, and two reported faults turned out to be different bugs from the ones
+first suspected.
+
+**Audience, §4.5 complete.** Returning vs new listeners; the device and player
+mix as a series; when each region listens; metro-level geography; session
+length. Four of the five needed no new collection — the data was already in
+`devices` and had never been queried that way. Only the daypart profile needed
+storage, because the hour is compacted away after 48 hours and cannot be
+recovered afterwards.
+
+**Two sign-in faults, neither in the login.** The Audience page linked to
+`/login.html` with no `next`, so signing in landed on the dashboard. And
+"the login keeps forgetting me" was NOT a missing `SESSION_SECRET` — that was
+set — but `SameSite=Strict`, which withholds the cookie on any navigation
+arriving from off-site. Fixing it to `Lax` required moving two mail-sending
+routes from GET to POST first: a crafted link would otherwise have carried a
+signed-in admin's session into them.
+
+**A correctness bug found while designing UX.** KPFA is carried on two servers
+and only one is credentialed, so its individual-listener, geography and daypart
+figures covered half the station and were presented as the whole. The page now
+reports coverage per channel with the host named.
+
+**Export and import.** One gzipped bundle carries configuration, events,
+telemetry and the device database, with a UI in the admin panel. It is also the
+backup this deployment did not have. Verified against the real production
+export: 47,528 device rows, the database opens and answers, no secret rode
+along.
+
+**Three bugs the tests found before they shipped**, two of them in my own
+design: a salt guard that refused a bundle with nothing to lose, an
+"import into an empty volume" rule the app itself makes impossible, and
+`DEVICE_HASH_SALT` missing from the env checklist — the single most important
+variable to carry.
+
+**"iOS app is not showing for KPFK."** It was, at tenth, on a list that drew
+nine and dropped the rest silently. Four lists had the same slice. They now show
+everything at or above 1%, name the remainder for why it is hidden, and expand
+in place.
+
+Verification, Node 24.20.0: 883 tests, zero failures. Seven commits, all
+deployed. The hazards this data keeps producing — tier smearing, detail lost at
+compaction, length-biased sampling, a gate sized for the wrong claim, and an
+absent figure reading as zero — are tabulated at the top of `HANDOFF.md`, which
+is the part worth reading before computing anything else over it.
+
+
 ## 2026-09-11 — Geography over a period, per-station in-market share, in-app help
 
 Status: three commits deployed and verified live (`73a0f5b`, `8683177`,
