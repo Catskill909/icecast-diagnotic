@@ -3,6 +3,11 @@
 > **START HERE.** Everything below this section is a dated log, newest first.
 > This part is the current state and is rewritten rather than appended to.
 
+> ### 🔴 OPEN ISSUE — the monitor loses streams.pacifica.org and calls stations down
+> Everything about it — timeline, data, diagnosis, what shipped, the checklist
+> and the occurrence log — is in **[docs/ISSUE-PACIFICA-REACH.md](docs/ISSUE-PACIFICA-REACH.md)**.
+> Track it there until it is closed.
+
 > ### ⚠️ OPERATING RULES — read before diagnosing anything
 >
 > 1. **The monitor is in DEVELOPMENT.** Only **KPFT and KPFK** have alert
