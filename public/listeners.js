@@ -766,14 +766,18 @@
   /* THE REMAINDER ROW IS THE EXPANDER, rather than a separate "show all"
      control somewhere else.
 
-     It is already saying "3 more" — the number a reader wants is one click from
-     the place they noticed it was missing, with no modal, no second page and no
-     control at all when nothing is hidden. A list that fits shows no affordance
-     because there is nothing behind it.
+     It is already saying "3 more" — the number a reader wants is at the place
+     they noticed it was missing, with no modal, no second page and no control
+     at all when nothing is hidden. A list that fits shows no affordance because
+     there is nothing behind it.
 
-     The tail stays COLLAPSED by default. Most of it is one-listener entries,
-     and a panel that opens with thirty rows of noise is a panel nobody scans —
-     which is how the truncation got there in the first place. */
+     The tail is now OPEN by default. Collapsed, it repeated the original bug in
+     a quieter form: the tenth player was on the page but behind a control drawn
+     in tertiary italic, which is neither readable nor recognisable as something
+     to click — so the entry stayed missing for anyone who did not already know
+     to look. The cut is by share now, so the tail is small and named ("each
+     under 1%") rather than "whatever did not fit". The row stays a toggle, so a
+     reader who wants the shape of the list back can fold it away. */
   let barSeq = 0;
 
   function moreRow(hiddenCount, hiddenListeners, total, hiddenRowsHtml, why) {
@@ -782,15 +786,16 @@
     const id = `bar-rest-${barSeq += 1}`;
     const expandable = Boolean(hiddenRowsHtml);
     return `
-      <div class="deep-bar-row deep-bar-rest${expandable ? ' is-toggle' : ''}"
+      <div class="deep-bar-row deep-bar-rest${expandable ? ' is-toggle is-open' : ''}"
            ${expandable ? `data-bar-toggle="${id}" role="button" tabindex="0"
-           aria-expanded="false" aria-controls="${id}"
-           title="Show the remaining ${hiddenCount}"` : ''}>
-        <div class="deep-bar-label">${expandable ? '<span class="bar-caret">▸</span> ' : ''}${hiddenCount} more${why ? `, ${esc(why)}` : ''}</div>
+           aria-expanded="true" aria-controls="${id}"
+           data-bar-count="${hiddenCount}"
+           title="Hide the remaining ${hiddenCount}"` : ''}>
+        <div class="deep-bar-label">${expandable ? '<span class="bar-caret">▾</span> ' : ''}${hiddenCount} more${why ? `, ${esc(why)}` : ''}</div>
         <div class="deep-bar-track"><div class="deep-bar-fill" style="width:${pct}%"></div></div>
         <div class="deep-bar-val">${hiddenListeners}<span class="deep-bar-pct">${pct}%</span></div>
       </div>
-      ${expandable ? `<div class="deep-bar-hidden" id="${id}" hidden>${hiddenRowsHtml}</div>` : ''}`;
+      ${expandable ? `<div class="deep-bar-hidden" id="${id}">${hiddenRowsHtml}</div>` : ''}`;
   }
 
   /* WHERE TO CUT A RANKED LIST: by SHARE, not by a fixed count.
@@ -1745,6 +1750,11 @@
       body.hidden = open;
       btn.setAttribute('aria-expanded', String(!open));
       btn.classList.toggle('is-open', !open);
+      /* The title is the only place the control says what a click DOES, so it
+         has to follow the state rather than describe the opening direction
+         forever. */
+      const count = btn.dataset.barCount || '';
+      btn.setAttribute('title', `${open ? 'Show' : 'Hide'} the remaining ${count}`);
       const caret = btn.querySelector('.bar-caret');
       if (caret) caret.textContent = open ? '\u25B8' : '\u25BE';
     };

@@ -1398,26 +1398,36 @@
 
    Muted, because it is not a category: it is the answer to "is that all of
    them", which the reader should be able to get without counting rows. */
+/* Readable first, muted second. It was tertiary AND italic, which on this
+   background is a row you cannot read and a control you cannot recognise — so
+   the entries behind it stayed as missing as they were before the row existed.
+   Secondary keeps it subordinate to the named categories without hiding it. */
 .deep-bar-rest .deep-bar-label,
 .deep-bar-rest .deep-bar-val {
-  color: var(--text-tertiary);
-  font-style: italic;
+  color: var(--text-secondary);
 }
 
 .deep-bar-rest .deep-bar-fill { background: var(--surface-3); }
 
+/* Same treatment, same reason as the bar remainder above: a summary nobody can
+   read is a summary that is not there. This one is not a control — nothing is
+   behind it — so it carries no underline. */
 .rh-rest .rh-name,
 .rh-rest .rh-total {
-  color: var(--text-tertiary);
-  font-style: italic;
+  color: var(--text-secondary);
 }
 
 /* The remainder row doubles as the expander. No separate "show all" control,
-   and no affordance at all when the list already fits. */
+   and no affordance at all when the list already fits. It opens EXPANDED, so
+   the row reads as the heading of the group below it rather than as a door. */
 .deep-bar-rest.is-toggle {
   cursor: pointer;
   border-radius: 4px;
 }
+
+.deep-bar-rest.is-toggle .deep-bar-label { text-decoration: underline dotted; }
+
+.deep-bar-rest.is-toggle:hover .deep-bar-label { text-decoration-style: solid; }
 
 .deep-bar-rest.is-toggle:hover .deep-bar-label,
 .deep-bar-rest.is-toggle:focus-visible .deep-bar-label { color: var(--text-primary); }
@@ -1431,10 +1441,19 @@
   display: inline-block;
   width: 10px;
   font-style: normal;
-  color: var(--text-tertiary);
+  color: var(--text-secondary);
 }
 
-/* Collapsed by default. Most of a long tail is one-listener entries, and a
-   panel that opens with thirty rows of them is one nobody scans — which is how
-   the silent truncation got there to begin with. */
-.deep-bar-hidden { margin: 0; }
+/* OPEN by default: the tail is what the row is there to answer, and one behind
+   an invisible control is one nobody reads. The cut is by share, so what opens
+   is the small end of the list and not thirty rows of noise.
+
+   Marked as a group rather than indented — indenting would pull the bars out of
+   line with the rows above, and the comparison down the column is the point. */
+.deep-bar-hidden {
+  margin: 0;
+  padding-top: 7px;
+  border-top: 1px solid var(--border);
+}
+
+.deep-bar-hidden[hidden] { display: none; }

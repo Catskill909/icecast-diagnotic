@@ -217,7 +217,8 @@
          and the last row counts everything below it \u2014 "3 more". So the numbers
          in a list always add up to the total above it, and a player you expected to
          see is either on the list or inside that last row, never simply absent.
-         <strong>Click that row to open it</strong> and the rest appear underneath.`,
+         <strong>Those entries are listed underneath it</strong>, and clicking the row
+         folds them away when you want the shape of the list back.`,
         `<strong>The line is drawn at one per cent, not at a fixed number of rows.</strong>
          Anything accounting for at least 1% of listeners is on the page, so a station
          with three players shows three and offers nothing to expand, while a station

@@ -78,12 +78,29 @@ test('the collapsed rows sum to exactly what the remainder row claims', () => {
   );
 });
 
-test('EXPANDING reveals the entry that was missing, rather than only counting it', () => {
-  // The reported case: iOS app was tenth on a list of nine.
+test('THE TAIL IS ON SCREEN, not behind a control the reader has to find', () => {
+  /* The class of bug, not the instance. The reported failure was "iOS app is
+     not showing" — an entry that existed and was silently cut. Putting it
+     behind a collapsed expander drawn in tertiary italic fixed the arithmetic
+     and left the entry just as unfindable: nothing on the row read as
+     clickable, so nobody clicked. A remainder group that ships collapsed is the
+     same bug wearing a caret. */
+  const { bars } = load();
+  const html = bars(TEN_PLAYERS, TOTAL, 9);
+  assert.match(html, /iOS app/, 'the tenth entry is rendered, not merely counted');
+  assert.doesNotMatch(
+    html, /<div class="deep-bar-hidden"[^>]*\shidden[\s>]/,
+    'and it is VISIBLE on load — no click required to reach it',
+  );
+  assert.match(html, /aria-expanded="true"/, 'the control agrees with what is drawn');
+});
+
+test('the remainder group is still ordered AFTER the ranked rows', () => {
+  // Open by default must not mean mixed in: the top N is still the top N.
   const { bars } = load();
   const { visible, collapsed } = halves(bars(TEN_PLAYERS, TOTAL, 9));
-  assert.doesNotMatch(visible, /iOS app/, 'still not in the default view — the list is a top N');
-  assert.match(collapsed, /iOS app/, 'but one click away, not gone');
+  assert.doesNotMatch(visible, /iOS app/, 'the ranked list above is unchanged');
+  assert.match(collapsed, /iOS app/, 'the tail is its own group below the summary row');
 });
 
 test('the expander is keyboard reachable and announces its state', () => {
@@ -91,9 +108,10 @@ test('the expander is keyboard reachable and announces its state', () => {
   const html = bars(TEN_PLAYERS, TOTAL, 9);
   assert.match(html, /role="button"/);
   assert.match(html, /tabindex="0"/);
-  assert.match(html, /aria-expanded="false"/, 'collapsed by default, and says so');
+  assert.match(html, /aria-expanded="true"/, 'open by default, and says so');
   assert.match(html, /aria-controls="bar-rest-/);
-  assert.match(html, /<div class="deep-bar-hidden" id="bar-rest-[^"]+" hidden>/);
+  assert.match(html, /<div class="deep-bar-hidden" id="bar-rest-[^"]+">/);
+  assert.match(html, /title="Hide the remaining 1"/, 'the title says what a click DOES');
 });
 
 test('each list on a page gets its own toggle id', () => {
@@ -188,6 +206,38 @@ test('a numeric limit still guarantees a minimum, never a maximum', () => {
 test('the remainder is muted, because it is not a category', () => {
   const css = fs.readFileSync(path.join(__dirname, '../public/listeners.css'), 'utf8');
   assert.match(css, /\.deep-bar-rest/, 'it must be styled apart from a real row');
+});
+
+/** The declarations inside the rule whose selector list mentions `sel`. */
+function ruleFor(css, sel) {
+  const at = css.indexOf(sel);
+  assert.notEqual(at, -1, `no rule for ${sel}`);
+  const open = css.indexOf('{', at);
+  return css.slice(open + 1, css.indexOf('}', open));
+}
+
+test('MUTED IS NOT INVISIBLE: the remainder rows stay readable', () => {
+  /* The class of bug. Both remainder summaries were drawn in --text-tertiary
+     (#606078 on a near-black panel) AND italicised, which is how a row that
+     exists to say "something was left out" became a row nobody could read —
+     and, for the bar list, a control nobody could tell was one. Muting the
+     remainder is right; muting it below legibility reinstates the original
+     bug. Any future remainder row is covered by the same assertion. */
+  const css = fs.readFileSync(path.join(__dirname, '../public/listeners.css'), 'utf8');
+  for (const sel of ['.deep-bar-rest .deep-bar-label', '.rh-rest .rh-name']) {
+    const rule = ruleFor(css, sel);
+    assert.doesNotMatch(rule, /--text-tertiary/, `${sel} must not be the faintest token`);
+    assert.doesNotMatch(rule, /font-style:\s*italic/, `${sel} must not be italicised as well`);
+  }
+});
+
+test('the expander LOOKS like one — the row carries a click affordance', () => {
+  // Nothing but the caret said "clickable", and a caret alone did not read as
+  // one. The label is underlined so the row is recognisable as a control.
+  const css = fs.readFileSync(path.join(__dirname, '../public/listeners.css'), 'utf8');
+  const rule = ruleFor(css, '.deep-bar-rest.is-toggle .deep-bar-label');
+  assert.match(rule, /text-decoration/, 'the toggle must be visibly a toggle');
+  assert.match(css, /\.deep-bar-rest\.is-toggle\s*\{[^}]*cursor:\s*pointer/);
 });
 
 test('moreRow renders nothing when nothing is hidden', () => {
