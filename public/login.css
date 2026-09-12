@@ -16,9 +16,7 @@
     border: 1px solid var(--surface-3); border-radius: 16px; padding: 32px;
     box-shadow: 0 24px 60px rgba(0,0,0,0.5);
   }
-  .logo { width: 40px; height: 40px; border-radius: 10px; margin-bottom: 20px;
-          background: linear-gradient(135deg, var(--primary), var(--primary-dark));
-          display: grid; place-items: center; font-size: 20px; }
+  .logo { display: block; height: 56px; width: auto; margin-bottom: 20px; }
   h1 { font-size: 20px; font-weight: 600; letter-spacing: -0.01em; }
   .sub { color: var(--text-secondary); font-size: 13px; margin-top: 6px; min-height: 18px; }
   form { margin-top: 24px; }

@@ -97,7 +97,11 @@ app.use((req, res, next) => {
 const REQUIRE_LOGIN_FOR_READ =
   String(process.env.REQUIRE_LOGIN_FOR_READ ?? '').trim().toLowerCase() === 'true';
 
-const ALWAYS_PUBLIC = new Set(['/login.html', '/login.css', '/login.js', '/health', '/robots.txt']);
+// Every file login.html loads belongs here, or the sign-in page renders broken
+// for exactly the visitor who has not signed in yet.
+const ALWAYS_PUBLIC = new Set([
+  '/login.html', '/login.css', '/login.js', '/pacifica-network-header.png', '/health', '/robots.txt',
+]);
 
 app.use((req, res, next) => {
   if (!REQUIRE_LOGIN_FOR_READ) return next();
