@@ -1367,6 +1367,12 @@ body::before {
   color: var(--text-tertiary);
 }
 
+/* An outage still in progress must not read like history. */
+.incident-cause.incident-ongoing {
+  color: var(--status-down);
+  font-weight: 600;
+}
+
 /* Email-delivery indicator — makes it visible at a glance which events
    actually generated an alert and which were recorded silently. */
 .incident-mail {

@@ -581,6 +581,10 @@ let streams = [];
 let streamStatus = {};
 let silenceState = {};
 let episodes = {};        // { [streamId]: { eventId, startedAt, alerted, severity } }
+// Open outages found at startup, keyed by stream, awaiting the first cycle's
+// verdict — resume if still down, close as unobserved if not. See
+// reconcileOpenEvents() in store.js.
+let pendingResume = {};
 // Kept apart from `episodes` deliberately. A degraded channel is still
 // playing, so it must not close, reopen, or otherwise disturb the outage
 // episode for the same stream — the two can legitimately overlap.
@@ -772,6 +776,30 @@ function initStreamState(s) {
  * what to watch from now on; it is not a statement about the past.
  */
 /**
+ * Rebuilds an in-memory episode from the open event a previous run wrote.
+ *
+ * Everything that gates a one-per-episode action is restored from the record,
+ * because getting any of it wrong after a redeploy repeats that action: a DOWN
+ * email already sent, a storm already counted.
+ */
+function episodeFromEvent(e) {
+  // Events written before notificationJudgedAt existed are judged by their mail
+  // record: sent, attempted, suppressed as flapping, or muted for the station.
+  const judged = !!(e.notificationJudgedAt || e.alertedAt || e.email?.attempted
+    || /flapping|alerts are switched off/.test(e.email?.reason || ''));
+  return {
+    eventId: e.id,
+    startedAt: e.timestamp,
+    severity: e.severity,
+    alerted: e.email?.sent === true || !!e.alertedAt,
+    stormNoted: judged,
+    stormSuppressed: /flapping/.test(e.email?.reason || ''),
+    listenerImpact: e.diagnosis?.listenerImpact || 'unknown',
+    resumed: true,
+  };
+}
+
+/**
  * Closes an episode that was still open when its channel stopped being monitored.
  *
  * Neither obvious option is honest. Leaving it open counts as an ongoing failure
@@ -959,6 +987,19 @@ function init() {
   }
 
   loadStorms();
+
+  // Episodes live in memory; the events they write do not. Without this a
+  // restart orphaned every outage in progress — open for ever, with a second
+  // event opened beside it if the stream was still down.
+  const reconciled = store.reconcileOpenEvents(streams.map((s) => s.id));
+  pendingResume = reconciled.resumable;
+  if (reconciled.closed.length) {
+    console.log(`[Monitor] Closed ${reconciled.closed.length} open event(s) a restart had orphaned — recovery not observed`);
+  }
+  const resuming = Object.keys(pendingResume);
+  if (resuming.length) {
+    console.log(`[Monitor] ${resuming.length} outage(s) open at startup, awaiting first check: ${resuming.join(', ')}`);
+  }
 
   setupMailer();
 
@@ -1882,7 +1923,8 @@ async function runChecksInner() {
 
   const cycle = streams.map((s, i) => ({ stream: s, result: results[i] }));
   const downCount = cycle.filter((c) => c.result.status === 'down').length;
-  const allDown = downCount === streams.length && streams.length > 0;
+  const serverDownHosts = diagnose.serverWideHosts(
+    streams, cycle.filter((c) => c.result.status === 'down').map((c) => c.stream));
 
   console.log(
     `[Monitor] Cycle ${timestamp} — ${streams.length - downCount}/${streams.length} up` +
@@ -1903,6 +1945,23 @@ async function runChecksInner() {
     const prev = streamStatus[stream.id] || {};
     const wasDown = prev.status === 'down';
     const isDown = result.status === 'down';
+
+    // An outage that was open when the monitor last stopped. Still down: this
+    // cycle carries on with THAT event — no second record, no second email.
+    // Healthy: it ended while nobody was watching, so it is closed at its last
+    // observed failure rather than given a recovery nobody saw.
+    const resumeFrom = pendingResume[stream.id];
+    if (resumeFrom) {
+      delete pendingResume[stream.id];
+      if (isDown && !episodes[stream.id]) {
+        episodes[stream.id] = episodeFromEvent(resumeFrom);
+        console.log(`[Monitor] ↻ ${stream.name} still down after restart — resuming the outage open since ${resumeFrom.timestamp}`);
+      } else if (!isDown) {
+        store.closeUnobserved(resumeFrom.id,
+          'Monitor restarted during this outage and the stream was healthy on its first check back. Recovery was never observed; the duration runs to the last failed check.');
+        console.log(`[Monitor] ${stream.name} recovered while the monitor was restarting — outage closed, recovery not observed`);
+      }
+    }
     // The inventory of the server THIS stream lives on. "Icecast reachable" is
     // a per-host fact: one station's server being down says nothing about
     // another's, and reading it from the merged snapshot marked every station
@@ -1937,7 +1996,11 @@ async function runChecksInner() {
       }
     }
 
-    const failures = isDown ? (prev.consecutiveFailures || 0) + 1 : 0;
+    // A resumed outage keeps its count, so it stays confirmed instead of being
+    // re-confirmed — and re-announced — from one.
+    const failures = isDown
+      ? (prev.consecutiveFailures || (resumeFrom && episodes[stream.id]?.eventId === resumeFrom.id ? resumeFrom.failedChecks || 0 : 0)) + 1
+      : 0;
 
     // ── Status snapshot ────────────────────────────────────────────────────
     streamStatus[stream.id] = {
@@ -2104,7 +2167,16 @@ async function runChecksInner() {
 
         const sustained = alertable ? sustainedEscalation(episode, Date.now()) : null;
 
-        if (alertable && !episode.alerted && !episode.stormSuppressed) {
+        // Once per episode, gated on its own flag. It was gated on `alerted`,
+        // which only dispatchNotifications() sets — and never for a station with
+        // alerts switched off. So a muted station re-entered here every cycle:
+        // WPFW's one outage on 2026-09-12 was counted three times and declared a
+        // storm, a phantom that would silence its first real alert once switched on.
+        if (alertable && !episode.stormNoted) {
+          episode.stormNoted = true;
+          // Persisted, so an outage resumed after a restart is not judged — and
+          // emailed — a second time. See episodeFromEvent().
+          store.updateEvent(episode.eventId, { notificationJudgedAt: timestamp });
           // A stream flapping on a known fault has already said everything the
           // sixth email would say. The event is written either way; only the
           // mail is in question here.
@@ -2257,7 +2329,7 @@ async function runChecksInner() {
   }
 
   // ── Notification pass ─────────────────────────────────────────────────────
-  await dispatchNotifications(newlyNotable, recoveries, { allDown, timestamp, snapshot: snap });
+  await dispatchNotifications(newlyNotable, recoveries, { serverDownHosts, timestamp, snapshot: snap });
   await dispatchDegradedNotices(degradedNotices);
 
   // A storm ends by nothing happening, so it can only be noticed from out here
@@ -2314,8 +2386,11 @@ async function dispatchNotifications(newlyNotable, recoveries, ctx) {
   }
 
   if (newlyNotable.length > 0) {
+    // Server-level only when every stream on the failing server went down — per
+    // host, never across the fleet (see diagnose.serverWideHosts).
+    const downHosts = ctx.serverDownHosts || new Set();
     const serverScope =
-      ctx.allDown && streams.length > 1
+      newlyNotable.every((n) => downHosts.has(diagnose.hostOf(n.stream)))
         ? 'server'
         : newlyNotable[0].diagnosis.scope;
 
@@ -2366,7 +2441,13 @@ async function dispatchNotifications(newlyNotable, recoveries, ctx) {
           stream: r.stream, result: r.result, diagnosis: r.diagnosis,
           audience: r.audience, durationMs: r.durationMs,
         })),
-        scope: emailable.length > 1 ? 'server' : emailable[0].diagnosis.scope,
+        // Two recoveries in one cycle are not a server event — two channels of
+        // one station, or streams on two different servers, recover together too.
+        scope: (() => {
+          const hosts = diagnose.serverWideHosts(streams, recoveries.map((r) => r.stream));
+          return emailable.every((r) => hosts.has(diagnose.hostOf(r.stream)))
+            ? 'server' : emailable[0].diagnosis.scope;
+        })(),
       });
     }
 
@@ -3263,7 +3344,7 @@ function composeAlert({ kind, entries, scope, consolidated = false, recoveredFro
     : 'linear-gradient(135deg, #16a34a, #15803d)';
 
   const scopeNote = scope === 'server'
-    ? ' This is a SERVER-LEVEL event affecting every monitored stream.'
+    ? ' This is a SERVER-LEVEL event affecting every monitored stream on this server.'
     : scope === 'station'
     ? ` This affects every mount of ${stationNames.length === 1 ? stationNames[0] : 'this station'}.`
     : '';
@@ -3317,7 +3398,7 @@ function composeAlert({ kind, entries, scope, consolidated = false, recoveredFro
     ${stormNotice}
     ${blocks}
     <table role="presentation" width="100%" border="0" cellspacing="0" cellpadding="0" style="margin-top:16px;">
-      ${row('Detected At', `<span class="val-col" style="color:#f8fafc !important;">${detectedAt} CT</span>`, true)}
+      ${row('Detected At', `<span class="val-col" style="color:#f8fafc !important;">${detectedAt}</span>`, true)}
     </table>
     <hr style="border: none; border-top: 1px solid #28283d; margin: 20px 0;">
     ${renderAllStreamsTable(entries?.[0]?.stream?.stationId)}`;
@@ -3435,11 +3516,32 @@ function getHistory() {
   return store.getAllSamples(24 * 60 * 60 * 1000);
 }
 
+/**
+ * The dashboard's incident feed: the last 24 hours, PLUS every outage still open
+ * however long ago it began, each open one carrying its duration so far.
+ *
+ * A 24-hour window alone drops an outage off the dashboard on its second day —
+ * the station most in trouble becomes the one not shown. And the page lists only
+ * the newest few, so on 2026-09-12 WPFW's still-open outage sat tenth, below the
+ * other stations' recoveries, and could not be seen at all.
+ */
 function getIncidents() {
-  return store.getEvents({ since: new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString() }).events;
+  const now = Date.now();
+  const recent = store.getEvents({ since: new Date(now - 24 * 60 * 60 * 1000).toISOString() }).events;
+  const ids = new Set(recent.map((e) => e.id));
+  const olderOpen = store.getEvents({}).events
+    .filter((e) => !ids.has(e.id) && store.isFailureEvent(e) && !e.resolvedAt);
+  return [...recent, ...olderOpen].map((e) => store.withOngoingDuration(e, now));
 }
 
-function getEvents(opts) { return store.getEvents(opts); }
+// Open outages carry their duration so far. The history page totals these
+// events itself, in the browser, reading `durationMs || 0` — so without this an
+// outage in progress was a zero-second blip there too. See withOngoingDuration.
+function getEvents(opts) {
+  const res = store.getEvents(opts);
+  const now = Date.now();
+  return { ...res, events: res.events.map((e) => store.withOngoingDuration(e, now)) };
+}
 function getSamples(streamId, sinceMs) { return store.getSamples(streamId, sinceMs); }
 function getRollups(streamId) { return store.getRollups(streamId); }
 
@@ -3485,9 +3587,13 @@ function getListeners(windowMs, bucketMs, stationId) {
   const series = {};
   for (const s of scoped) series[s.id] = store.getListenerSeries(s.id, windowMs, bucketMs);
 
+  const now = Date.now();
   const outages = store
     .getEvents({ limit: Number.MAX_SAFE_INTEGER })
-    .events.filter((e) => {
+    // An open outage is banded to now — it has no durationMs until recovery, and
+    // the filter below dropped it, so the station still off air had no band.
+    .events.map((e) => store.withOngoingDuration(e, now))
+    .filter((e) => {
       // Failures only. A degraded channel kept playing, so drawing an outage
       // band across the audience chart for it would show a dip that never
       // happened on a channel that never went off air.
@@ -3504,6 +3610,7 @@ function getListeners(windowMs, bucketMs, stationId) {
       severity: e.severity,
       start: e.timestamp,
       end: e.resolvedAt || null,
+      ongoing: !!e.ongoing,
       durationMs: e.durationMs,
       durationLabel: e.durationLabel,
       cause: e.diagnosis?.cause || null,
@@ -4260,6 +4367,10 @@ module.exports = {
   // the storm sequence is worth replaying without standing up a config file.
   _setStreams: (list) => { streams = list; },
   _setEpisodes: (e) => { episodes = e; },
+  _setPendingResume: (p) => { pendingResume = p; },
+  // Startup without the timers start() adds — for restart tests.
+  _init: () => init(),
+  _episodes: () => episodes,
   normaliseStreams, normaliseMounts, buildDefaultConfig, flattenChannels,
   trackVariantDegradation, runChecks, probeVariants, resolveDeadAir,
   // Test seam. Recording a recovery must not depend on whether it was emailed,

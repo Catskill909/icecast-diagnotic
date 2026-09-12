@@ -82,7 +82,11 @@ const ERROR_CATALOG = {
   EDEADLINE: {
     cause: 'timeout',
     label: 'Request deadline exceeded',
-    detail: 'The request was cut off at its hard deadline. The socket was not idle — it was stalled, which is what a TLS handshake against a plaintext port looks like. Check whether that port really speaks HTTPS.',
+    detail: 'The request was cut off at its hard deadline. The socket was not idle — it was stalled.',
+    // Only true when the handshake never finished — see classify(). A server
+    // answering slowly over a congested path also hits the deadline, AFTER TLS
+    // completed, and was being told its HTTPS port might be plaintext.
+    stalledHandshakeDetail: 'TCP connected but the TLS handshake never completed. A plaintext port looks exactly like this — check whether that port really speaks HTTPS — but so does a congested network path.',
   },
   EHOSTUNREACH: {
     cause: 'network',
@@ -701,6 +705,31 @@ function hostOf(stream) {
 }
 
 /**
+ * Hosts on which EVERY monitored stream is in `failed` — a server-level event.
+ *
+ * Per host because the fleet spans several servers: "all monitored streams"
+ * across Pacifica, WBAI and KPFA can never all fail when only one server's
+ * path breaks, so a fleet-wide test called a whole-server outage six unrelated
+ * stream faults. A host carrying one stream cannot show a server-level event.
+ *
+ * @param {Array} all     every monitored stream definition
+ * @param {Array} failed  the stream definitions that failed together
+ */
+function serverWideHosts(all, failed) {
+  const failedIds = new Set(failed.map((s) => s.id));
+  const byHost = new Map();
+  for (const s of all) {
+    const h = hostOf(s);
+    if (!h) continue;
+    const e = byHost.get(h) || { total: 0, failed: 0 };
+    e.total += 1;
+    if (failedIds.has(s.id)) e.failed += 1;
+    byHost.set(h, e);
+  }
+  return new Set([...byHost].filter(([, e]) => e.total > 1 && e.failed === e.total).map(([h]) => h));
+}
+
+/**
  * The snapshot of the server THIS stream lives on.
  *
  * Every (snapshot, stream) function below resolves through here rather than
@@ -966,7 +995,13 @@ function classify({ stream, result, snapshot, prevSnapshot, cycle = [], deadAir 
   const serverReachable = !!snap?.reachable;
 
   // ── Cross-stream correlation ──────────────────────────────────────────────
-  const monitored = cycle.filter((c) => c && c.result);
+  // Only streams on THIS stream's server are evidence about it. Correlating
+  // across every monitored stream predates multi-host monitoring: on 2026-09-12
+  // all six streams.pacifica.org channels failed in one cycle while WBAI's and
+  // KPFA's servers stayed healthy, which read as "6 of 10 failing" — never
+  // "all" — so a server-level event was classified as six stream faults.
+  const host = hostOf(stream);
+  const monitored = cycle.filter((c) => c && c.result && hostOf(c.stream) === host);
   const downStreams = monitored.filter((c) => c.result.status === 'down');
   const allDown = monitored.length > 0 && downStreams.length === monitored.length;
 
@@ -1094,6 +1129,10 @@ function classify({ stream, result, snapshot, prevSnapshot, cycle = [], deadAir 
     cause = catalogEntry.cause;
     confidence = 'high';
     evidence.push(catalogEntry.detail);
+    if (catalogEntry.stalledHandshakeDetail && stream.url.startsWith('https')
+        && timings.tcp != null && timings.tls == null) {
+      evidence.push(catalogEntry.stalledHandshakeDetail);
+    }
 
     // Refine reset/timeout failures using correlation — this is what separates
     // a one-off blip from a genuine server-level event.
@@ -1104,7 +1143,7 @@ function classify({ stream, result, snapshot, prevSnapshot, cycle = [], deadAir 
         evidence.push(`Icecast start time changed (${prevSnap.serverStart} → ${snap.serverStart}) — the server was restarted.`);
       } else if (allDown && monitored.length > 1) {
         confidence = 'high';
-        evidence.push(`ALL ${monitored.length} monitored streams failed in the same check cycle — this is a server-level or network-level event, not a per-stream fault.`);
+        evidence.push(`ALL ${monitored.length} monitored streams on ${host} failed in the same check cycle — this is a server-level or network-level event, not a per-stream fault.`);
       } else if (serverReachable) {
         evidence.push('The Icecast status endpoint is still reachable, so the server is up — this looks like a transient connection drop.');
         if (mount) {
@@ -1134,7 +1173,7 @@ function classify({ stream, result, snapshot, prevSnapshot, cycle = [], deadAir 
   }
 
   if (downStreams.length > 1 && downStreams.length < monitored.length) {
-    evidence.push(`${downStreams.length} of ${monitored.length} monitored streams are failing simultaneously.`);
+    evidence.push(`${downStreams.length} of ${monitored.length} monitored streams on ${host} are failing simultaneously.`);
   }
 
   return finalize({
@@ -1239,6 +1278,7 @@ module.exports = {
   fetchHostSnapshots,
   snapshotForStream,
   hostOf,
+  serverWideHosts,
   channelMountPaths,
   channelAudience,
   channelDegradation,

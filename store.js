@@ -423,9 +423,10 @@ function backfillRecoveries() {
     // recovery event by design, and manufacturing one now would fill the history
     // with all-clears for faults that cost nobody anything.
     if (e.type !== 'down' || e.severity !== 'outage') continue;
-    // No resolution observed: either still open, or abandoned when its channel
-    // stopped being monitored. Neither is a recovery.
-    if (!e.resolvedAt || e.abandoned) continue;
+    // No resolution observed: still open, abandoned when its channel stopped
+    // being monitored, or closed after a restart lost it (reconcileOpenEvents).
+    // None of those is a recovery.
+    if (!e.resolvedAt || e.abandoned || e.recoveryObserved === false) continue;
     if (alreadyRecorded.has(e.id)) continue;
 
     added.push({
@@ -799,6 +800,77 @@ function findOpenOutage(streamId) {
   return null;
 }
 
+/**
+ * Closes a failure whose end was never observed.
+ *
+ * The end is the LAST FAILED CHECK the monitor saw (`lastCheckAt`), falling
+ * back to the start. That is a lower bound, never an invention: the stream was
+ * certainly down until then, and nobody watched after. `recoveryObserved: false`
+ * says so, and settledImpact() refuses to read "no source reconnect was seen" as
+ * "nobody lost audio" for these — that inference needs a watched recovery.
+ */
+function closeUnobserved(id, note) {
+  const e = events.find((x) => x.id === id);
+  if (!e || e.resolvedAt) return null;
+  const start = new Date(e.timestamp).getTime();
+  const lastSeen = new Date(e.lastCheckAt || e.timestamp).getTime();
+  const end = isFinite(lastSeen) && lastSeen >= start ? lastSeen : start;
+  const durationMs = end - start;
+  const closed = { ...e, resolvedAt: new Date(end).toISOString(), recoveryObserved: false };
+  return updateEvent(id, {
+    resolvedAt: closed.resolvedAt,
+    durationMs,
+    durationLabel: fmtMs(durationMs),
+    recoveryObserved: false,
+    resolutionNote: note,
+    audience: e.audience || buildAudienceImpact(e.streamId, e.timestamp, durationMs, settledImpact(closed)),
+  });
+}
+
+/**
+ * Sorts every OPEN failure event at startup. Episodes live in memory, so a
+ * restart used to forget them: the event stayed open for ever and, if the stream
+ * was still down, a second event was opened beside it. The live record held 18
+ * such orphans from the redeploys of 2026-09-02.
+ *
+ *   · Superseded — a later event exists for the stream, so the monitor has
+ *     moved on from it. Closed now as unobserved.
+ *   · The stream's latest event, an outage ('down') on a monitored stream —
+ *     returned as resumable. The first check cycle decides: still down →
+ *     the monitor continues THIS event; healthy → closed as unobserved.
+ *   · Anything else (dead air, whose silence engine cannot resume mid-streak;
+ *     a stream no longer monitored) — closed now as unobserved.
+ *
+ * Runs on every startup and is a no-op when nothing is open, so the one-time
+ * cleanup of old orphans needs no migration flag.
+ */
+function reconcileOpenEvents(monitoredIds) {
+  const monitored = new Set(monitoredIds);
+  const latestAt = new Map();   // streamId → newest non-degraded event time
+  for (const e of events) {
+    if (e.type === 'degraded') continue;
+    const t = new Date(e.timestamp).getTime();
+    if (isFinite(t) && t > (latestAt.get(e.streamId) ?? -Infinity)) latestAt.set(e.streamId, t);
+  }
+
+  const resumable = {};
+  const closed = [];
+  const open = events.filter((e) => isFailureEvent(e) && !e.resolvedAt);
+  for (const e of open) {
+    const t = new Date(e.timestamp).getTime();
+    const superseded = t < latestAt.get(e.streamId);
+    if (!superseded && e.type === 'down' && monitored.has(e.streamId)) {
+      resumable[e.streamId] = e;
+      continue;
+    }
+    const why = superseded
+      ? 'Monitor restarted during this failure and a later event superseded it. Recovery was never observed; the duration runs to the last failed check.'
+      : 'Monitor restarted during this failure and could not resume it. Recovery was never observed; the duration runs to the last failed check.';
+    if (closeUnobserved(e.id, why)) closed.push(e.id);
+  }
+  return { resumable, closed };
+}
+
 function getEvents(opts = {}) {
   const {
     streamId, streamIds, type, severity, cause, scope,
@@ -1124,7 +1196,14 @@ function deriveListenerImpact(event) {
   //
   // Without this, three 60-second probe resets were charged 55 listener-minutes
   // against an audience whose count never dipped.
-  if (event.resolvedAt) return event.sourceOutage ? 'confirmed' : 'none';
+  //
+  // Only a WATCHED recovery can clear it. An event closed without one — the
+  // monitor restarted mid-outage (`recoveryObserved: false`), or its channel was
+  // removed (`abandoned`) — has no reconnect record because nobody was looking,
+  // and reading that as "the source held" would call a real outage harmless.
+  if (event.resolvedAt && event.recoveryObserved !== false && !event.abandoned) {
+    return event.sourceOutage ? 'confirmed' : 'none';
+  }
 
   return 'unknown';
 }
@@ -1549,7 +1628,11 @@ function getAudienceSummary(streamIds, windowMs) {
     };
   }
 
-  for (const e of events) {
+  const nowMs = Date.now();
+  for (const stored of events) {
+    // An open outage has no frozen cost until recovery; it is costed provisionally
+    // to now, or the station still off air lost no listening. See withOngoingDuration.
+    const e = withOngoingDuration(stored, nowMs);
     // Failures only, and stated explicitly rather than relying on degraded
     // events happening to carry no `audience` block. That is true today because
     // backfillAudience() skips them, but a listener-minutes total that is
@@ -1662,7 +1745,9 @@ function getAudioUptime(streamIds, windowMs) {
     if (covered <= 0) continue;
     coveredMs += covered;
 
-    for (const e of events) {
+    for (const stored of events) {
+      // An open outage counts to now — see withOngoingDuration.
+      const e = withOngoingDuration(stored, now);
       // Failures only. A degraded channel was PLAYING — on fewer mounts than it
       // publishes, but playing — so charging its duration here would report a
       // channel that never stopped as having been off air for hours.
@@ -1783,10 +1868,13 @@ function getDailyBuckets(days, timeZone = 'UTC', streamIds) {
     return out.get(day);
   };
 
-  for (const e of events) {
-    const t = new Date(e.timestamp).getTime();
+  const now = Date.now();
+  for (const stored of events) {
+    const t = new Date(stored.timestamp).getTime();
     if (!isFinite(t)) continue;
-    if (keep && !keep.has(e.streamId)) continue;
+    if (keep && !keep.has(stored.streamId)) continue;
+    // An open outage paints the calendar up to today — see withOngoingDuration.
+    const e = withOngoingDuration(stored, now);
 
     if (t >= cutoff) {
       const b = bucket(zonedDayKey(t, timeZone));
@@ -2580,6 +2668,38 @@ function isFailureEvent(e) {
   return e?.type !== 'up' && e?.type !== 'degraded';
 }
 
+/**
+ * A failure as every aggregate must see it: an OPEN outage has lasted until now.
+ *
+ * `durationMs` is written only at recovery. Every figure read it as
+ * `e.durationMs || 0`, so an outage still in progress was zero seconds long —
+ * "brief", no downtime, no listeners cut off, absent from "What happened". On
+ * 2026-09-12 WPFW was off air for over an hour with ~390 listeners gone while
+ * its report read "100% uptime · 1 brief interruption, none lasting more than
+ * 0s". The longer a station stayed down, the longer it read as fine.
+ *
+ * Returns a COPY carrying `ongoing: true`, a duration to `now`, and a
+ * provisional audience cost. Never written back: recovery freezes the real one.
+ *
+ * Safe to count to "now" only because an open event is always a live episode —
+ * monitor.reconcileOpenEvents() closes any left behind by a restart. Before that
+ * existed, 18 orphans from 2026-09-02 sat open and would have read as ten days
+ * off air.
+ */
+function withOngoingDuration(e, now = Date.now()) {
+  if (!isFailureEvent(e) || e.resolvedAt || e.durationMs != null) return e;
+  const t = new Date(e.timestamp).getTime();
+  if (!isFinite(t)) return e;
+  const durationMs = Math.max(0, now - t);
+  return {
+    ...e,
+    ongoing: true,
+    durationMs,
+    durationLabel: fmtMs(durationMs),
+    audience: e.audience || buildAudienceImpact(e.streamId, e.timestamp, durationMs, settledImpact(e)),
+  };
+}
+
 /** Did this failure actually cost the audience audio? */
 function costListeners(e) {
   return settledImpact(e) !== 'none';
@@ -2630,6 +2750,8 @@ function groupIncidents(list) {
       g.streams.push(e.streamName || e.streamId);
       g.eventIds.push(e.id);
       g.durationMs = Math.max(g.durationMs, e.durationMs || 0);
+      // Still open if ANY of its streams is — the incident is not over.
+      g.ongoing = g.ongoing || !!e.ongoing;
       // A headcount, summed across the streams this incident took out. Real
       // people who could not hear anything — nothing multiplied by anything.
       g.listenersTunedIn += e.audience?.listenersBefore || 0;
@@ -2647,6 +2769,7 @@ function groupIncidents(list) {
         // second view that would then have to be kept in step.
         eventIds: [e.id],
         durationMs: e.durationMs || 0,
+        ongoing: !!e.ongoing,
         listenersTunedIn: e.audience?.listenersBefore || 0,
         events: 1,
       });
@@ -2772,10 +2895,13 @@ function getPeriodRollup(streamIds, windowMs) {
   const since = until - windowMs;
   const ids = new Set(streamIds);
 
+  // Open outages enter with a duration to now, so every figure below — brief vs
+  // significant, downtime, longest, listeners cut off — sees them as the
+  // outages they are rather than as zero-second blips. See withOngoingDuration.
   const inWindow = events.filter((e) => {
     const t = new Date(e.timestamp).getTime();
     return isFinite(t) && t > since && ids.has(e.streamId);
-  });
+  }).map((e) => withOngoingDuration(e, until));
 
   const failures = inWindow.filter(isFailureEvent);
   const outages = failures.filter((e) => e.severity === 'outage');
@@ -2914,6 +3040,7 @@ function getPeriodRollup(streamIds, windowMs) {
     severity: e.severity,
     durationMs: e.durationMs || null,
     durationLabel: e.durationLabel || null,
+    ongoing: !!e.ongoing,
     causeLabel: e.diagnosis?.causeLabel || null,
     listenersBefore: e.audience?.listenersBefore ?? null,
     listenerMinutesLost: e.audience?.listenerMinutesLost ?? null,
@@ -3196,6 +3323,7 @@ module.exports = {
   DEVICE_RETENTION_DAYS, DEVICE_HOUR_RETENTION_H, DEVICE_DAY_RETENTION_DAYS, DEVICE_MONTH_RETENTION,
   load, save, saveEvents, saveSamples, prune,
   addEvent, updateEvent, getEvents, findOpenOutage,
+  reconcileOpenEvents, closeUnobserved, withOngoingDuration,
   addSample, getSamples, getAllSamples, getRollups,
   getUptime, getOverallUptime, getAudioUptime, getCoverageStart, getSummary, getDailyBuckets, getCauseBreakdown,
   getPeriodRollup,

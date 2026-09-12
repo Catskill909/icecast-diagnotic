@@ -1,5 +1,30 @@
 # Development log
 
+## 2026-09-12 — A Pacifica network event exposed six defects
+
+All six `streams.pacifica.org` channels failed together at 20:52 UTC. Icecast's
+own record showed it was real for KPFT (Main 157 → 39) and WPFW (388 → 0, still
+down) and a false positive for KPFK (source connected throughout). WPFW's
+outage was recorded but the app did not show it. Full account in `HANDOFF.md`,
+"The Pacifica network event, and why the app hid WPFW".
+
+**The defects, all fixed with tests that fail on the old code:** correlation
+was fleet-wide instead of per server; a hard-coded "CT" after a zoned time; a
+plaintext-port hint on handshakes that had completed; a muted station's one
+outage counted three times toward a storm; **an open outage counted as zero
+seconds in every figure** (WPFW read "100% uptime") and was pushed off the
+dashboard by later events; **every restart orphaned the outage in progress**
+(18 left open since 2026-09-02). Plus the sibling found while fixing the last:
+an unwatched close was being judged "nobody lost audio".
+
+**Process lesson.** The first diagnosis blamed the monitor's own network path
+from a Mac probe taken during recovery, and a later one treated WPFW's muted
+email as part of the problem. Both were wrong. Dev phase: only KPFT and KPFK
+email; the app must catalog everything. Now the operating rules at the top of
+`HANDOFF.md`.
+
+926/926 tests. Not yet deployed.
+
 
 ## 2026-09-11 — Audience build-out, migration, and the sign-in fixes
 

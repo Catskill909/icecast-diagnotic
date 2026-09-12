@@ -671,9 +671,17 @@
       return;
     }
 
-    // Sort by timestamp, newest first
-    const sorted = [...incidents].sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
-    const shown = sorted.slice(0, 8);
+    // Outages still in progress first, then newest first. Only the first few
+    // rows are shown, and on 2026-09-12 WPFW's open outage was pushed below them
+    // by five other stations' recoveries — the one thing still broken was the
+    // one thing the panel did not show. Every open outage is shown, whatever
+    // the row limit.
+    const isOpenOutage = (inc) => !!inc.ongoing;
+    const byTime = (a, b) => new Date(b.timestamp) - new Date(a.timestamp);
+    const open = incidents.filter(isOpenOutage).sort(byTime);
+    const rest = incidents.filter((inc) => !isOpenOutage(inc)).sort(byTime);
+    const sorted = [...open, ...rest];
+    const shown = sorted.slice(0, Math.max(8, open.length));
     const hidden = sorted.length - shown.length;
 
     // Severity is richer than the old down/up split. A failure that never met
@@ -703,7 +711,9 @@
             const cause = inc.diagnosis?.causeLabel && inc.type !== 'up'
               ? ` <span class="incident-cause">· ${escapeHtml(inc.diagnosis.causeLabel)}</span>`
               : '';
-            const duration = inc.durationLabel
+            const duration = inc.ongoing
+              ? ` <span class="incident-cause incident-ongoing">· ONGOING — down ${escapeHtml(inc.durationLabel || '')} so far</span>`
+              : inc.durationLabel
               ? ` <span class="incident-cause">· lasted ${escapeHtml(inc.durationLabel)}</span>`
               : '';
             const mail = inc.email?.sent === true

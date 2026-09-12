@@ -143,6 +143,11 @@ These are deliberately decoupled. **Every** failed check enters the long-term ev
 | Failure #1 | `brief_outage` or `probe_error` | no |
 | Failure #`FAILURE_THRESHOLD` | promoted to `outage` | only if listeners were affected |
 | Recovery | resolved with true duration | yes, if an alert was sent |
+| Still open | counts as lasting until now in every figure, shown first as ONGOING | — |
+| Monitor restarts mid-episode | resumed if still down; otherwise closed with `recoveryObserved: false` at the last failed check seen | no second email |
+
+Muting a station stops its **email only**. Its incidents are recorded and shown in
+the app exactly like any other station's.
 
 The gate is the diagnosis's `listenerImpact` verdict. `confirmed` (Icecast reachable, mount gone)
 and `unknown` (Icecast unreachable, so it cannot be cleared) both email. `none` — Icecast reachable
@@ -171,6 +176,27 @@ curl -s 'localhost:3000/api/events?days=90&emailed=false' | jq
 # Live server state, including other stations on the same host
 curl -s 'localhost:3000/api/diagnostics' | jq '.mounts[] | {pathname, listeners, streamStart}'
 ```
+
+### When every stream on one server fails at once
+
+The monitor cannot tell "the server's network broke" from "our path to it broke"
+while it is happening — the status endpoint is unreachable either way, so impact
+is `unknown` and it emails. Settle it **per station, afterwards**, from Icecast's
+own record:
+
+```bash
+# Did each source stay connected? streamStart earlier than the failure = held.
+curl -s 'localhost:3000/api/diagnostics' | jq '.mounts[] | {host, pathname, listeners, streamStart}'
+# Listener counts either side of the failure
+curl -s 'localhost:3000/api/samples/<streamId>?hours=2' | jq '.samples[] | {timestamp, status, listeners}'
+```
+
+2026-09-12, 20:52 UTC, all six `streams.pacifica.org` channels: KPFT's sources
+reconnected at 21:03 and Main fell 157 → 39 (real); WPFW's source never came
+back, 388 → 0 (real); KPFK's source had been connected since 2026-09-06 and its
+count rose (false positive). One event, three verdicts. **A probe from another
+machine taken during recovery is not evidence about the past** — it was, that
+day, the source of a wrong first diagnosis.
 
 In the UI, the History page groups by day, filters by cause/severity/stream/delivery, and every row expands to its full evidence chain, Icecast state, timing breakdown and delivery record. Individual events are linkable via `history.html#<event-id>`.
 

@@ -121,6 +121,27 @@ An *episode* runs from a stream's first failed check to its recovery. Within one
 | Failure #`FAILURE_THRESHOLD` | same event promoted to `outage` | **only if listeners were affected** |
 | Recovery | outage event resolved with true duration, **plus its own `recovery` event** | yes, if an alert was sent |
 
+**An outage still in progress has lasted until now.** `durationMs` is only written
+at recovery, so every aggregate reads failures through
+`store.withOngoingDuration()`, which gives an open one a duration to the present
+and a provisional audience cost (never written back). Until 2026-09-12 an open
+outage counted as zero seconds: WPFW, off air for over an hour, reported "100%
+uptime · none lasting more than 0s". The dashboard lists open outages first,
+marked ONGOING, including any that began more than 24 hours ago.
+
+**A restart resumes the outage in progress.** Episodes live in memory, so every
+redeploy used to orphan the open event — open for ever, with a second event
+beside it if the stream was still down (18 such orphans accumulated on
+2026-09-02). At startup `store.reconcileOpenEvents()` closes superseded ones; a
+stream's latest open outage is resumed on the first check if still down (same
+event, no second email) or closed if healthy. A close nobody watched carries
+`recoveryObserved: false`, ends at the last failed check actually seen, gets no
+`recovery` event, and is never judged harmless for lack of a reconnect record.
+
+**"Every stream failed" is judged per server.** Correlation counts only streams on
+the same Icecast host: all six Pacifica channels failing while WBAI's and KPFA's
+servers are fine is a server-level event, not six stream faults.
+
 **Recording a recovery does not depend on emailing one.** Every confirmed outage
 gets a `recovery` event when it ends, whatever the station's alert settings and
 whatever the listener-impact verdict decided about mail. Until 2026-09-02 the
@@ -810,8 +831,11 @@ panel showed a station "2 recipients" in one line and "none set" in the next, an
 the two addresses that actually received that station's alerts could not be seen,
 edited or corrected from the screen whose entire purpose is managing them.
 
-`alerts.enabled: false` mutes a station while still recording everything: the
-setting for a station being trialled, or one whose staff are not onboarded yet.
+`alerts.enabled: false` mutes a station's EMAIL while still recording and SHOWING
+everything — the dashboard, history and reports catalog a muted station's
+incidents exactly as they do anyone else's. It is the setting for a station being
+trialled, or one whose staff are not onboarded yet. **During development only
+KPFT and KPFK are enabled; every other station is muted on purpose.**
 It is kept separate from an empty recipient list on purpose — an empty list is an
 unfinished setup, a disabled station is a decision, and collapsing them makes
 "we turned this off deliberately" indistinguishable from "someone deleted the

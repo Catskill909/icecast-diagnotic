@@ -3,15 +3,38 @@
 > **START HERE.** Everything below this section is a dated log, newest first.
 > This part is the current state and is rewritten rather than appended to.
 
-## Where the project is — 2026-09-12
+> ### ⚠️ OPERATING RULES — read before diagnosing anything
+>
+> 1. **The monitor is in DEVELOPMENT.** Only **KPFT and KPFK** have alert
+>    **emails** switched on. WPFW, WBAI and KPFA are switched off **on purpose**.
+>    `alerts are switched off for station "…"` on those stations is expected. It
+>    is never a cause, a bug, or an action point, and enabling them is not a
+>    suggestion to make.
+> 2. **"Alert" means EMAIL. The APP is a different thing: the app must catalog
+>    EVERY incident for EVERY station**, muted or not. Email muting must never
+>    reduce what the dashboard, incident list, history or station reports show.
+>    A muted station's outage missing from the app is a bug.
+> 3. **A whole-server failure can be real for some stations and false for
+>    others.** Judge each station after the fact from Icecast's own record — a
+>    mount's `streamStart` (when its source last connected) and its listener
+>    count before and after — never from a probe taken from a Mac during
+>    recovery. See the 2026-09-12 entry below.
 
-**Live, healthy, and fully deployed.** 5 stations, 10 channels, 3 Icecast hosts.
-10/10 streams up, 99.82% audio uptime over 7 days (99.26% over 30), 1,053
-events retained since 2026-08-04, both geo databases loaded (MaxMind city, so
-states AND metros resolve) and auto-updating. **906 tests pass**, both CI jobs
-green. Local, `origin/main` (`d72b5b1`) and production are all the same commit —
-audited live 2026-09-12 against the served assets, not just the API. This
-week's `faultSplit` was 100% `source`: every outage was upstream of Icecast.
+## Where the project is — 2026-09-12 (evening)
+
+**Live, but NOT current: a batch of fixes is built, tested and not yet
+deployed.** 5 stations, 10 channels, 3 Icecast hosts. **926 tests pass locally**
+(906 at the last audited deploy). `main` is at `0097660`; everything described in
+the 2026-09-12 "Pacifica network event" entry below is on top of that, local
+until pushed and deployed from Coolify.
+
+**WPFW is down in real life** (its source to `streams.pacifica.org` dropped at
+~21:03 UTC and did not return; the engineer has been told). Until the fixes are
+deployed, WPFW's station report reads "100% uptime · 0s" and the dashboard does
+not show its outage — that is the bug the batch fixes.
+
+**Deploy note:** deploying while an outage is open is now SAFE (a restart resumes
+it). Before this batch it was not — every redeploy orphaned the open outage.
 
 Verify a deploy without signing in:
 
@@ -33,9 +56,21 @@ has Backup & move.
 
 ### What is NOT done, in priority order
 
-> **Picking this up? Start at item 2.** Item 1 is the most valuable thing on
-> the list but is BLOCKED on the owner, and there is no code to write for it.
+> **Picking this up? Start at item 0, then item 2.** Item 1 is the most valuable
+> thing on the list but is BLOCKED on the owner, and there is no code to write for it.
 
+0. **Ship the 2026-09-12 open-outage batch, then verify it live.** Push, deploy
+   from Coolify, then check: `/api/rollup?days=1&stationId=wpfw` shows
+   `counts.ongoing: 1` with a non-zero `downtime.streamMs` (while WPFW is still
+   down); the dashboard's Recent Incidents leads with WPFW marked ONGOING; the
+   startup log says it closed the 18 orphaned 2026-09-02 events; `/api/events`
+   shows those 18 with `recoveryObserved: false`.
+0b. **Decide: should an unwitnessed whole-server failure email?** KPFK's
+   2026-09-12 alert was a false positive — Pacifica's server was unreachable
+   from the monitor, so impact was `unknown`, and `unknown` emails by design.
+   The same rule got KPFT right. Suppressing `unknown` would also silence a real
+   Pacifica crash. The real fix is a second vantage point (a probe from another
+   network). Owner's decision — do not change the policy without it.
 1. **BLOCKED ON OWNER — Icecast admin credentials for `streaming.wbai.org` and
    `streams.kpfa.org:8443`.** No code required — one env var,
    `ICECAST_ADMIN_CREDS`. This is worth more than any remaining feature: it
@@ -111,6 +146,10 @@ plausible, confident, wrong number before it was caught:
 | **Repeated sampling is length-biased** | A six-hour session appears in ~72 readings, a two-minute one in at most one | Store per device and reduce; never tally per reading and sum |
 | **A gate sized for one claim is wrong for a smaller one** | 200 km is inside one state and spans several cities | Tighten the gate with the claim; degrade to the coarser answer rather than refusing |
 | **An absent figure reads as a zero one** | "iOS app is not showing for KPFK" — it was tenth on a list that drew nine | A truncated list must say so, and say why the rest are hidden |
+| **An open outage has no duration** | WPFW off air 1h+, ~390 listeners gone; its report: "100% uptime · none lasting more than 0s" | `durationMs` exists only after recovery. Read failures through `store.withOngoingDuration()`, never `e.durationMs \|\| 0` |
+| **Episodes live in memory, events on disk** | Every redeploy orphaned the open outage; 18 sat open from 2026-09-02 | Startup runs `store.reconcileOpenEvents()`; anything that gates once-per-episode must be restorable from the event |
+| **"All streams" is a per-server question** | Six Pacifica channels failing together read as "Single stream · 6 of 10" | Correlate within one host (`diagnose.serverWideHosts`), never across the fleet |
+| **A flag set by the mailer is not "this episode was handled"** | A muted station's one outage counted 3× toward a storm | Gate once-per-episode logic on its own flag, not on `alerted` |
 
 **And the one that would ruin a migration silently:** `deviceSalt` and
 `devices.db` are ONE artefact. The hashes are in the database, the salt is in
@@ -133,6 +172,132 @@ jumps by the whole audience and "came back" reads zero for ever, with no error.
 - **Every figure that can be withheld is withheld as `null`, never `0`**, with a
   reason the page renders. "We could not measure it" and "it was zero" are
   different sentences and must never look alike.
+
+---
+
+## 2026-09-12 — The Pacifica network event, and why the app hid WPFW
+
+### What happened (times UTC)
+
+At **20:52:45** all six channels on `streams.pacifica.org:9000` — KPFT Main, HD2,
+HD3, WPFW, KPFK and a KPFA channel — failed in the same check cycle, and so did
+Pacifica's status endpoint. WBAI's and KPFA's own servers stayed healthy. The
+monitor's connections to Pacifica took 3–10 s to connect (retransmit timing) and
+stalled after. KPFK recovered at 21:05:45, the KPFT channels at 21:06:45.
+
+Icecast's own record afterwards is what says what listeners experienced:
+
+| Channel | Listeners before → after | Icecast `streamStart` | Verdict |
+|---|---|---|---|
+| KPFT Main | 157 → 39 | reconnected 21:03 | **real** — encoder dropped; email correct |
+| KPFT HD2 | 13 → 7 | reconnected 21:03 | **real** |
+| KPFT HD3 | 4 → 2 | — | real |
+| WPFW | 388 → 0 | source gone, did not return | **real, still down** (email muted by design — dev phase) |
+| KPFK | 112 → 121 | connected since 2026-09-06 | **false positive** — audio never stopped; emailed |
+| KPFA (Pacifica) | — | connected since 2026-09-07 | false positive (no recipients) |
+
+Icecast itself did not restart (`server_start` 2026-08-19). So this was a
+Pacifica-side network event that dropped some inbound sources and slowed every
+outbound connection — real for KPFT and WPFW, not for KPFK.
+
+**A correction, recorded because it will happen again.** The first diagnosis in
+this session called the whole thing "the monitor's own network path — the
+stations stayed on air", from a probe of Pacifica on a Mac that answered in
+<0.5 s. That probe was taken during recovery and could not see the past. It was
+wrong for KPFT and WPFW. The source-reconnect time and the listener counts
+settled it. That method is now Operating Rule 3 at the top.
+
+### What was wrong in the monitor — six defects, one incident
+
+**1. Cross-stream correlation was fleet-wide.** `diagnose.classify()` asked "did
+ALL monitored streams fail?" across every server. With three hosts, six of ten
+is never all, so a whole-server event was scoped `stream` — the KPFK email read
+"🎚️ Single stream" and "6 of 10 monitored streams are failing". Written when the
+monitor watched one server; never made host-aware. Same mistake in
+`monitor.js`'s `allDown` (email heading scope) and in the recovery heading, which
+called any two recoveries in a cycle "server".
+**Fix:** correlation within the stream's own host; `diagnose.serverWideHosts()`
+decides server scope for both email headings.
+
+**2. "Detected At 1:54:44 PM PDT CT".** A hard-coded ` CT` from the Houston-only
+days, appended after a time that already names its zone. Only instance.
+
+**3. "What a TLS handshake against a plaintext port looks like".** Attached to
+every `EDEADLINE`, including this one where TLS had completed. **Fix:** the hint
+appears only when TCP connected and TLS never finished, and names congestion as
+the other explanation.
+
+**4. A muted station's one outage was counted as a storm.** The storm counter is
+once-per-episode and was gated on `episode.alerted` — set only by the mailer,
+never for a muted station — so WPFW re-entered it every cycle: 'alert',
+'declare', 'suppress'. Its record read "flapping (3 outages)". Persisted, so
+enabling WPFW's email later would have silenced its first real outage.
+**Fix:** its own flag, `stormNoted`, persisted as `notificationJudgedAt`.
+
+**5. An open outage lasted zero seconds everywhere.** `durationMs` is written at
+recovery. Every aggregate read `e.durationMs || 0`: the period report (brief vs
+significant, downtime, longest, "What happened", listeners cut off), audio
+uptime, the daily off-air calendar, listener-hours lost, the audience-chart
+outage bands, and the history page, which totals events in the browser. WPFW —
+off air over an hour — read **"100% uptime · 1 brief interruption, none lasting
+more than 0s"**. On top of that the dashboard's Recent Incidents shows the newest
+eight events; five stations' recoveries pushed WPFW's open outage to tenth, off
+the panel. And its feed was a 24-hour window, so an outage on its second day
+would vanish from the dashboard entirely.
+**Fix:** `store.withOngoingDuration()` gives an open failure a duration to now
+and a provisional audience cost, as a copy that is never written back. Applied
+where aggregates read events (`getPeriodRollup`, `getAudioUptime`,
+`getDailyBuckets`, `getAudienceSummary`), in `monitor.getEvents` (so every page
+reading `/api/events` gets it), in the audience bands, and in `getIncidents`,
+which now also includes every open outage older than 24 h. The dashboard pins
+open outages above everything and labels them "ONGOING — down 1h 14m so far".
+
+**6. Every restart orphaned the outage in progress.** Episodes are in memory;
+startup restored stream status but not episodes. The open event stayed open for
+ever, and a still-down stream got a second event beside it. **The live record
+holds 18 such orphans**, all KPFT Main/HD2, from the redeploys of 2026-09-02.
+They were invisible only because of defect 5 — fixing 5 alone would have
+reported ten days off air. **Fix:** `store.reconcileOpenEvents()` at startup.
+Superseded orphans are closed; a stream's latest open outage waits for the first
+cycle, which resumes the same event if still down (no second record, no second
+email, failure count and storm state restored) or closes it if healthy. A close
+without a watched recovery sets `recoveryObserved: false`, ends at the **last
+failed check actually seen** (a lower bound, never an invention), and gets no
+manufactured recovery event.
+
+Found while fixing 6, same mechanism: **`settledImpact()` read "no source
+reconnect recorded" as "the source held — nobody lost audio"** for ANY resolved
+event. That is only valid for a watched recovery. Unobserved closes and
+`abandoned` episodes (channel removed while failing) would have been written
+off as harmless. Now `unknown` unless the recovery was observed.
+
+### Tests (each fails against the pre-fix code)
+
+- `test/server-scoped-correlation.test.js` — two hosts, one fully down: server
+  scope, per-host counts, single-stream host never "server", plaintext hint only
+  on a stalled handshake, one zone in "Detected At" for any timezone. 6 of 7
+  fail on the old code (the 7th pins that the hint still appears when warranted).
+- `test/storm-once-per-episode.test.js` — full check cycles, muted + alerting
+  station on one host: one outage counted once. Old code: "counted 3 times".
+- `test/open-outages.test.js` — rollup, events feed (and no write-back), 24h+
+  open outage on the dashboard, startup closing superseded orphans without a
+  manufactured recovery, a REAL restart (modules reloaded from disk) mid-outage
+  resuming the same event with no second email, and a stream healthy after
+  restart closed as unobserved. All 6 fail on the old code.
+- `test/incidents-open-first.test.js` — open outage shown above 12 later events,
+  all open outages shown past the row limit, labelled ONGOING. All 3 fail on the
+  old `app.js`.
+
+Full suite 926/926 on Node 24.20.0.
+
+### Open
+
+- **KPFK false positive / unwitnessed failures** — item 0b at the top.
+- **After deploy**, WPFW's resumed outage keeps its event. Its phantom storm
+  state from defect 4 is persisted and ends by itself after 30 min healthy; it is
+  muted, so it can send nothing meanwhile.
+- The 18 closed orphans will appear in history with durations to their last
+  failed check. Those are MINIMUMS; the record says so.
 
 ---
 
