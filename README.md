@@ -138,6 +138,23 @@ event, no second email) or closed if healthy. A close nobody watched carries
 `recoveryObserved: false`, ends at the last failed check actually seen, gets no
 `recovery` event, and is never judged harmless for lack of a reconnect record.
 
+**"Can't reach the server" is not "the station is down".** When a server's status
+page cannot be reached, a failing stream on it is **unconfirmed**: shown grey as
+"Can't reach server — not confirmed", not counted down, excluded from uptime,
+recorded but never promoted to an outage, and no station is emailed. When the
+server answers, each station is judged on its own feed — mount gone, or its
+source reconnected during the gap, confirms it and emails that station only.
+On 2026-09-12 this was twice the difference between emailing KPFK about outages
+it never had and not. Note the dashboard's play buttons connect from the
+viewer's browser straight to Icecast, so "it plays for me" and "the monitor
+can't reach it" can both be true.
+
+**The monitor records its own network path.** Every cycle stores per-server
+connection phases; a route trace and a full network test run from the monitor's
+host whenever a server stops answering, and are linked to the incident; the
+admin panel's **Network test** runs the same battery on demand. See
+docs/DIAGNOSTICS.md §"Testing the monitor's own route".
+
 **"Every stream failed" is judged per server.** Correlation counts only streams on
 the same Icecast host: all six Pacifica channels failing while WBAI's and KPFA's
 servers are fine is a server-level event, not six stream faults.

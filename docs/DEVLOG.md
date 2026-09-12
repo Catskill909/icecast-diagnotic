@@ -1,5 +1,23 @@
 # Development log
 
+## 2026-09-12 (late) — The monitor lost Pacifica twice; now it records why
+
+22:11–22:27 UTC it recurred: every Pacifica channel called down, KPFK and KPFT
+emailed, while KPFK played for the owner. The play buttons connect from the
+browser, not our server — a different route, which is why they worked.
+Pacifica's reconnect record settled it: in both windows the monitor, KPFT's
+encoder and WPFW's encoder lost the server together and recovered together;
+KPFK's and KPFA's encoders never dropped. A partial network failure on
+Pacifica's side — real outages for KPFT and WPFW, false alarms for KPFK and KPFA.
+
+Shipped: `6195a82` unreachable server → unconfirmed, no station email (did not
+engage live — the guard needed state the new build had never seen);
+`e737dd8` consults history for that guard; `e138c0a` per-minute network record,
+automatic route traces and network tests, an admin Network test button, and an
+inert second-location witness. 942/942. Owner's test at 22:40 UTC: all routes
+healthy, mtr working. Next: browser second opinion, automatic reconnect
+diagnosis, evidence on the incident page — HANDOFF items A–E.
+
 ## 2026-09-12 — A Pacifica network event exposed six defects
 
 All six `streams.pacifica.org` channels failed together at 20:52 UTC. Icecast's

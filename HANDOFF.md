@@ -19,31 +19,36 @@
 >    mount's `streamStart` (when its source last connected) and its listener
 >    count before and after — never from a probe taken from a Mac during
 >    recovery. See the 2026-09-12 entry below.
+> 4. **Only the station with the issue gets the email — and only on evidence
+>    about ITS OWN feed.** "The monitor can't reach the server" is never
+>    evidence a station is down (owner's rule, 2026-09-12).
+> 5. **The app must diagnose itself.** Never make "ask Pacifica / ask Contabo /
+>    fetch their logs / set up a server" the fix. Build the evidence-gathering
+>    into the app.
+> 6. **The dashboard's play buttons do NOT go through our server.** They play
+>    straight from the viewer's browser to Icecast (`new Audio(url)`,
+>    public/app.js). UP/DOWN comes from the monitor's host at Contabo. "The
+>    player works but the card says down" means those two routes differ.
 
-## Where the project is — 2026-09-12 (evening)
+## Where the project is — 2026-09-12 (late evening)
 
-**Live and current: `314f4a5` deployed and audited live at 21:44 UTC.** 5
-stations, 10 channels, 3 Icecast hosts. **926 tests pass**, CI green.
+**Live: `e138c0a` deployed ~22:40 UTC. 942 tests pass.** All streams up at hand-off.
 
-Live audit of the open-outage batch, all confirmed:
-- Fresh container; served `/app.js` carries the ONGOING rendering.
-- Restart RESUMED the three outages in progress — one open event each for KPFT
-  Main, KPFT HD2 and WPFW, failure counts carried over (19, 19, 51), no new event
-  and no email since the restart.
-- All 18 orphaned 2026-09-02 events closed with `recoveryObserved: false`
-  (longest 23 min); zero recovery events manufactured for them.
-- WPFW report (1d): 96.42% uptime, 1 ongoing, 52m down, 388 listeners cut off,
-  "WPFW Washington DC, off air 51m — source encoder disconnected". Before the
-  deploy the same report read 100% and 0s.
-- KPFT report (1d): 2 ongoing, top incident "KPFT Main + HD2, ONGOING".
-- KPFK report (1d): 100% — its 20:52 outage settled as no listener impact
-  (source connected throughout). Only its EMAIL was wrong; see item 0b.
-- Dashboard feed flags kpft-main, kpft-hd2 and wpfw as ongoing.
+**Today had two monitor-reach failures** (20:52–21:06 and 22:11–22:27 UTC) in which
+the monitor called every Pacifica station DOWN and emailed KPFT and KPFK while
+KPFK and KPFA played normally. Diagnosed — see "2026-09-12 (late) — Pacifica's
+partial network failure, twice" below. Three batches shipped in response:
 
-**Real-world state at the audit:** WPFW down since 20:52 (source encoder).
-KPFT Main and HD2 down since 21:25 (source encoder) — part of KPFT's ongoing
-network problem on the station side, which causes both outages and encoder
-disconnects. Not a monitor fault.
+| Commit | What | Live-verified |
+|---|---|---|
+| `6195a82` | Emergency: server unreachable → streams UNCONFIRMED (grey), no station email | ❌ did not engage — see e737dd8 |
+| `e737dd8` | Fix: a server unreachable since the deploy is still held (history proves it has a status page) | deployed; not exercised by a live outage yet |
+| `e138c0a` | Diagnostics: per-minute connection timings, automatic route traces + network test, admin **Network test** button, second-location witness (inert) | ✅ owner ran the test at 22:40 UTC — all three servers healthy, mtr works (Pacifica 17 hops, WBAI 10, KPFA 12) |
+
+**Healthy baseline captured 22:40 UTC from the monitor's host** (compare any future
+failure against it): Pacifica TCP 61 ms · status 282 ms · stream 276 ms · 5/5 raw
+connects · 17 hops. WBAI TCP 26 ms · 10 hops. KPFA Berkeley TCP 68 ms · 12 hops.
+Monitor process: 7 open connections at 1 min uptime.
 
 Verify a deploy without signing in:
 
@@ -65,15 +70,35 @@ has Backup & move.
 
 ### What is NOT done, in priority order
 
-> **Picking this up? Item 0b needs the owner; start coding at item 2.** Item 1 is the most valuable
-> thing on the list but is BLOCKED on the owner, and there is no code to write for it.
+> **Picking this up? Start at item A — the monitor-reach work in progress.**
+> Item 1 is BLOCKED on the owner, and there is no code to write for it.
 
-0b. **Decide: should an unwitnessed whole-server failure email?** KPFK's
-   2026-09-12 alert was a false positive — Pacifica's server was unreachable
-   from the monitor, so impact was `unknown`, and `unknown` emails by design.
-   The same rule got KPFT right. Suppressing `unknown` would also silence a real
-   Pacifica crash. The real fix is a second vantage point (a probe from another
-   network). Owner's decision — do not change the policy without it.
+A. **Browser second opinion (IN PROGRESS, not started in code).** When the
+   monitor's own connection to a stream fails with no HTTP answer, a logged-in
+   dashboard plays that stream muted in a hidden `<audio>` element (the same
+   route the working play buttons use) for ≤12 s and POSTs the result to a new
+   auth-only endpoint. The next cycle feeds a fresh (<2 min) report into
+   `consultWitnesses()` as a witness verdict → `monitor_path` ("on air, verified
+   from a viewer's browser"). Constraints found: Pacifica's Icecast 2.4.3 sends
+   **no CORS header**, so `fetch` cannot read the stream — use a media element;
+   CSP already allows `media-src https:`; reports MUST require auth or anyone
+   could suppress a real outage. Needs the `unconfirmed` gate to skip when
+   `result.witness.ok` (already done in monitor.js).
+B. **Automatic "which encoders reconnected" diagnosis.** When a held (unconfirmed)
+   episode settles, compare every mount's `streamStart` on that server against
+   the gap and write the table from the 2026-09-12 (late) entry into the
+   incident: which feeds dropped, which held, and the conclusion "partial network
+   failure on the server's side" when the monitor AND some encoders dropped
+   together while others held.
+C. **Isolation test.** One station failing must never change another station's
+   status. True today by construction (per-stream probes); pin it with a test.
+D. **Show the evidence on the incident page.** Events now carry
+   `pathTraceIds` and `networkTestIds`; the history/event drill-down does not
+   render them yet. Render the verdict sentence, the trace's last answering hop
+   against the baseline, and the per-minute network rows for the window.
+E. **Optional: deploy `witness/witness.js` on a non-Contabo network** (set
+   `WITNESS_URLS`, `WITNESS_TOKEN` on the monitor). Only if the owner wants an
+   always-on second location; A covers the case when someone is watching.
 1. **BLOCKED ON OWNER — Icecast admin credentials for `streaming.wbai.org` and
    `streams.kpfa.org:8443`.** No code required — one env var,
    `ICECAST_ADMIN_CREDS`. This is worth more than any remaining feature: it
@@ -152,6 +177,8 @@ plausible, confident, wrong number before it was caught:
 | **An open outage has no duration** | WPFW off air 1h+, ~390 listeners gone; its report: "100% uptime · none lasting more than 0s" | `durationMs` exists only after recovery. Read failures through `store.withOngoingDuration()`, never `e.durationMs \|\| 0` |
 | **Episodes live in memory, events on disk** | Every redeploy orphaned the open outage; 18 sat open from 2026-09-02 | Startup runs `store.reconcileOpenEvents()`; anything that gates once-per-episode must be restorable from the event |
 | **"All streams" is a per-server question** | Six Pacifica channels failing together read as "Single stream · 6 of 10" | Correlate within one host (`diagnose.serverWideHosts`), never across the fleet |
+| **"Can't reach the server" is not "the station is down"** | KPFK OFFLINE and emailed twice while it played; the players worked because they use a different route | Hold on `unconfirmed`; settle per station on its own feed (`streamStart`, mount present) |
+| **A "have we seen it" list starts empty** | `6195a82` held nothing: Pacifica had been unreachable since the deploy, so it had never been "seen" | Any guard keyed on observed state must also consult the stored history |
 | **A flag set by the mailer is not "this episode was handled"** | A muted station's one outage counted 3× toward a storm | Gate once-per-episode logic on its own flag, not on `alerted` |
 
 **And the one that would ruin a migration silently:** `deviceSalt` and
@@ -175,6 +202,133 @@ jumps by the whole audience and "came back" reads zero for ever, with no error.
 - **Every figure that can be withheld is withheld as `null`, never `0`**, with a
   reason the page renders. "We could not measure it" and "it was zero" are
   different sentences and must never look alike.
+
+---
+
+## 2026-09-12 (late) — Pacifica's partial network failure, twice
+
+### What happened
+
+At **22:11 UTC** (6:11 PM ET) it recurred. Checks on every
+`streams.pacifica.org` channel began failing; from 22:15 the monitor had no
+contact at all. The dashboard called KPFT, KPFK and KPFA down and **emailed KPFK
+and KPFT (HD3) at 22:17:43**. The owner was playing those streams from the
+dashboard the whole time. Contact returned at **22:27**.
+
+Measured in the same minute (22:19 UTC):
+
+| | From the monitor's host (Contabo, 144.126.148.20) | From the owner's Mac |
+|---|---|---|
+| KPFK stream | TCP connect 2,230 ms, TLS never completed, gave up at 18 s | 200, connect 0.32 s, audio flowing |
+| KPFT Main | TCP 4,363 ms, gave up | 200, connect 0.08 s |
+| Pacifica status page | no answer in 12 s | answered in 0.36 s |
+| WBAI / KPFA Berkeley servers | TCP 25–71 ms, normal | — |
+
+### Why the players worked while the card said DOWN
+
+**They are two different connections on two different routes.** The play
+button is `new Audio(url)` in `public/app.js` — the viewer's browser connects
+straight to Pacifica over the viewer's own internet. The server has no audio
+relay. UP/DOWN comes from the monitor's host at Contabo connecting to Pacifica
+itself. Same destination, different starting point, different route. This took
+far too long to establish in the session and must not be re-derived: see
+Operating Rule 6.
+
+### The diagnosis — from Pacifica's own reconnect record
+
+Icecast records when each station's encoder last connected (`streamStart`).
+Read after both windows, it shows **the same connections failed both times and
+the same ones held**, and that the failing ones came back together:
+
+| Connection into streams.pacifica.org | 20:52–21:06 UTC | 22:11–22:27 UTC |
+|---|---|---|
+| Our monitor (Contabo) | lost | lost; back 22:27 |
+| KPFT encoder (Houston) | dropped; Main 157 → 39 listeners; reconnected 21:03 | dropped; Main 37 → 12; reconnected **22:27:50** (HD2 22:28:49) |
+| WPFW encoder (DC) | dropped; 388 → 0 | dropped; 77 → 33; reconnected **22:25:21** |
+| KPFK encoder (LA) | held (connected since 2026-09-06); 112 → 121 | held; 154 → 168 |
+| KPFA encoder | held (since 2026-09-07) | held |
+| Owner's browser | played | played |
+
+Icecast itself never restarted (`server_start` 2026-08-19). Three unrelated
+networks — Contabo, KPFT's, WPFW's — losing the server at the same moments and
+recovering within the same three minutes (22:25–22:28), while other networks
+never noticed, puts the fault **on Pacifica's side of the internet** (its host,
+CyberCloud Professionals, or the network just in front of it). Not Contabo
+alone, not the stations, not the monitor's code.
+
+So, for the record: **KPFT and WPFW were really off air** (their listeners
+dropped) and their alerts were right. **KPFK and KPFA were not** — false
+positives. WPFW's real outage did NOT spread into KPFK's status: each station's
+status comes from its own probe, and KPFK's failed at TCP connect, before any
+HTTP. One cause, two effects.
+
+What is still NOT known: which network hop failed. Nothing traced the route
+while it was broken. From `e138c0a` on, that is captured automatically.
+
+### What the app got wrong, and what shipped
+
+**1. It turned "I can't reach the server" into "the station is down."**
+`6195a82` (emergency): while a server's status page is unreachable, failing
+streams on it are **unconfirmed** — grey "Can't reach server — not confirmed" on
+the dashboard, not counted down, those checks excluded from uptime, the event
+recorded but never promoted to an outage, no station email. When the server
+answers, each station is settled on its own evidence (mount gone, or
+`streamStart` after the gap began → confirmed, and only that station is emailed;
+source held → recorded as the monitor's reach, no email). After 10 minutes
+unreachable one notice goes to `OPERATOR_ALERT_EMAIL` (unset today), never to
+stations. Test: `test/unreachable-server-hold.test.js`.
+
+**2. The emergency fix did not engage.** It held alerts only for a server it had
+SEEN answer since starting (`meta.hostsSeenReachable`), so a server with no
+status page at all would still alert. It went live while Pacifica was already
+unreachable, so nothing had been seen, and every Pacifica station was still
+called DOWN. `e737dd8`: a server counts as having a status page if any stored
+diagnosis of one of its streams reached it. Test:
+`test/unreachable-from-first-cycle.test.js`.
+
+**3. The failing machine recorded nothing.** Every test run during the outage
+came from the owner's Mac, on a working route, and passed. `e138c0a`:
+- **Per-minute network record** — every cycle, per server: answered?, DNS / TCP /
+  TLS / first-byte, attempts, resolved IP, error (`store.addNetSample`,
+  `GET /api/network`, auth). Every stream sample gains `tm: [dns,tcp,tls,ttfb]`.
+- **Route traces** from the monitor's host (`path-trace.js`: mtr, TCP to the
+  stream port, `--json`): after a server misses 2 checks, every 10 min, max 3 per
+  episode; a daily baseline while healthy; linked to open incidents as
+  `pathTraceIds` (`GET /api/path-traces`, auth). Dockerfile installs mtr and
+  gives only `mtr-packet` NET_RAW — the app runs as a non-root user.
+- **Network test** (`network-test.js`), run on the monitor's host: DNS, status
+  page, stream probe, 5 raw TCP connects, route trace, and the process's own open
+  sockets (the "is it us?" check), ending in one plain sentence. Runs
+  automatically when a server stops answering (`networkTestIds` on the
+  incident); on demand from the new **Network test** panel in `/admin.html`
+  (`POST /api/network-test`, `GET /api/network-tests`, auth).
+- **Second-location witness** — `witness/witness.js` (standalone, no deps; token
+  + host allow-list; reads the status page BEFORE opening the stream so it is not
+  counted as a listener) and `witness-client.js`. Inert unless `WITNESS_URLS`
+  and `WITNESS_TOKEN` are set. When configured, a transport failure is retried
+  from there; audio received → cause `monitor_path`, scope `monitor`, impact
+  `none`, never promoted, never emailed; the witness's copy of the status page
+  stands in for an unreachable one (`via: 'witness'`).
+- Tests: `network-record`, `path-trace`, `network-test` (the verdict for the
+  22:19 shape names the hop where the trace stops).
+
+**Live check, 22:40 UTC** (owner pressed Run network test): all three servers
+healthy; mtr runs in the container. Baseline recorded in "Where the project is".
+
+### Process mistakes worth not repeating
+
+- **The first grey fix shipped with a guard keyed on state the new build had
+  never observed.** A test that starts from a healthy cycle cannot catch that;
+  the new test starts unreachable from the first cycle.
+- **`node -e "require('./server')"` starts the whole app** (monitor loop,
+  listener). Run once locally by mistake; alerts are suppressed outside the
+  container, so nothing was sent. Load `monitor.js` or `store.js` to check syntax,
+  never `server.js`.
+- **Tests slice `server.js` between route strings.** A new route inserted
+  between `/api/listener-detail` and `/api/diagnostics` hijacked
+  `audience-refresh.test.js`. New routes go before `/api/test-alert` (POST).
+- **Explanations must be short and concrete.** The owner asked "simply put, what
+  is going on" several times. Lead with one sentence and the evidence table.
 
 ---
 

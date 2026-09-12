@@ -177,6 +177,34 @@ curl -s 'localhost:3000/api/events?days=90&emailed=false' | jq
 curl -s 'localhost:3000/api/diagnostics' | jq '.mounts[] | {pathname, listeners, streamStart}'
 ```
 
+### Testing the monitor's own route
+
+The monitor runs from one host. When that host's route to a streaming server
+fails, every stream on the server fails with it while playing normally for
+everyone else — and the dashboard's play buttons, which connect from the
+viewer's browser, keep working. Evidence the monitor now keeps:
+
+| Evidence | Where | When |
+|---|---|---|
+| Connection phases per server, per minute (answered?, DNS/TCP/TLS/first byte, IP, error) | `GET /api/network?hours=` (auth) | every cycle |
+| Connection phases per stream check | samples, field `tm` | every cycle |
+| Route trace (mtr, TCP to the stream port) | `GET /api/path-traces` (auth), `pathTraceIds` on the incident | after 2 missed checks; daily baseline |
+| Network test: DNS, status page, stream, 5 raw connects, trace, monitor's open sockets, verdict sentence | `/admin.html` → Network test; `GET /api/network-tests`; `networkTestIds` on the incident | on demand; automatically when a server stops answering |
+
+Healthy baseline, 2026-09-12 22:40 UTC, from the Contabo host: Pacifica TCP 61 ms,
+17 hops · WBAI TCP 26 ms, 10 hops · KPFA Berkeley TCP 68 ms, 12 hops.
+
+Read a failure against it: a trace that stops short names the hop where the path
+dies; one that reaches the server with failed or multi-second raw connects means
+packets arrive but are lost; open sockets far above single digits would point at
+the monitor itself.
+
+**Settle the stations from the server's own record afterwards** (next section):
+on 2026-09-12 the monitor, KPFT's encoder and WPFW's encoder all lost
+streams.pacifica.org at the same moments and came back within three minutes of
+each other, while KPFK's and KPFA's encoders never dropped — a partial network
+failure on the server's side, real for two stations and false for two.
+
 ### When every stream on one server fails at once
 
 The monitor cannot tell "the server's network broke" from "our path to it broke"
