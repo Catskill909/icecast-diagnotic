@@ -447,12 +447,24 @@ does not change shape depending on which station is selected. The explanation is
 given **once**, at the top of the gated section; repeating it per panel is a wall
 of apologies that a reader learns to scroll past.
 
-### Ranked lists say when they are truncated
+### Ranked lists say when they are truncated — and Player/app is not
 
-Player/app, platform, metro and country are all **top-N lists**. They used to
-drop the remainder silently, which produced a real report: *"iOS app is not
-showing for KPFK — the other stations have it."* It was there, at tenth, on a
-list that showed nine.
+Platform, metro and country are **top-N lists**. They used to drop the
+remainder silently, which produced a real report: *"iOS app is not showing for
+KPFK — the other stations have it."* It was there, at tenth, on a list that
+showed nine.
+
+**Player/app is exempt: it shows every entry.** That list was cut three ways —
+nine rows, twelve rows, then the 1% share described below with the tail behind
+an expander — and each version produced the same report, that a player a
+station would act on was not on the page. The expander was the worst of the
+three because it looked solved: a row reading *"12 more, each under 1%"* in
+muted italic is not something a reader notices, let alone recognises as a
+control, so the entries were as missing as when they were dropped in silence. A
+player at 0.4% is still hundreds of people and is exactly the row a platform
+decision turns on, so the list is complete and has no remainder row at all. The
+opt-out is a single sentinel, `bars(players, cume, ALL)`; every other list keeps
+the cut.
 
 Two things were wrong, and only one of them was the missing row. The
 percentages are shares of the whole audience, so the visible rows fell short of
@@ -473,10 +485,10 @@ all. The remainder row then means something specific — *"15 more, each under
 should have seen?
 
 **That row is also the expander.** Clicking it reveals the rest in place — no
-modal, no second page, and no control at all when the list already fits. The
-tail stays collapsed by default because most of it is one listener apiece, and a
-panel that opens with thirty such rows is one nobody scans, which is how the
-silent truncation arrived in the first place.
+modal, no second page, and no control at all when the list already fits. It
+opens **expanded**: collapsed, it repeated the original failure in a quieter
+form, since an entry behind a control nobody can see is an entry nobody has.
+Clicking folds the tail away for a reader who wants the shape of the list back.
 
 **Nothing is capped server-side.** The API returns the complete maps for
 players, platforms, states, metros and countries; every limit is in the display

@@ -212,19 +212,16 @@
          <em>growth</em> \u2014 and a station acts on them differently. A single
          percentage would hide the second: a month can keep every regular and reach nobody
          new, and the share goes <em>up</em>.`,
-        `<strong>The ranked lists show the busiest first, and say what they left
-         out.</strong> Player/app, platform, metro and country each show a top few,
-         and the last row counts everything below it \u2014 "3 more". So the numbers
-         in a list always add up to the total above it, and a player you expected to
-         see is either on the list or inside that last row, never simply absent.
-         <strong>Those entries are listed underneath it</strong>, and clicking the row
-         folds them away when you want the shape of the list back.`,
-        `<strong>The line is drawn at one per cent, not at a fixed number of rows.</strong>
-         Anything accounting for at least 1% of listeners is on the page, so a station
-         with three players shows three and offers nothing to expand, while a station
-         with twenty meaningful ones shows twenty. What is left over is named for the
-         reason it was left over &mdash; "15 more, each under 1%" &mdash; which answers
-         the question worth asking: is there anything in there I should have seen?`,
+        `<strong>Player/app lists every player.</strong> However small \u2014 a player
+         at half a per cent is still hundreds of people, and it is the row worth seeing
+         when you are deciding what to support next. Nothing is folded away and there is
+         nothing to click, so a player you expected to see is on the page or genuinely
+         had no listeners.`,
+        `<strong>The other ranked lists show a top few, and say what they left out.</strong>
+         Platform, metro and country show everything at or above 1% of listeners, and the
+         last row counts the rest \u2014 "15 more, each under 1%". So the numbers in a
+         list always add up to the total above it. Those entries are listed underneath
+         that row, and clicking it folds them away again.`,
         `<strong>Session length</strong> is the engagement half of the story: reach says
          how many people you got, this says whether they stayed. A station can grow its
          audience and lose engagement at the same time, and the two figures side by side

@@ -3,12 +3,12 @@
 > **START HERE.** Everything below this section is a dated log, newest first.
 > This part is the current state and is rewritten rather than appended to.
 
-## Where the project is — 2026-09-11
+## Where the project is — 2026-09-12
 
 **Live, healthy, and fully deployed.** 5 stations, 10 channels, 3 Icecast hosts.
 10/10 streams up, 99.79% audio uptime over 7 days, 1,032 events retained since
 2026-08-04, both geo databases loaded (MaxMind city, so states AND metros
-resolve). **883 tests pass.** Local, `origin/main` and production are all the
+resolve). **906 tests pass.** Local, `origin/main` and production are all the
 same commit.
 
 Verify a deploy without signing in:
@@ -109,6 +109,59 @@ jumps by the whole audience and "came back" reads zero for ever, with no error.
 - **Every figure that can be withheld is withheld as `null`, never `0`**, with a
   reason the page renders. "We could not measure it" and "it was zero" are
   different sentences and must never look alike.
+
+---
+
+## 2026-09-12 — Player/app shows every player
+
+The Player/app list has now been cut three ways — nine rows, then twelve, then
+everything at or above a 1% share with the tail behind an expander — and each
+version produced the same report: a player the station would act on was not on
+the page.
+
+**The expander was the worst of the three, because it looked solved.** The row
+read *"12 more, each under 1%"* in tertiary italic (#606078 on a near-black
+panel) with a small caret. That is below readable contrast and nothing about it
+says "control", so the twelve entries behind it were as missing as they had been
+when the list dropped them in silence. Opening it by default was not the fix
+either: the owner's position is that a list of players should be a list of
+players. A player at 0.4% is still hundreds of people and is precisely the row a
+platform decision turns on.
+
+**The fix is one sentinel at one call site.** `bars()` gained `ALL`, and only
+Player/app passes it (`bars(players, cume, ALL)`); the list renders every entry
+with no remainder row and no control. Platform keeps `6`, metro keeps its eight,
+and country keeps the summary it gets from GeoMap — all untouched.
+
+**A process note worth more than the feature.** The first attempt at this
+generalised the change to the metro list and the shared remainder styling,
+because those have the same flaw. The owner's instruction was explicit — *"ONLY
+the Player/App list"* — and the second attempt was reverted to a two-file diff.
+The standing rule now: sweep for the class of a bug and REPORT the siblings, but
+edit only what was asked. See the memory `change-only-what-was-asked`.
+
+Verification, Node 24.20.0: full suite 906/906. `test/truncated-lists.test.js`
+gained five tests pinning the split — ALL renders every entry with no remainder
+and no expander, sub-1% entries survive, ALL is opt-in so every other list still
+cuts, and the call sites themselves are asserted (`players` passes ALL,
+`platforms` still passes 6) so the exemption cannot silently spread or silently
+lapse. One trap found while writing them: a top-level `const` in the module lives
+in the vm script's declarative scope and does NOT come back on the context
+object, so the tests were reading `ALL` as `undefined` and exercising the cut
+path while claiming to test the uncut one. `load()` now reads it out
+deliberately.
+
+Docs corrected in the same pass, because both described behaviour that no longer
+exists: the in-app guide told readers Player/app shows "a top few" and that the
+1% line applies to it, and README §"Ranked lists say when they are truncated"
+said the same and additionally still claimed the tail opens collapsed.
+
+Status: `04b11a0` committed and pushed; production is serving it (verified by
+fetching `/listeners.js` and finding the ALL call site). The doc corrections in
+this entry are local at the time of writing.
+
+Next: unchanged — the monthly station report is the largest outstanding code
+item. See "What is NOT done" at the top.
 
 ---
 
