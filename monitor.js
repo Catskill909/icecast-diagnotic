@@ -44,6 +44,9 @@ const nodemailer = require('nodemailer');
 const diagnose = require('./diagnose');
 const store = require('./store');
 const listenerDetailModule = require('./listener-detail');
+const pathTrace = require('./path-trace');
+const witnessClient = require('./witness-client');
+const networkTest = require('./network-test');
 /* Local geo/ASN databases, both optional. With neither configured every lookup
    returns `unknown` and the distribution-channel figures fall back to the
    user-agent signal alone, labelled as a floor. Nothing here requires it. */
@@ -378,6 +381,10 @@ const HELD_REASON =
 
 function unconfirmedMessage(stream) {
   return `${stream.name} — the monitor can't reach ${diagnose.hostOf(stream)}; NOT confirmed down`;
+}
+
+function monitorPathMessage(stream, result) {
+  return `${stream.name} — the monitor's own connection failed; ON AIR, verified from ${result.witness?.name || 'a second location'}`;
 }
 
 function unconfirmedSeverity(diagnosisResult) {
@@ -1895,6 +1902,139 @@ async function collectListenerDetail(hosts) {
   store.compactDevices();
 }
 
+/**
+ * For every stream whose probe got no HTTP answer at all, asks the configured
+ * witnesses to try it too, and attaches their verdict to the probe result as
+ * `result.witness` — which classify() reads. Where the monitor could not read a
+ * server's status page itself, the witness's copy of that page replaces the
+ * unreachable snapshot, marked `via: 'witness'`, so each station can still be
+ * judged on its own feed. Mutates `snap` and `results` in place.
+ *
+ * On 2026-09-12 this is the difference between emailing KPFK about an outage it
+ * never had and recording that the monitor's route to its server had failed.
+ */
+async function consultWitnesses(snap, results) {
+  if (!witnessClient.witnessesConfigured()) return;
+  const statusUrls = new Map(currentHosts().map((h) => [h.host, h.statusUrl]));
+  const statusAsked = new Set();
+
+  await Promise.all(streams.map(async (stream, i) => {
+    if (!witnessClient.needsWitness(results[i])) return;
+    const host = diagnose.hostOf(stream);
+    const own = snap.byHost?.[host];
+    // The status page once per host per cycle, and only when ours failed.
+    let statusUrl = null;
+    if (own && !own.reachable && !statusAsked.has(host)) {
+      statusAsked.add(host);
+      statusUrl = statusUrls.get(host) || null;
+    }
+    const answers = await witnessClient.askWitnesses({ streamUrl: stream.url, statusUrl });
+    const verdict = witnessClient.streamVerdict(answers);
+    if (verdict) results[i] = { ...results[i], witness: verdict };
+
+    const copy = witnessClient.statusBody(answers);
+    if (copy && own && !own.reachable) {
+      const viaWitness = diagnose.snapshotFromStatusBody(copy.body);
+      if (viaWitness.reachable) {
+        snap.byHost[host] = { ...viaWitness, via: 'witness', witness: copy.name, ownFetchError: own.fetchError, timings: copy.timings };
+      }
+    }
+    const v = results[i].witness;
+    console.log(`[Witness] ${stream.name}: ${v?.ok ? `on air per ${v.name}` : v?.unavailable ? `no witness answered (${v.error})` : `${v?.name} also failed (${v?.error})`}`
+      + (snap.byHost?.[host]?.via === 'witness' ? ` · status page read via ${snap.byHost[host].witness}` : ''));
+  }));
+}
+
+// ── Path traces ─────────────────────────────────────────────────────────────
+// When a server stops answering, trace the route from this host to it; once a
+// day while it answers, keep a baseline to read a failing trace against. See
+// path-trace.js for why, and for what 2026-09-12 lacked.
+const PATH_TRACE_ENABLED = String(process.env.PATH_TRACE_ENABLED ?? 'true').trim().toLowerCase() !== 'false';
+const PATH_TRACE_AFTER_MISSES = 2;               // consecutive unreachable cycles before tracing
+const PATH_TRACE_REPEAT_MS = 10 * 60 * 1000;     // while it stays unreachable
+const PATH_TRACE_MAX_PER_EPISODE = 3;
+const PATH_TRACE_BASELINE_MS = 24 * 60 * 60 * 1000;
+const traceState = {};
+let traceRunner;   // tests replace this; production uses pathTrace.runTrace
+
+function scheduleTraces(snap, timestamp) {
+  if (!PATH_TRACE_ENABLED) return [];
+  const now = Date.parse(timestamp);
+  const started = [];
+  for (const sv of snap.servers || []) {
+    const st = traceState[sv.host] || (traceState[sv.host] = { misses: 0, running: false, episodeTraces: 0, lastTraceAt: 0 });
+    let reason = null;
+    if (sv.reachable) {
+      st.misses = 0;
+      st.episodeTraces = 0;
+      const last = store.lastPathTrace(sv.host, 'baseline');
+      if (!last || now - Date.parse(last.startedAt) >= PATH_TRACE_BASELINE_MS) reason = 'baseline';
+    } else {
+      st.misses += 1;
+      if (st.misses >= PATH_TRACE_AFTER_MISSES && st.episodeTraces < PATH_TRACE_MAX_PER_EPISODE
+          && now - st.lastTraceAt >= PATH_TRACE_REPEAT_MS) reason = 'unreachable';
+    }
+    if (!reason || st.running) continue;
+
+    st.running = true;
+    st.lastTraceAt = now;
+    if (reason === 'unreachable') st.episodeTraces += 1;
+    const run = traceRunner || pathTrace.runTrace;
+    // Not awaited: a trace takes up to 90s and must never hold a check cycle.
+    const job = Promise.resolve(run(sv.host, { reason, resolvedIp: sv.timings?.ip || null }))
+      .then((trace) => {
+        const record = store.addPathTrace(trace);
+        const where = trace.ok
+          ? (trace.reachedTarget ? `reached the server in ${trace.hops.length} hops`
+            : `did NOT reach the server — last answer from hop ${trace.lastAnsweringHop?.hop} (${trace.lastAnsweringHop?.host})`)
+          : `could not run: ${trace.error}`;
+        console.log(`[PathTrace] ${reason} ${sv.host}: ${where}`);
+        if (reason !== 'baseline') {
+          // Linked to every open failure on this server, so the incident page
+          // can show the route as it was while the incident was happening.
+          const onHost = new Set(streams.filter((x) => diagnose.hostOf(x) === sv.host).map((x) => x.id));
+          for (const e of store.getEvents({}).events) {
+            if (!onHost.has(e.streamId) || e.resolvedAt || !store.isFailureEvent(e)) continue;
+            store.updateEvent(e.id, { pathTraceIds: [...(e.pathTraceIds || []), record.id] });
+          }
+        }
+        return record;
+      })
+      .catch((err) => console.error(`[PathTrace] ${sv.host} failed: ${err.message}`))
+      .finally(() => { st.running = false; });
+    started.push(job);
+    if (reason === 'unreachable' && !traceRunner) {
+      // The rest of the battery at the same moment — DNS, raw connects, the
+      // process's own sockets — while the failure is still happening. The trace
+      // above covers the route, so it is not taken twice.
+      runNetworkTestNow({ reason: 'auto: server stopped answering', host: sv.host, withTrace: false })
+        .catch((err) => console.error(`[NetworkTest] ${sv.host} failed: ${err.message}`));
+    }
+  }
+  return started;
+}
+
+/**
+ * Runs network-test.js from this host against every Icecast server (or one),
+ * saves the result, and links it to any open failure on the servers tested.
+ * `withTrace: false` when a route trace is already being taken separately.
+ */
+async function runNetworkTestNow({ reason = 'manual', host = null, withTrace = true } = {}) {
+  const targets = currentHosts()
+    .filter((h) => !host || h.host === host)
+    .map((h) => ({ ...h, stream: streams.find((s) => diagnose.hostOf(s) === h.host) || null }));
+  const result = await networkTest.runNetworkTest(targets, { reason, deps: { withTrace } });
+  const record = store.addNetworkTest(result);
+  const tested = new Set(targets.map((t) => t.host));
+  const onTested = new Set(streams.filter((s) => tested.has(diagnose.hostOf(s))).map((s) => s.id));
+  for (const e of store.getEvents({}).events) {
+    if (!onTested.has(e.streamId) || e.resolvedAt || !store.isFailureEvent(e)) continue;
+    store.updateEvent(e.id, { networkTestIds: [...(e.networkTestIds || []), record.id] });
+  }
+  for (const h of result.hosts) console.log(`[NetworkTest] ${reason} ${h.host}: ${h.verdict}`);
+  return record;
+}
+
 function currentHosts() {
   const configured = new Map();
   const cfg = store.getStationConfig();
@@ -1935,6 +2075,18 @@ async function runChecksInner() {
   // Before the stream loop, so a server's first successful answer already counts
   // when deciding whether a failure on it can be held for evidence.
   for (const [host, hs] of Object.entries(snap.byHost || {})) if (hs?.reachable) store.noteHostReachable(host);
+  scheduleTraces(snap, timestamp);
+  // The network record: one row per server per cycle, so an incident can be
+  // reconstructed minute by minute — which phase failed, and when it began.
+  for (const sv of snap.servers || []) {
+    const tm = sv.timings || {};
+    store.addNetSample(sv.host, {
+      t: timestamp, ok: !!sv.reachable, ms: sv.responseTime ?? null, n: sv.attempts || 1,
+      dns: tm.dns ?? null, tcp: tm.tcp ?? null, tls: tm.tls ?? null, ttfb: tm.ttfb ?? null,
+      ...(tm.ip ? { ip: tm.ip } : {}),
+      ...(sv.reachable ? {} : { err: sv.fetchError || null }),
+    });
+  }
 
   // Also before the probes, and for a second reason on top of the one above:
   // these are admin requests, not stream connections, so they add nobody to any
@@ -1952,6 +2104,16 @@ async function runChecksInner() {
   }
 
   const results = await Promise.all(streams.map((s) => diagnose.probeStream(s)));
+
+  // Our own connection failed outright on some streams: ask a location on
+  // another network before believing it. See witness/witness.js.
+  try {
+    await consultWitnesses(snap, results);
+  } catch (err) {
+    // A broken witness must never break a check cycle; the cycle proceeds on the
+    // monitor's own readings, exactly as it would with no witness configured.
+    console.error('[Monitor] witness consultation failed:', err.message);
+  }
 
   // The other bitrate variants, on a slower schedule — see VARIANT_PROBE_EVERY.
   // This is the only thing that can see a mount Icecast still lists but which
@@ -2011,7 +2173,9 @@ async function runChecksInner() {
     // about THIS station's feed. Only for a server that has answered before: one
     // with no status endpoint at all would otherwise never alert. See the block
     // above OPERATOR_ALERT_EMAIL.
-    const unconfirmed = isDown && !hostReachable && hostHasStatusPage(diagnose.hostOf(stream));
+    // A second location that got audio settles it the other way: on air — see
+    // consultWitnesses(). Only an unanswered failure is held for evidence.
+    const unconfirmed = isDown && !hostReachable && !result.witness?.ok && hostHasStatusPage(diagnose.hostOf(stream));
     const mount = diagnose.findMount(snap, stream);
     // The channel as a whole: every bitrate variant, summed.
     const audience = diagnose.channelAudience(snap, stream);
@@ -2101,14 +2265,28 @@ async function runChecksInner() {
       // The dashboard shows this as "can't reach server — not confirmed", never
       // as OFFLINE.
       unconfirmed,
+      // Whether that inventory was read by the monitor or, because it could not,
+      // by a witness on another network.
+      icecastVia: hostSnap?.via || 'monitor',
+      // The second location's verdict when the monitor's own connection failed.
+      // `verifiedOnAir` is the dashboard's cue to say ON AIR, not OFFLINE.
+      witness: result.witness || null,
+      verifiedOnAir: result.witness?.ok ? { by: result.witness.name, at: result.witness.at || timestamp } : null,
     };
 
+    const tm = result.timings || {};
     store.addSample(stream.id, {
       timestamp,
       status: result.status,
       // Settled later: store.confirmSamples() clears it if the station's feed is
       // shown to have dropped. Until then the bar is grey and uptime skips it.
       ...(unconfirmed ? { unconfirmed: true } : {}),
+      // A witness received this stream's audio while our probe failed: it was on air.
+      ...(result.witness?.ok ? { vw: result.witness.name } : {}),
+      // Connection phases for this probe: [dns, tcp, tls] as each phase's own
+      // length, ttfb from the start — probeStream()'s convention. null where a
+      // phase never completed, which is often the diagnosis.
+      tm: [tm.dns ?? null, tm.tcp ?? null, tm.tls ?? null, tm.ttfb ?? null],
       responseTime: result.responseTime,
       listeners: streamStatus[stream.id].listeners,
       isSilent: !!result.isSilent,
@@ -2153,6 +2331,8 @@ async function runChecksInner() {
           scope: dg.scope,
           message: unconfirmed
             ? unconfirmedMessage(stream)
+            : dg.cause === 'monitor_path'
+            ? monitorPathMessage(stream, result)
             : `${stream.name} failed a check — ${dg.causeLabel}${result.error ? ` (${result.error})` : ''}`,
           failedChecks: 1,
           diagnosis: dg,
@@ -2228,7 +2408,12 @@ async function runChecksInner() {
         const alertable = confirmed && warrantsAlert(evidence);
         episode.listenerImpact = worstImpact(episode.listenerImpact, evidence.listenerImpact);
 
-        if (confirmed && episode.severity !== 'outage') {
+        if (dg.cause === 'monitor_path') {
+          // Our route failed; the station did not. Never promoted to an outage,
+          // never "DOWN" — the record says what actually happened.
+          patch.message = monitorPathMessage(stream, result);
+          patch.email = { attempted: false, sent: null, reason: `not emailed — the station was on air, verified from ${result.witness.name}` };
+        } else if (confirmed && episode.severity !== 'outage') {
           patch.severity = 'outage';
           patch.confirmed = true;
           patch.scope = dg.scope;
@@ -2241,7 +2426,7 @@ async function runChecksInner() {
         // A confirmed outage that Icecast clears of listener impact is still a
         // real, fully recorded outage — it just does not email. Say so on the
         // event itself, so the history can explain its own silence.
-        if (confirmed && !alertable && !episode.alerted) {
+        if (confirmed && !alertable && !episode.alerted && dg.cause !== 'monitor_path') {
           patch.email = {
             attempted: false,
             sent: null,
@@ -2803,6 +2988,7 @@ function renderDiagnosis(dg) {
     server: '🌐 Server-wide — affects all stations on this Icecast host',
     station: '📻 Station-wide — affects every mount of this station',
     stream: '🎚️ Single stream',
+    monitor: "🛰️ The monitor's own network path — the station was on air",
   }[dg.scope] || dg.scope;
 
   const confidenceBadge = {
@@ -4537,7 +4723,7 @@ function checkWeeklyRoundup() {
 module.exports = {
   isDeployedInstance,
   start, stop, getStreams, getStatus, getHistory, getIncidents, getConfig, sendTestAlert,
-  getPeriodRollup, sendWeeklyRoundup, previewWeeklyRoundup, previewAlertForEvent, roundupRecipients,
+  getPeriodRollup, runNetworkTestNow, sendWeeklyRoundup, previewWeeklyRoundup, previewAlertForEvent, roundupRecipients,
   getEvents, getSamples, getRollups, getListeners, getSummary, getOverallUptime, getAudioUptime, getCoverageStart,
   getDailyBuckets, getCauseBreakdown, getStorageInfo, getSnapshot, stationTz,
   getStationConfig: () => store.getStationConfig(),
@@ -4568,6 +4754,10 @@ module.exports = {
   // Startup without the timers start() adds — for restart tests.
   _init: () => init(),
   watchServerReachability,
+  _consultWitnesses: consultWitnesses,
+  _scheduleTraces: scheduleTraces,
+  _setTraceRunner: (fn) => { traceRunner = fn; },
+  _resetTraceState: () => { for (const k of Object.keys(traceState)) delete traceState[k]; },
   _episodes: () => episodes,
   normaliseStreams, normaliseMounts, buildDefaultConfig, flattenChannels,
   trackVariantDegradation, runChecks, probeVariants, resolveDeadAir,

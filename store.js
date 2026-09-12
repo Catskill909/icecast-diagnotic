@@ -338,6 +338,9 @@ function load(streamIds = []) {
         rollups[id] = Array.isArray(sm.rollups[id]) ? sm.rollups[id] : [];
       }
     }
+    if (sm.net && typeof sm.net === 'object') {
+      for (const h of Object.keys(sm.net)) netSamples[h] = Array.isArray(sm.net[h]) ? sm.net[h] : [];
+    }
     migrateDevicesFromJson(sm);
     const total = Object.values(samples).reduce((a, b) => a + b.length, 0);
     const rollTotal = Object.values(rollups).reduce((a, b) => a + b.length, 0);
@@ -979,6 +982,74 @@ function noteHostReachable(host) {
   dirtyEvents = true;
 }
 
+// ── Network samples, per Icecast host ───────────────────────────────────────
+// One row per check cycle per server: did its status page answer, how long each
+// connection phase took, how many attempts it needed. Kept raw for
+// SAMPLE_RETENTION_DAYS and never rolled up — its purpose is reconstructing an
+// incident minute by minute, which an hourly average cannot do.
+let netSamples = {};
+
+function addNetSample(host, row) {
+  if (!host) return;
+  (netSamples[host] = netSamples[host] || []).push(row);
+  dirtySamples = true;
+}
+
+function getNetSamples(host, sinceMs) {
+  const cutoff = sinceMs ? Date.now() - sinceMs : -Infinity;
+  const pick = (arr) => arr.filter((r) => new Date(r.t).getTime() > cutoff);
+  if (host) return { [host]: pick(netSamples[host] || []) };
+  return Object.fromEntries(Object.entries(netSamples).map(([h, arr]) => [h, pick(arr)]));
+}
+
+// ── Path traces ─────────────────────────────────────────────────────────────
+// Route traces from the monitor to each server — see path-trace.js. Small
+// (a few KB each) and bounded, kept with the event record so an incident's
+// traces survive as long as the history does in practice.
+const MAX_PATH_TRACES = 300;
+
+function addPathTrace(trace) {
+  const id = `trace_${Date.parse(trace.startedAt) || Date.now()}_${String(trace.host).replace(/[^a-z0-9.-]/gi, '_')}`;
+  const record = { id, ...trace };
+  meta.pathTraces = [...(meta.pathTraces || []), record].slice(-MAX_PATH_TRACES);
+  dirtyEvents = true;
+  return record;
+}
+
+function getPathTraces({ host, ids } = {}) {
+  let out = meta.pathTraces || [];
+  if (host) out = out.filter((t) => t.host === host);
+  if (ids) { const want = new Set(ids); out = out.filter((t) => want.has(t.id)); }
+  return out;
+}
+
+// Network tests (network-test.js) — the full battery run from the monitor's
+// host, on demand or when a server stops answering. Bounded like traces.
+const MAX_NETWORK_TESTS = 50;
+
+function addNetworkTest(testRecord) {
+  const id = `nettest_${Date.parse(testRecord.startedAt) || Date.now()}`;
+  const record = { id, ...testRecord };
+  meta.networkTests = [...(meta.networkTests || []), record].slice(-MAX_NETWORK_TESTS);
+  dirtyEvents = true;
+  return record;
+}
+
+function getNetworkTests({ ids } = {}) {
+  const all = meta.networkTests || [];
+  if (!ids) return all;
+  const want = new Set(ids);
+  return all.filter((t) => want.has(t.id));
+}
+
+function lastPathTrace(host, reason) {
+  const all = meta.pathTraces || [];
+  for (let i = all.length - 1; i >= 0; i--) {
+    if (all[i].host === host && (!reason || all[i].reason === reason)) return all[i];
+  }
+  return null;
+}
+
 function getAllSamples(sinceMs) {
   const out = {};
   for (const id of Object.keys(samples)) out[id] = getSamples(id, sinceMs);
@@ -1299,6 +1370,12 @@ function arrivalFault(tuneIns, floor, peak, count) {
  */
 function prune() {
   const cutoff = Date.now() - SAMPLE_RETENTION_MS;
+
+  for (const h of Object.keys(netSamples)) {
+    const before = netSamples[h].length;
+    netSamples[h] = netSamples[h].filter((r) => new Date(r.t).getTime() > cutoff);
+    if (netSamples[h].length !== before) dirtySamples = true;
+  }
 
   for (const id of Object.keys(samples)) {
     const arr = samples[id] || [];
@@ -3336,7 +3413,7 @@ function saveSamples(force = false) {
     // roughly triple it for no operator benefit.
     atomicWrite(
       SAMPLES_FILE,
-      JSON.stringify({ version: 2, savedAt: new Date().toISOString(), samples, rollups }),
+      JSON.stringify({ version: 2, savedAt: new Date().toISOString(), samples, rollups, net: netSamples }),
     );
     dirtySamples = false;
   } catch (err) {
@@ -3379,6 +3456,8 @@ module.exports = {
   addEvent, updateEvent, getEvents, findOpenOutage,
   reconcileOpenEvents, closeUnobserved, withOngoingDuration,
   isMeasuredSample, confirmSamples, hostEverReachable, noteHostReachable,
+  addNetSample, getNetSamples, addPathTrace, getPathTraces, lastPathTrace,
+  addNetworkTest, getNetworkTests,
   addSample, getSamples, getAllSamples, getRollups,
   getUptime, getOverallUptime, getAudioUptime, getCoverageStart, getSummary, getDailyBuckets, getCauseBreakdown,
   getPeriodRollup,

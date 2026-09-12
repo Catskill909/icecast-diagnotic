@@ -135,6 +135,7 @@ const CAUSE_LABELS = {
   bad_content: 'Invalid stream content',
   mount_stalled: 'Mount listed but not serving audio',
   dead_air: 'Dead air — silent audio',
+  monitor_path: "Monitor's connection failed — station on air (verified from second location)",
   unknown: 'Unclassified failure',
 };
 
@@ -205,6 +206,11 @@ const REMEDIATION = {
     'Check the studio mixing console master output and audio routing.',
     'Verify the automation system or source player is not paused or stopped.',
     'Check the audio interface feeding the stream encoder.',
+  ],
+  monitor_path: [
+    'The station is ON AIR — a second monitoring location received its audio at the same moment the monitor could not.',
+    'The fault is on the network path between the monitor and this server. No station action is needed.',
+    'The route trace and network record on this incident show where that path was failing.',
   ],
   unknown: ['Could not classify automatically. Review the raw error and timings below.'],
 };
@@ -553,15 +559,81 @@ function armDeadline(req, ms, onExpire) {
   return () => clearTimeout(timer);
 }
 
+/**
+ * Connection phase timings for one request: DNS, TCP connect, TLS, first byte.
+ *
+ * Only a total used to be kept for the status fetch, so on 2026-09-12, when the
+ * monitor could not reach streams.pacifica.org for 14 minutes, there was no
+ * record of WHICH stage was failing or when it began to slow.
+ *
+ * Same convention as probeStream(): `dns`, `tcp` and `tls` are each the length
+ * of THAT phase; `ttfb` is from the request's start. A phase that never
+ * completed is absent. Requires a fresh socket (`agent: false`), or a reused
+ * one fires no events.
+ */
+function instrumentRequest(req, start) {
+  const timings = {};
+  const marks = {};
+  req.on('socket', (socket) => {
+    socket.on('lookup', (err, address) => {
+      marks.dns = Date.now();
+      timings.dns = marks.dns - start;
+      if (err) timings.dnsFailed = true;
+      else if (address) timings.ip = address;
+    });
+    socket.on('connect', () => { marks.tcp = Date.now(); timings.tcp = marks.tcp - (marks.dns || start); });
+    socket.on('secureConnect', () => { timings.tls = Date.now() - (marks.tcp || marks.dns || start); });
+  });
+  req.on('response', () => { timings.ttfb = Date.now() - start; });
+  return timings;
+}
+
+/**
+ * A status-json.xsl body → the snapshot shape. Shared by the monitor's own
+ * fetch and by a witness's copy of the same page (see witness/witness.js), so a
+ * snapshot read from another network is indistinguishable in shape from ours.
+ */
+function snapshotFromStatusBody(body) {
+  const doc = parseIcecastStatus(body);
+  if (!doc) {
+    return {
+      reachable: false,
+      fetchError: 'Malformed status JSON could not be parsed or repaired',
+      fetchErrorCode: 'EPARSE',
+      fetchedAt: new Date().toISOString(),
+      mounts: {},
+      mountCount: 0,
+    };
+  }
+  const { stats, mounts, mountCount, repaired } = doc;
+  return {
+    reachable: true,
+    fetchError: null,
+    fetchErrorCode: null,
+    // Surfaced rather than silently swallowed: a server emitting broken
+    // JSON is a real fault worth reporting to whoever runs it.
+    repairedJson: repaired,
+    fetchedAt: new Date().toISOString(),
+    serverId: stats.server_id || '',
+    host: stats.host || '',
+    admin: stats.admin || '',
+    location: stats.location || '',
+    serverStart: stats.server_start_iso8601 || stats.server_start || '',
+    mounts,
+    mountCount,
+  };
+}
+
 function fetchIcecastSnapshotOnce(statusUrl = ICECAST_STATUS_URL) {
   return new Promise((resolve) => {
     const start = Date.now();
     const statusClient = statusUrl.startsWith('http:') ? http : https;
     // Cleared on every settle path below, so a deadline never fires against a
-    // request that already answered.
+    // request that already answered. Every payload carries the phase timings.
     let cancelDeadline = () => {};
-    const settle = (payload) => { cancelDeadline(); resolve(payload); };
-    const req = statusClient.get(statusUrl, { timeout: STATUS_TIMEOUT }, (res) => {
+    let timings = {};
+    const settle = (payload) => { cancelDeadline(); resolve({ ...payload, timings: { ...timings } }); };
+    const req = statusClient.get(statusUrl, { timeout: STATUS_TIMEOUT, agent: false }, (res) => {
       let body = '';
       res.on('data', (c) => { body += c; });
       res.on('end', () => {
@@ -576,39 +648,11 @@ function fetchIcecastSnapshotOnce(statusUrl = ICECAST_STATUS_URL) {
             mountCount: 0,
           });
         }
-        const doc = parseIcecastStatus(body);
-        if (!doc) {
-          return settle({
-            reachable: false,
-            fetchError: 'Malformed status JSON could not be parsed or repaired',
-            fetchErrorCode: 'EPARSE',
-            fetchedAt: new Date().toISOString(),
-            responseTime: Date.now() - start,
-            mounts: {},
-            mountCount: 0,
-          });
-        }
-
-        const { stats, mounts, mountCount, repaired } = doc;
-        settle({
-          reachable: true,
-          fetchError: null,
-          fetchErrorCode: null,
-          // Surfaced rather than silently swallowed: a server emitting broken
-          // JSON is a real fault worth reporting to whoever runs it.
-          repairedJson: repaired,
-          fetchedAt: new Date().toISOString(),
-          responseTime: Date.now() - start,
-          serverId: stats.server_id || '',
-          host: stats.host || '',
-          admin: stats.admin || '',
-          location: stats.location || '',
-          serverStart: stats.server_start_iso8601 || stats.server_start || '',
-          mounts,
-          mountCount,
-        });
+        settle({ ...snapshotFromStatusBody(body), responseTime: Date.now() - start });
       });
     });
+
+    timings = instrumentRequest(req, start);
 
     req.on('error', (err) => settle({
       reachable: false,
@@ -796,6 +840,8 @@ async function fetchHostSnapshots(hosts) {
       serverStart: snap.serverStart || '',
       mountCount: snap.mountCount || 0,
       responseTime: snap.responseTime,
+      timings: snap.timings || {},
+      attempts: snap.attempts || 1,
     })),
     // Every host had to answer for the inventory to be complete. Per-stream
     // verdicts use that stream's own host, not this.
@@ -1081,7 +1127,21 @@ function classify({ stream, result, snapshot, prevSnapshot, cycle = [], deadAir 
     evidence.push(`Full connection established; server responded in ${timings.ttfb}ms.`);
   }
 
-  if (httpStatus === 404) {
+  // A second location, on another network, tried this stream at the same moment
+  // (see witness/witness.js). If it got audio, the station is on air and every
+  // other reading of this failure is about the monitor's own route — which is
+  // what KPFK's "outage" on 2026-09-12 was.
+  const witness = result?.witness || null;
+  if (witness && !witness.ok) {
+    evidence.push(`A second location (${witness.name}) ALSO could not get audio from this stream${witness.error ? ` (${witness.error})` : ''} — this is not only the monitor's network path.`);
+  }
+
+  if (witness?.ok) {
+    cause = 'monitor_path';
+    confidence = 'high';
+    evidence.push(`A second location (${witness.name}) received ${witness.bytes ? `${witness.bytes} bytes of ` : ''}audio from this stream at the same moment the monitor's own connection failed — the station is ON AIR.`);
+    evidence.push('The fault is on the network path between the monitor and this server, not at the station or the server.');
+  } else if (httpStatus === 404) {
     // The headline case. A 404 on a mount is definitive: Icecast answered, so
     // the server is alive — the mount simply is not attached.
     evidence.push(`Icecast answered the request and returned HTTP 404 for ${mountPath} — the server process is alive and serving.`);
@@ -1164,7 +1224,9 @@ function classify({ stream, result, snapshot, prevSnapshot, cycle = [], deadAir 
 
   // ── Scope determination ───────────────────────────────────────────────────
   let scope = 'stream';
-  if (cause === 'icecast_down' || cause === 'server_restart') {
+  if (cause === 'monitor_path') {
+    scope = 'monitor';
+  } else if (cause === 'icecast_down' || cause === 'server_restart') {
     scope = 'server';
   } else if (allDown && monitored.length > 1) {
     scope = foreignHealthy && serverReachable ? 'station' : 'server';
@@ -1210,6 +1272,9 @@ function classify({ stream, result, snapshot, prevSnapshot, cycle = [], deadAir 
 function assessListenerImpact({ cause, mount, snapshot }) {
   if (cause === 'dead_air') return 'confirmed';
   if (!cause) return 'none';
+  // Audio was received from another network at the same moment: nobody's
+  // listening was interrupted by what the monitor saw.
+  if (cause === 'monitor_path') return 'none';
   if (!snapshot?.reachable) return 'unknown';
   return mount ? 'none' : 'confirmed';
 }
@@ -1287,6 +1352,8 @@ module.exports = {
   repairIcecastJson,
   classify,
   deriveSourceOutage,
+  instrumentRequest,
+  snapshotFromStatusBody,
   findMount,
   mountPathFor,
   fmtDuration,

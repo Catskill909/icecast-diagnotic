@@ -52,6 +52,15 @@ WORKDIR /app
 RUN addgroup -S monitor && adduser -S monitor -G monitor && \
     apk add --no-cache curl
 
+# mtr, for route traces when a server stops answering (path-trace.js). It sends
+# raw packets, which a non-root user cannot — so its packet helper, and only
+# that binary, is given NET_RAW. Docker's default capability set includes
+# NET_RAW, so no platform setting is needed. Never fails the build: without it
+# the monitor records "mtr is not installed" on each trace and carries on.
+RUN apk add --no-cache mtr libcap && \
+    (setcap cap_net_raw+ep "$(command -v mtr-packet)" \
+      || echo "[mtr] setcap failed — route traces will report the error")
+
 # Copy dependencies
 COPY --from=deps /app/node_modules ./node_modules
 
@@ -70,6 +79,9 @@ COPY geo.js ./
 COPY geo-update.js ./
 COPY device-store.js ./
 COPY backup.js ./
+COPY path-trace.js ./
+COPY witness-client.js ./
+COPY network-test.js ./
 COPY scripts/ ./scripts/
 COPY seed/ ./seed/
 COPY public/ ./public/

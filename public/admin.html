@@ -89,6 +89,38 @@
     <div id="stations" class="stations">Loading…</div>
   </section>
 
+  <!-- Network test.
+       Runs ON THE MONITOR'S SERVER. On 2026-09-12 the monitor could not reach
+       Pacifica's server twice while the stations played for everyone else, and
+       every test anyone ran came from a different machine and passed. This is
+       the one place a test runs from the machine that is actually failing. -->
+  <section class="panel">
+    <h2>Network test</h2>
+    <p class="hint">
+      Tests the connection <strong>from this monitor's own server</strong> to every
+      streaming server it watches: name lookup, the status page, a stream, several
+      raw connections, and the route in between. Use it when the monitor says a
+      station is down but the station plays for you &mdash; the answer is usually
+      on the route from here, and this is the only test that can see that route.
+    </p>
+    <p class="hint">
+      The same test runs by itself whenever a streaming server stops answering, and
+      is attached to that incident. Nothing is changed and nobody is emailed.
+      It takes up to a minute and a half.
+    </p>
+    <div class="backup-row">
+      <div>
+        <h3>Test the network now</h3>
+        <p class="hint">Results are saved; the last few are listed below.</p>
+      </div>
+      <button id="nettest-btn">Run network test</button>
+    </div>
+    <div class="msg" id="nettest-msg"></div>
+    <div id="nettest-results"></div>
+    <h3>Previous tests</h3>
+    <div id="nettest-history" class="hint">Loading…</div>
+  </section>
+
   <!-- Backup and move.
        Deliberately the LAST panel and deliberately plain: it is used rarely,
        by one person, and the cost of a mistaken import is the whole record. -->

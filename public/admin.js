@@ -1394,6 +1394,73 @@
     loadStations();
   }
 
+  /* ── Network test ─────────────────────────────────────────────────────────
+     Runs on the monitor's own server (network-test.js). The sentence per host
+     leads; the detail table is there for whoever has to act on it. */
+
+  const ms = (v) => (v == null ? '—' : `${Math.round(v)} ms`);
+  const phases = (t = {}) => ['dns', 'tcp', 'tls', 'ttfb']
+    .map((k) => `${k.toUpperCase()} ${t[k] == null ? '—' : `${Math.round(t[k])}ms`}`).join(' · ');
+
+  function netTestHtml(t) {
+    const when = new Date(t.startedAt).toLocaleString();
+    const proc = t.process || {};
+    const hosts = (t.hosts || []).map((h) => {
+      const bad = /failed|did not|stopped|could not|does not/.test(h.verdict || '');
+      const tcp = h.tcp || {};
+      const tr = h.trace;
+      const traceText = !tr ? 'not taken in this test'
+        : !tr.ok ? `could not run — ${tr.error}`
+        : tr.reachedTarget ? `reached the server in ${tr.hops.length} hops`
+        : `stopped after hop ${tr.lastAnsweringHop?.hop} (${tr.lastAnsweringHop?.host})`;
+      return `
+        <div class="nettest-host ${bad ? 'bad' : 'good'}">
+          <div class="nettest-verdict"><strong>${esc(h.host)}</strong> — ${esc(h.verdict || '')}</div>
+          <table class="nettest-table">
+            <tr><th>Name lookup</th><td>${h.dns?.ok ? esc(h.dns.addresses.join(', ')) : `failed — ${esc(h.dns?.error || '')}`}</td></tr>
+            <tr><th>Status page</th><td>${h.status ? `${h.status.ok ? 'answered' : `did not answer — ${esc(h.status.error || '')}`} · ${ms(h.status.ms)} · ${phases(h.status.timings)}` : '—'}</td></tr>
+            <tr><th>Stream</th><td>${h.stream ? `${h.stream.ok ? 'audio received' : `failed — ${esc(h.stream.error || `HTTP ${h.stream.httpStatus}`)}`} · ${ms(h.stream.ms)} · ${phases(h.stream.timings)}` : '—'}</td></tr>
+            <tr><th>Raw connections</th><td>${tcp.succeeded ?? 0} of ${(tcp.attempts || []).length} connected · typical ${ms(tcp.medianMs)}${tcp.failed ? ` · failures: ${esc((tcp.attempts || []).filter((a) => !a.ok).map((a) => a.error).join(', '))}` : ''}</td></tr>
+            <tr><th>Route</th><td>${esc(traceText)}</td></tr>
+          </table>
+        </div>`;
+    }).join('');
+    return `
+      <div class="nettest">
+        <div class="hint">${esc(t.reason || 'manual')} · ${esc(when)} · monitor running ${Math.round((proc.uptimeSec || 0) / 60)} min, ${proc.openSockets ?? proc.activeHandles ?? '?'} open connections</div>
+        ${hosts}
+      </div>`;
+  }
+
+  async function loadNetTests() {
+    const r = await api('/api/network-tests');
+    if (!r) return;
+    const tests = (r.body.tests || []).slice(0, 5);
+    $('nettest-history').innerHTML = tests.length
+      ? tests.map(netTestHtml).join('')
+      : 'No tests yet.';
+  }
+
+  $('nettest-btn').addEventListener('click', async () => {
+    const btn = $('nettest-btn');
+    const label = btn.textContent;
+    btn.disabled = true; btn.textContent = 'Testing… (up to 90s)';
+    clear($('nettest-msg'));
+    $('nettest-results').innerHTML = '';
+    try {
+      const r = await api('/api/network-test', { method: 'POST' }, 150000);
+      if (!r) return;
+      if (r.timedOut) return show($('nettest-msg'), 'The test took longer than two and a half minutes. It may still finish on the server — reload in a moment to see it under Previous tests.');
+      if (!r.ok) return show($('nettest-msg'), r.body.error || `The test could not run (${r.status || 'no response'}).`);
+      $('nettest-results').innerHTML = netTestHtml(r.body);
+      loadNetTests();
+    } finally {
+      btn.disabled = false; btn.textContent = label;
+    }
+  });
+
+  loadNetTests();
+
   /* ── Backup and move ──────────────────────────────────────────────────────
      Rare, done by one person, and the cost of getting it wrong is the whole
      record. So: plain words, the file's contents shown before anything is

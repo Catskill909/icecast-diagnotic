@@ -387,7 +387,23 @@ label input { margin-top: 6px; }
 
 .import-preview button { margin-top: 4px; }
 
+/* Network test results. The sentence leads; the table is detail. */
+.nettest { margin: 12px 0 18px; }
+.nettest-host {
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-left: 3px solid #22c55e;
+  border-radius: 8px;
+  padding: 10px 12px;
+  margin-top: 10px;
+}
+.nettest-host.bad { border-left-color: #ef4444; }
+.nettest-verdict { font-size: 14px; line-height: 1.5; margin-bottom: 8px; }
+.nettest-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+.nettest-table th { text-align: left; font-weight: 600; padding: 3px 10px 3px 0; white-space: nowrap; vertical-align: top; opacity: 0.75; }
+.nettest-table td { padding: 3px 0; overflow-wrap: anywhere; }
+
 @media (max-width: 620px) {
+  .nettest-table th { white-space: normal; }
   .backup-row { flex-direction: column; align-items: stretch; gap: 10px; }
   .backup-row button { width: 100%; }
 }

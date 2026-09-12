@@ -987,6 +987,39 @@ const sendTestAlert = async (req, res) => {
   }
 };
 
+// Per-server connection record, one row per check cycle: whether the status page
+// answered and how long each phase took. Behind auth — it names resolved server
+// addresses and raw error text, which the public pages have no need for.
+app.get('/api/network', auth.requireAuth, (req, res) => {
+  const hours = Math.min(Math.max(parseFloat(req.query.hours) || 24, 0.1), 24 * 7);
+  const host = typeof req.query.host === 'string' && req.query.host ? req.query.host : undefined;
+  res.json({ hours, hosts: store.getNetSamples(host, hours * 3600 * 1000) });
+});
+
+// Route traces from the monitor to each server (path-trace.js): baselines, and
+// traces taken while a server was unreachable. Behind auth — they map the
+// monitor's own network path.
+app.get('/api/path-traces', auth.requireAuth, (req, res) => {
+  const host = typeof req.query.host === 'string' && req.query.host ? req.query.host : undefined;
+  const ids = typeof req.query.ids === 'string' && req.query.ids ? req.query.ids.split(',') : undefined;
+  res.json({ traces: store.getPathTraces({ host, ids }) });
+});
+
+// The network test, run from the monitor's own host (network-test.js). Takes up
+// to ~90s because it includes a route trace; the admin page waits for it.
+app.post('/api/network-test', auth.requireAuth, async (req, res) => {
+  try {
+    res.json(await monitor.runNetworkTestNow({ reason: 'manual' }));
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/api/network-tests', auth.requireAuth, (req, res) => {
+  const ids = typeof req.query.ids === 'string' && req.query.ids ? req.query.ids.split(',') : undefined;
+  res.json({ tests: store.getNetworkTests({ ids }).slice().reverse() });
+});
+
 app.post('/api/test-alert', auth.requireAuth, sendTestAlert);
 
 // An old bookmark or script deserves a reason, not a 404 that reads as "gone".
