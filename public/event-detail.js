@@ -63,6 +63,25 @@
 
     const grid = [];
 
+    // What the monitor found about the network while this was happening — the
+    // evidence 2026-09-12 lacked. Both sentences are written by the server:
+    // networkVerdict by the automatic network test (network-test.js), and
+    // reachReport when the server answered again and every feed was compared.
+    if (e.networkVerdict || e.reachReport) {
+      const rows = [];
+      if (e.networkVerdict) {
+        rows.push(`<p><strong>Network test from the monitor's server:</strong> ${esc(e.networkVerdict.sentence)}</p>`);
+      }
+      if (e.reachReport) {
+        rows.push(`<p><strong>What every feed on the server did:</strong> ${esc(e.reachReport.summary)}</p>`);
+      }
+      blocks.push(`
+        <div class="detail-block network-findings">
+          <h5>What the monitor found</h5>
+          ${rows.join('')}
+        </div>`);
+    }
+
     if (d && d.evidence && d.evidence.length) {
       grid.push(`
         <div class="detail-block">

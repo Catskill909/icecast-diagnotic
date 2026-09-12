@@ -29,6 +29,14 @@ const diagnose = require('./diagnose');
 const pathTrace = require('./path-trace');
 
 const TCP_ATTEMPTS = 5;
+// Other ports on the same address, tried alongside the stream port. If the
+// server answers on these but not on the stream port, something is filtering
+// that port for this monitor — a block, not a broken route.
+const COMPARE_PORTS = [80, 443];
+const COMPARE_ATTEMPTS = 2;
+// Far above what the monitor needs (7 at startup, 2026-09-12). Above this the
+// monitor itself is the suspect.
+const SOCKET_LEAK_THRESHOLD = 200;
 const TCP_TIMEOUT_MS = 8000;
 
 function splitHost(host) {
@@ -112,6 +120,15 @@ async function testHost({ host, statusUrl, stream }, deps = {}) {
 
   const tcp = [];
   for (let i = 0; i < TCP_ATTEMPTS && target; i++) tcp.push(await connect(address, target.port));
+  // The same address on other ports, for the block-vs-route question.
+  const otherPorts = [];
+  for (const port of COMPARE_PORTS.filter((p) => p !== target?.port)) {
+    const tries = [];
+    for (let i = 0; i < COMPARE_ATTEMPTS; i++) tries.push(await connect(address, port));
+    otherPorts.push({ port, connected: tries.filter((t) => t.ok).length, attempts: tries.length, errors: tries.filter((t) => !t.ok).map((t) => t.error) });
+  }
+  result.otherPorts = otherPorts;
+
   const okTimes = tcp.filter((t) => t.ok).map((t) => t.ms);
   result.tcp = {
     attempts: tcp,
@@ -122,37 +139,83 @@ async function testHost({ host, statusUrl, stream }, deps = {}) {
 
   if (withTrace) result.trace = await trace(host, { reason: 'network-test', resolvedIp: address });
 
-  result.verdict = verdictFor(result);
+  const c = classify(result);
+  result.kind = c.kind;
+  result.verdict = c.sentence;
   result.finishedAt = new Date().toISOString();
   return result;
 }
 
-/** The finding, in one sentence a person can act on. */
-function verdictFor(r) {
-  if (r.dns && !r.dns.ok) return `The name ${r.host} does not resolve from the monitor (${r.dns.error}).`;
-  const tcpBad = r.tcp && r.tcp.failed > 0;
+/**
+ * What failed, and whose it is — the question 2026-09-12 could not answer.
+ *
+ *   healthy          route fine; any stream failure is an HTTP answer from the server
+ *   dns              the name does not resolve from here
+ *   refused          connections actively refused/reset — something rejects us
+ *   port_blocked     the server answers on another port but not the stream port
+ *   dropped_target   nothing answers; the route dies inside the server's network
+ *   dropped_source   ...inside the monitor's own provider
+ *   dropped_transit  ...inside a network between them
+ *   lossy            the route reaches the server, but connections fail or crawl
+ *   unreachable      nothing answers and the route could not be attributed
+ */
+function classify(r) {
+  const tr = r.trace;
+  const label = (n) => pathTrace.networkLabel(n);
+  if (r.dns && !r.dns.ok) {
+    return { kind: 'dns', sentence: `The name ${r.host} does not resolve from the monitor (${r.dns.error}).` };
+  }
+  const attempts = r.tcp?.attempts || [];
+  const failed = attempts.filter((a) => !a.ok);
+  const tcpBad = failed.length > 0;
   const tcpSlow = r.tcp?.medianMs != null && r.tcp.medianMs > 1000;
   const statusBad = r.status && !r.status.ok;
   const streamBad = r.stream && !r.stream.ok && r.stream.httpStatus == null;
+
   if (!tcpBad && !tcpSlow && !statusBad && !streamBad) {
-    return r.stream && !r.stream.ok
-      ? `The route from the monitor is healthy; the server answered the stream with HTTP ${r.stream.httpStatus}.`
-      : 'The route from the monitor to this server is healthy.';
+    return {
+      kind: 'healthy',
+      sentence: r.stream && !r.stream.ok
+        ? `The route from the monitor is healthy; the server answered the stream with HTTP ${r.stream.httpStatus}.`
+        : 'The route from the monitor to this server is healthy.',
+    };
   }
-  const parts = [];
-  if (tcpBad) parts.push(`${r.tcp.failed} of ${r.tcp.attempts.length} TCP connections failed`);
-  if (tcpSlow) parts.push(`connections took ${r.tcp.medianMs}ms (normal is well under 200ms)`);
-  if (statusBad) parts.push(`the status page did not answer (${r.status.error})`);
-  if (streamBad) parts.push(`the stream did not answer (${r.stream.error})`);
-  let where = '';
-  if (r.trace?.ok) {
-    where = r.trace.reachedTarget
-      ? ' The route trace reached the server, so packets are getting there but being lost or delayed.'
-      : ` The route trace stopped after hop ${r.trace.lastAnsweringHop?.hop} (${r.trace.lastAnsweringHop?.host}) — that is where the path is failing.`;
-  } else if (r.trace && !r.trace.ok) {
-    where = ` The route trace could not run: ${r.trace.error}.`;
+
+  const symptoms = [];
+  if (tcpBad) symptoms.push(`${failed.length} of ${attempts.length} connections to port ${pathTrace.targetOf(r.host)?.port} failed`);
+  if (tcpSlow) symptoms.push(`connections took ${r.tcp.medianMs}ms (normal is well under 200ms)`);
+  if (statusBad) symptoms.push(`the status page did not answer (${r.status.error})`);
+  if (streamBad) symptoms.push(`the stream did not answer (${r.stream.error})`);
+  const lead = `From the monitor's own host: ${symptoms.join('; ')}.`;
+
+  const refused = failed.filter((a) => /ECONNREFUSED|ECONNRESET/.test(a.error || ''));
+  if (refused.length && refused.length === failed.length) {
+    return { kind: 'refused', sentence: `${lead} The server's side is ACTIVELY REFUSING the monitor (${refused[0].error}) — a firewall or the server itself is rejecting these connections.` };
   }
-  return `From the monitor's own host: ${parts.join('; ')}.${where}`;
+
+  const streamPortDead = attempts.length > 0 && failed.length === attempts.length;
+  const answeringOther = (r.otherPorts || []).filter((p) => p.connected > 0);
+  if (streamPortDead && answeringOther.length) {
+    return { kind: 'port_blocked', sentence: `${lead} The same server DOES answer on port ${answeringOther.map((p) => p.port).join(' and ')}, so the machine is reachable but the stream port is not — a filter on the server's side is BLOCKING the stream port for this monitor.` };
+  }
+
+  if (tr?.ok && !tr.reachedTarget) {
+    const hop = tr.lastAnsweringHop;
+    const at = hop ? `hop ${hop.hop} (${hop.host}, ${label(hop.network)})` : 'the first hop';
+    if (tr.stopsIn === 'target') return { kind: 'dropped_target', sentence: `${lead} Nothing answers, and the route dies at ${at} — INSIDE THE SERVER'S OWN NETWORK, ${label(tr.targetNetwork)}. The fault is on the server's side.` };
+    if (tr.stopsIn === 'source') return { kind: 'dropped_source', sentence: `${lead} The route dies at ${at} — INSIDE THE MONITOR'S OWN PROVIDER, ${label(tr.sourceNetwork)}. The fault is on the monitor's side.` };
+    if (tr.stopsIn === 'transit') return { kind: 'dropped_transit', sentence: `${lead} The route dies at ${at} — in a network BETWEEN the monitor (${label(tr.sourceNetwork)}) and the server (${label(tr.targetNetwork)}).` };
+    return { kind: 'unreachable', sentence: `${lead} The route stops after ${at}; its owner could not be identified.` };
+  }
+  if (tr?.ok && tr.reachedTarget) {
+    return { kind: 'lossy', sentence: `${lead} The route trace does reach the server (${label(tr.targetNetwork)}), so packets are getting there but being lost or delayed — congestion or rate limiting near the server.` };
+  }
+  return { kind: 'unreachable', sentence: `${lead}${tr && !tr.ok ? ` The route trace could not run: ${tr.error}.` : ' No route trace was taken in this test.'}` };
+}
+
+/** The finding, in one sentence a person can act on. */
+function verdictFor(r) {
+  return classify(r).sentence;
 }
 
 /**
@@ -163,7 +226,11 @@ async function runNetworkTest(hosts, { reason = 'manual', deps } = {}) {
   const startedAt = new Date().toISOString();
   const before = processState();
   const results = await Promise.all(hosts.map((h) => testHost(h, deps)));
-  return { reason, startedAt, finishedAt: new Date().toISOString(), process: before, hosts: results };
+  const sockets = before.openSockets ?? before.activeHandles;
+  const processVerdict = sockets != null && sockets > SOCKET_LEAK_THRESHOLD
+    ? `The monitor itself holds ${sockets} open connections — far above normal. Suspect a connection leak in the monitor before blaming the network.`
+    : null;
+  return { reason, startedAt, finishedAt: new Date().toISOString(), process: { ...before, verdict: processVerdict }, hosts: results };
 }
 
-module.exports = { runNetworkTest, testHost, tcpConnect, processState, verdictFor, TCP_ATTEMPTS };
+module.exports = { runNetworkTest, testHost, tcpConnect, processState, verdictFor, classify, TCP_ATTEMPTS, COMPARE_PORTS, SOCKET_LEAK_THRESHOLD };

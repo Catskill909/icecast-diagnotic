@@ -78,32 +78,30 @@ has Backup & move.
 > **Picking this up? Start at item A — the monitor-reach work in progress.**
 > Item 1 is BLOCKED on the owner, and there is no code to write for it.
 
-A. **Browser second opinion (IN PROGRESS, not started in code).** When the
+> **The monitor-reach work is tracked in [docs/ISSUE-PACIFICA-REACH.md](docs/ISSUE-PACIFICA-REACH.md)
+> (checklist §7).** Built and pushed after the owner left on 2026-09-12, NOT yet
+> deployed: hop network owners on traces, the stream-port-vs-other-ports block
+> check, a verdict naming whose side failed, the automatic whose-feeds-dropped
+> report on recovery, both shown on the incident page ("What the monitor
+> found"), and an isolation test. On deploy: press Admin → Network test once and
+> confirm the Route row names networks (e.g. "CyberCloud Professionals (AS18501)").
+
+A. **Browser second opinion (not started in code).** When the
    monitor's own connection to a stream fails with no HTTP answer, a logged-in
    dashboard plays that stream muted in a hidden `<audio>` element (the same
    route the working play buttons use) for ≤12 s and POSTs the result to a new
    auth-only endpoint. The next cycle feeds a fresh (<2 min) report into
-   `consultWitnesses()` as a witness verdict → `monitor_path` ("on air, verified
-   from a viewer's browser"). Constraints found: Pacifica's Icecast 2.4.3 sends
-   **no CORS header**, so `fetch` cannot read the stream — use a media element;
-   CSP already allows `media-src https:`; reports MUST require auth or anyone
-   could suppress a real outage. Needs the `unconfirmed` gate to skip when
-   `result.witness.ok` (already done in monitor.js).
-B. **Automatic "which encoders reconnected" diagnosis.** When a held (unconfirmed)
-   episode settles, compare every mount's `streamStart` on that server against
-   the gap and write the table from the 2026-09-12 (late) entry into the
-   incident: which feeds dropped, which held, and the conclusion "partial network
-   failure on the server's side" when the monitor AND some encoders dropped
-   together while others held.
-C. **Isolation test.** One station failing must never change another station's
-   status. True today by construction (per-stream probes); pin it with a test.
-D. **Show the evidence on the incident page.** Events now carry
-   `pathTraceIds` and `networkTestIds`; the history/event drill-down does not
-   render them yet. Render the verdict sentence, the trace's last answering hop
-   against the baseline, and the per-minute network rows for the window.
-E. **Optional: deploy `witness/witness.js` on a non-Contabo network** (set
-   `WITNESS_URLS`, `WITNESS_TOKEN` on the monitor). Only if the owner wants an
-   always-on second location; A covers the case when someone is watching.
+   `consultWitnesses()` as a witness verdict → `monitor_path`. Constraints found:
+   Pacifica's Icecast 2.4.3 sends **no CORS header**, so `fetch` cannot read the
+   stream — use a media element; CSP already allows `media-src https:`; reports
+   MUST require auth or anyone could suppress a real outage. The `unconfirmed`
+   gate already skips when `result.witness.ok`.
+B. **Verify on the next real occurrence** that the grey hold engages, the
+   automatic network test and reach report are written, and record both
+   sentences in the issue file's occurrence log.
+C. **Optional: deploy `witness/witness.js` on a non-Contabo network** (set
+   `WITNESS_URLS`, `WITNESS_TOKEN`). Only if an always-on second location is
+   wanted; A covers the case when someone is watching.
 1. **BLOCKED ON OWNER — Icecast admin credentials for `streaming.wbai.org` and
    `streams.kpfa.org:8443`.** No code required — one env var,
    `ICECAST_ADMIN_CREDS`. This is worth more than any remaining feature: it

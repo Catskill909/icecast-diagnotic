@@ -1399,6 +1399,7 @@
      leads; the detail table is there for whoever has to act on it. */
 
   const ms = (v) => (v == null ? '—' : `${Math.round(v)} ms`);
+  const netName = (n) => `${n.owner || 'unknown'} (AS${n.asn})`;
   const phases = (t = {}) => ['dns', 'tcp', 'tls', 'ttfb']
     .map((k) => `${k.toUpperCase()} ${t[k] == null ? '—' : `${Math.round(t[k])}ms`}`).join(' · ');
 
@@ -1411,8 +1412,9 @@
       const tr = h.trace;
       const traceText = !tr ? 'not taken in this test'
         : !tr.ok ? `could not run — ${tr.error}`
-        : tr.reachedTarget ? `reached the server in ${tr.hops.length} hops`
-        : `stopped after hop ${tr.lastAnsweringHop?.hop} (${tr.lastAnsweringHop?.host})`;
+        : tr.reachedTarget ? `reached the server in ${tr.hops.length} hops${tr.targetNetwork ? ` — ${netName(tr.targetNetwork)}` : ''}`
+        : `stopped after hop ${tr.lastAnsweringHop?.hop} (${tr.lastAnsweringHop?.host}${tr.lastAnsweringHop?.network ? `, ${netName(tr.lastAnsweringHop.network)}` : ''})`;
+      const ports = (h.otherPorts || []).map((p) => `port ${p.port}: ${p.connected}/${p.attempts}`).join(' · ');
       return `
         <div class="nettest-host ${bad ? 'bad' : 'good'}">
           <div class="nettest-verdict"><strong>${esc(h.host)}</strong> — ${esc(h.verdict || '')}</div>
@@ -1421,6 +1423,7 @@
             <tr><th>Status page</th><td>${h.status ? `${h.status.ok ? 'answered' : `did not answer — ${esc(h.status.error || '')}`} · ${ms(h.status.ms)} · ${phases(h.status.timings)}` : '—'}</td></tr>
             <tr><th>Stream</th><td>${h.stream ? `${h.stream.ok ? 'audio received' : `failed — ${esc(h.stream.error || `HTTP ${h.stream.httpStatus}`)}`} · ${ms(h.stream.ms)} · ${phases(h.stream.timings)}` : '—'}</td></tr>
             <tr><th>Raw connections</th><td>${tcp.succeeded ?? 0} of ${(tcp.attempts || []).length} connected · typical ${ms(tcp.medianMs)}${tcp.failed ? ` · failures: ${esc((tcp.attempts || []).filter((a) => !a.ok).map((a) => a.error).join(', '))}` : ''}</td></tr>
+            <tr><th>Other ports</th><td>${ports ? esc(ports) : '—'}</td></tr>
             <tr><th>Route</th><td>${esc(traceText)}</td></tr>
           </table>
         </div>`;
@@ -1428,6 +1431,7 @@
     return `
       <div class="nettest">
         <div class="hint">${esc(t.reason || 'manual')} · ${esc(when)} · monitor running ${Math.round((proc.uptimeSec || 0) / 60)} min, ${proc.openSockets ?? proc.activeHandles ?? '?'} open connections</div>
+        ${proc.verdict ? `<div class="msg err">${esc(proc.verdict)}</div>` : ''}
         ${hosts}
       </div>`;
   }

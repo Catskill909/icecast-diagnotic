@@ -1516,6 +1516,15 @@ body::before {
 
 /* Provenance notice — keeps backfilled history visibly distinct from live
    observations, so nobody reads an inferred diagnosis as a measured one. */
+/* "What the monitor found" — the network evidence on an incident. Shared by the
+   dashboard and the history page through event-detail.js. */
+.network-findings {
+  margin: 12px 0 4px;
+  border-left: 3px solid var(--info, #38bdf8);
+  padding-left: 12px;
+}
+.network-findings p { margin: 6px 0; line-height: 1.5; }
+
 .recon-note {
   display: flex;
   gap: 10px;

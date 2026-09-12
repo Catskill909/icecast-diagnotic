@@ -1981,12 +1981,20 @@ function scheduleTraces(snap, timestamp) {
     if (reason === 'unreachable') st.episodeTraces += 1;
     const run = traceRunner || pathTrace.runTrace;
     // Not awaited: a trace takes up to 90s and must never hold a check cycle.
-    const job = Promise.resolve(run(sv.host, { reason, resolvedIp: sv.timings?.ip || null }))
+    // A failing server gets the WHOLE battery with the trace inside it, so its
+    // verdict can name whose network the break is in; the trace is then filed
+    // like any other. Baselines (and tests, via traceRunner) take the trace alone.
+    const fullTest = reason === 'unreachable' && !traceRunner;
+    const traced = fullTest
+      ? runNetworkTestNow({ reason: 'auto: server stopped answering', host: sv.host, withTrace: true })
+        .then((rec) => rec.hosts?.[0]?.trace || { host: sv.host, reason, startedAt: rec.startedAt, ok: false, error: 'no trace in network test' })
+      : Promise.resolve(run(sv.host, { reason, resolvedIp: sv.timings?.ip || null }));
+    const job = traced
       .then((trace) => {
         const record = store.addPathTrace(trace);
         const where = trace.ok
           ? (trace.reachedTarget ? `reached the server in ${trace.hops.length} hops`
-            : `did NOT reach the server — last answer from hop ${trace.lastAnsweringHop?.hop} (${trace.lastAnsweringHop?.host})`)
+            : `did NOT reach the server — last answer from hop ${trace.lastAnsweringHop?.hop} (${trace.lastAnsweringHop?.host}, ${pathTrace.networkLabel(trace.lastAnsweringHop?.network)})`)
           : `could not run: ${trace.error}`;
         console.log(`[PathTrace] ${reason} ${sv.host}: ${where}`);
         if (reason !== 'baseline') {
@@ -2003,15 +2011,130 @@ function scheduleTraces(snap, timestamp) {
       .catch((err) => console.error(`[PathTrace] ${sv.host} failed: ${err.message}`))
       .finally(() => { st.running = false; });
     started.push(job);
-    if (reason === 'unreachable' && !traceRunner) {
-      // The rest of the battery at the same moment — DNS, raw connects, the
-      // process's own sockets — while the failure is still happening. The trace
-      // above covers the route, so it is not taken twice.
-      runNetworkTestNow({ reason: 'auto: server stopped answering', host: sv.host, withTrace: false })
-        .catch((err) => console.error(`[NetworkTest] ${sv.host} failed: ${err.message}`));
-    }
   }
   return started;
+}
+
+// ── Reach reports: whose feeds dropped while the monitor could not see ─────
+// 2026-09-12: after each window the only way to tell real outages from false
+// ones was to read, by hand, when every encoder on the server last connected.
+// In both windows the monitor, KPFT's encoder and WPFW's encoder lost the server
+// together while KPFK's and KPFA's never dropped — a partial failure on the
+// server's side. This does that comparison automatically when a server that the
+// monitor lost answers again, and writes the finding into the incidents.
+const REACH_REPORT_MIN_MISSES = 2;
+const lastGoodByHost = {};   // host → { at, mounts: { path: { streamStart, listeners } } }
+
+function inventoryOf(hostSnap) {
+  const out = {};
+  for (const [p, m] of Object.entries(hostSnap?.mounts || {})) {
+    out[p] = { streamStart: m.streamStart || null, listeners: m.listeners ?? null };
+  }
+  return out;
+}
+
+function trackServerReach(snap, timestamp) {
+  const state = { ...(store.getMeta('serverReach') || {}) };
+  let changed = false;
+  const reports = [];
+  for (const sv of snap.servers || []) {
+    const host = sv.host;
+    const hs = snap.byHost?.[host];
+    const down = state[host];
+    if (hs?.reachable) {
+      if (down && down.misses >= REACH_REPORT_MIN_MISSES) reports.push(buildReachReport(host, down, hs, timestamp));
+      if (down) { delete state[host]; changed = true; }
+      lastGoodByHost[host] = { at: timestamp, mounts: inventoryOf(hs) };
+    } else if (!down) {
+      // Persisted at the transition, so a restart during the outage still has
+      // the "before" picture to compare against — 2026-09-12 had three.
+      state[host] = { since: timestamp, misses: 1, before: lastGoodByHost[host] || null };
+      changed = true;
+    } else {
+      down.misses += 1;
+      down.lastMissAt = timestamp;
+      changed = true;
+    }
+  }
+  if (changed) store.setMeta('serverReach', state);
+
+  for (const report of reports) {
+    const record = store.addReachReport(report);
+    const onHost = new Set(streams.filter((s) => diagnose.hostOf(s) === report.host).map((s) => s.id));
+    const from = Date.parse(report.since) - 2 * 60 * 1000;
+    for (const e of store.getEvents({}).events) {
+      if (!onHost.has(e.streamId) || !store.isFailureEvent(e) || Date.parse(e.timestamp) < from) continue;
+      store.updateEvent(e.id, { reachReport: { id: record.id, summary: report.summary, kind: report.kind } });
+    }
+    console.log(`[Reach] ${report.host}: ${report.summary}`);
+  }
+  return reports;
+}
+
+/**
+ * Compares every feed on a server before and after the monitor lost it.
+ * A feed whose source connected AFTER the last time the monitor saw it healthy
+ * dropped during the gap; one connected since before held throughout.
+ */
+function buildReachReport(host, down, hostSnapNow, timestamp) {
+  const lostAt = Date.parse(down.since);
+  // The last healthy sighting bounds when a drop could have started; a feed can
+  // drop slightly before the monitor's first failed cycle.
+  const cutoff = down.before?.at ? Date.parse(down.before.at) : lostAt - 2 * 60 * 1000;
+  const before = down.before?.mounts || {};
+  const now = inventoryOf(hostSnapNow);
+
+  const nameOf = new Map();
+  for (const s of streams) {
+    if (diagnose.hostOf(s) !== host) continue;
+    for (const p of diagnose.channelMountPaths(s)) nameOf.set(p, s.name);
+  }
+
+  const feeds = [...new Set([...Object.keys(before), ...Object.keys(now)])].sort().map((path) => {
+    const b = before[path];
+    const n = now[path];
+    const started = n?.streamStart ? Date.parse(n.streamStart) : NaN;
+    const state = !n ? 'gone' : Number.isFinite(started) && started > cutoff ? 'dropped' : 'held';
+    return {
+      path, station: nameOf.get(path) || null, state,
+      reconnectedAt: state === 'dropped' ? n.streamStart : null,
+      listenersBefore: b?.listeners ?? null, listenersAfter: n?.listeners ?? null,
+    };
+  });
+
+  // Stated per monitored channel; unmonitored mounts still count as evidence.
+  const byChannel = new Map();
+  for (const f of feeds) {
+    const key = f.station || f.path;
+    const cur = byChannel.get(key) || { name: key, monitored: !!f.station, state: 'held', listenersBefore: 0, listenersAfter: 0 };
+    if (f.state !== 'held') cur.state = f.state === 'gone' && cur.state !== 'dropped' ? 'gone' : 'dropped';
+    cur.listenersBefore += f.listenersBefore || 0;
+    cur.listenersAfter += f.listenersAfter || 0;
+    byChannel.set(key, cur);
+  }
+  const channels = [...byChannel.values()];
+  const lost = channels.filter((c) => c.state !== 'held');
+  const held = channels.filter((c) => c.state === 'held');
+  const dur = diagnose.fmtDuration(Date.parse(timestamp) - lostAt);
+  const list = (arr) => arr.map((c) => `${c.name} (${c.listenersBefore} → ${c.listenersAfter} listeners)`).join(', ');
+  const restarted = down.serverStart && hostSnapNow.serverStart && down.serverStart !== hostSnapNow.serverStart;
+
+  let kind;
+  let summary;
+  if (!feeds.length) {
+    kind = 'no_inventory';
+    summary = `The monitor could not reach ${host} for ${dur}. There is no before-and-after list of feeds to compare.`;
+  } else if (lost.length && held.length) {
+    kind = 'partial';
+    summary = `Partial network failure on ${host}'s side for ${dur}: while the monitor could not reach it, ${list(lost)} ALSO lost their connection to the server, but ${list(held)} stayed connected throughout. Real outages for the first group; the second group was on air.`;
+  } else if (!lost.length) {
+    kind = 'monitor_only';
+    summary = `Only the monitor lost ${host} for ${dur} — every feed stayed connected (${list(held)}). The stations were on air; the fault was on the monitor's route to the server.`;
+  } else {
+    kind = 'all_dropped';
+    summary = `Every feed on ${host} lost its connection for ${dur} (${list(lost)}) — the server${restarted ? ', which restarted,' : ''} or its network dropped everything.`;
+  }
+  return { host, since: down.since, until: timestamp, durationMs: Date.parse(timestamp) - lostAt, kind, summary, channels, feeds };
 }
 
 /**
@@ -2027,9 +2150,18 @@ async function runNetworkTestNow({ reason = 'manual', host = null, withTrace = t
   const record = store.addNetworkTest(result);
   const tested = new Set(targets.map((t) => t.host));
   const onTested = new Set(streams.filter((s) => tested.has(diagnose.hostOf(s))).map((s) => s.id));
+  const verdictByHost = new Map(result.hosts.map((h) => [h.host, h]));
   for (const e of store.getEvents({}).events) {
     if (!onTested.has(e.streamId) || e.resolvedAt || !store.isFailureEvent(e)) continue;
-    store.updateEvent(e.id, { networkTestIds: [...(e.networkTestIds || []), record.id] });
+    const s = streams.find((x) => x.id === e.streamId);
+    const h = s && verdictByHost.get(diagnose.hostOf(s));
+    const patch = { networkTestIds: [...(e.networkTestIds || []), record.id] };
+    // The sentence the incident page shows. A failing verdict is never replaced
+    // by a later healthy one — the route recovering is not what explains it.
+    if (h && (h.kind !== 'healthy' || !e.networkVerdict)) {
+      patch.networkVerdict = { kind: h.kind, sentence: h.verdict, testId: record.id, at: h.finishedAt };
+    }
+    store.updateEvent(e.id, patch);
   }
   for (const h of result.hosts) console.log(`[NetworkTest] ${reason} ${h.host}: ${h.verdict}`);
   return record;
@@ -2076,6 +2208,7 @@ async function runChecksInner() {
   // when deciding whether a failure on it can be held for evidence.
   for (const [host, hs] of Object.entries(snap.byHost || {})) if (hs?.reachable) store.noteHostReachable(host);
   scheduleTraces(snap, timestamp);
+  trackServerReach(snap, timestamp);
   // The network record: one row per server per cycle, so an incident can be
   // reconstructed minute by minute — which phase failed, and when it began.
   for (const sv of snap.servers || []) {
@@ -4753,6 +4886,7 @@ module.exports = {
   _setPendingResume: (p) => { pendingResume = p; },
   // Startup without the timers start() adds — for restart tests.
   _init: () => init(),
+  _buildReachReport: buildReachReport,
   watchServerReachability,
   _consultWitnesses: consultWitnesses,
   _scheduleTraces: scheduleTraces,

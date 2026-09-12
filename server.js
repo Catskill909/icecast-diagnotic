@@ -1015,6 +1015,10 @@ app.post('/api/network-test', auth.requireAuth, async (req, res) => {
   }
 });
 
+app.get('/api/reach-reports', auth.requireAuth, (req, res) => {
+  res.json({ reports: store.getReachReports().slice().reverse() });
+});
+
 app.get('/api/network-tests', auth.requireAuth, (req, res) => {
   const ids = typeof req.query.ids === 'string' && req.query.ids ? req.query.ids.split(',') : undefined;
   res.json({ tests: store.getNetworkTests({ ids }).slice().reverse() });

@@ -1042,6 +1042,22 @@ function getNetworkTests({ ids } = {}) {
   return all.filter((t) => want.has(t.id));
 }
 
+// Reach reports — what each feed on a server did while the monitor could not see
+// it. See monitor.buildReachReport. Bounded like the other evidence records.
+const MAX_REACH_REPORTS = 100;
+
+function addReachReport(report) {
+  const id = `reach_${Date.parse(report.until) || Date.now()}_${String(report.host).replace(/[^a-z0-9.-]/gi, '_')}`;
+  const record = { id, ...report };
+  meta.reachReports = [...(meta.reachReports || []), record].slice(-MAX_REACH_REPORTS);
+  dirtyEvents = true;
+  return record;
+}
+
+function getReachReports() {
+  return meta.reachReports || [];
+}
+
 function lastPathTrace(host, reason) {
   const all = meta.pathTraces || [];
   for (let i = all.length - 1; i >= 0; i--) {
@@ -3457,7 +3473,7 @@ module.exports = {
   reconcileOpenEvents, closeUnobserved, withOngoingDuration,
   isMeasuredSample, confirmSamples, hostEverReachable, noteHostReachable,
   addNetSample, getNetSamples, addPathTrace, getPathTraces, lastPathTrace,
-  addNetworkTest, getNetworkTests,
+  addNetworkTest, getNetworkTests, addReachReport, getReachReports,
   addSample, getSamples, getAllSamples, getRollups,
   getUptime, getOverallUptime, getAudioUptime, getCoverageStart, getSummary, getDailyBuckets, getCauseBreakdown,
   getPeriodRollup,

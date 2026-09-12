@@ -144,17 +144,46 @@ Monitor process at 1 min uptime: 7 open connections.
 | Route trace (mtr TCP to stream port) | 2 missed checks, then every 10 min (max 3); daily baseline | `GET /api/path-traces` (admin); `pathTraceIds` on incidents |
 | Network test (DNS, status, stream, 5 raw connects, trace, own sockets, verdict) | automatically when a server stops answering; on demand | Admin → Network test; `GET /api/network-tests`; `networkTestIds` on incidents |
 
+### Networks involved (looked up 2026-09-12)
+
+| Address | Network |
+|---|---|
+| 144.126.148.20 — the monitor | AS40021 Contabo Inc. |
+| 68.168.105.107 — streams.pacifica.org | AS18501 CyberCloud Professionals LLC |
+| 216.55.160.x — last routers before Pacifica (seen from the owner's Mac) | AS18501 CyberCloud Professionals LLC |
+
+### How to read the next occurrence
+
+Open the incident on the dashboard or History page. The **What the monitor found**
+block holds two sentences, both written automatically:
+
+1. **Network test from the monitor's server** — one of:
+   - *ACTIVELY REFUSING* → something on the server's side rejects the monitor.
+   - *DOES answer on port 80/443 … BLOCKING the stream port* → a filter on the
+     server's side blocks the stream port for the monitor.
+   - *route dies … INSIDE THE SERVER'S OWN NETWORK* (CyberCloud) → Pacifica's side.
+   - *INSIDE THE MONITOR'S OWN PROVIDER* (Contabo) → our side.
+   - *in a network BETWEEN* → a transit network, named.
+   - *getting there but being lost or delayed* → congestion or rate limiting near the server.
+   - *the monitor itself holds N open connections* → our app.
+2. **What every feed on the server did** — *partial* (some encoders dropped with
+   the monitor, others held: the server's side), *monitor_only* (every feed held:
+   our route), *all_dropped* (the server dropped everything).
+
+Admin → **Network test** shows the full detail of every saved test, including the
+automatic ones. Record both sentences in the occurrence log below.
+
 ## 7. Checklist — until this is solved
 
 - [x] Stop calling a station down when the monitor can't reach its server
 - [x] Record connection timings, route traces and network tests from the monitor's own host
 - [x] Capture a healthy baseline (22:40 UTC)
-- [ ] **Name the network** where the route stops (hop owner / AS name: Contabo vs CyberCloud vs transit)
-- [ ] **Block or broken route**: compare the stream port with other ports on the same server at the moment of failure
-- [ ] **Whose encoders dropped**: automatic comparison written into the incident when the server answers again
-- [ ] Show the evidence and the one-sentence verdict on the incident page
+- [x] **Name the network** where the route stops — hop owners via Team Cymru DNS (built, not yet deployed)
+- [x] **Block or broken route** — stream port compared with ports 80/443 on the same server (built, not yet deployed)
+- [x] **Whose encoders dropped** — automatic comparison written into the incident when the server answers (built, not yet deployed)
+- [x] Show the evidence and the one-sentence verdict on the incident page (built, not yet deployed)
 - [ ] Browser second opinion (logged-in dashboard verifies a stream from the viewer's route)
-- [ ] Test: one station's failure never changes another station's status
+- [x] Test: one station's failure never changes another station's status
 - [ ] Verify the grey "can't reach" hold on a real occurrence
 - [ ] Next occurrence: read the automatic evidence and record the culprit here
 - [ ] Close this issue

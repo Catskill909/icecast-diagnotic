@@ -35,6 +35,34 @@ const DIES_AT_HOP_4 = JSON.stringify({ report: { mtr: { dst: '68.168.105.107', t
   { count: 6, host: '???', 'Loss%': 100, Snt: 5, Avg: 0, Best: 0, Wrst: 0 },
 ] } });
 
+/** Team Cymru answers for the fixture addresses — no real DNS in tests. */
+const CYMRU = {
+  '1.148.126.144.origin.asn.cymru.com': '40021 | 144.126.148.0/22 | US | arin | 2021-03-16',
+  '1.47.141.62.origin.asn.cymru.com': '40021 | 62.141.47.0/24 | US | arin | 2021-03-16',
+  '194.199.125.64.origin.asn.cymru.com': '6461 | 64.125.0.0/16 | US | arin | 2000-01-01',
+  '12.160.55.216.origin.asn.cymru.com': '18501 | 216.55.160.0/24 | US | arin | 2024-08-09',
+  '107.105.168.68.origin.asn.cymru.com': '18501 | 68.168.105.0/24 | US | arin | 2024-08-09',
+  'AS40021.asn.cymru.com': '40021 | US | arin | 2023-05-16 | CONTABO-40021 - Contabo Inc., US',
+  'AS6461.asn.cymru.com': '6461 | US | arin | 2000-01-01 | ZAYO-6461 - Zayo Bandwidth, US',
+  'AS18501.asn.cymru.com': '18501 | US | arin | 2024-08-09 | JOESD-18501 - CyberCloud Professionals LLC, US',
+};
+const FAKE_CYMRU = async (name) => { if (!CYMRU[name]) throw new Error('ENOTFOUND'); return [[CYMRU[name]]]; };
+
+test('names whose network the break is in: the server\'s, the monitor\'s, or transit between', async () => {
+  pathTrace._clearAsnCache();
+  const mk = (lastIp) => ({ ok: true, reachedTarget: false, target: '68.168.105.107',
+    hops: [{ hop: 1, host: '144.126.148.1', lossPct: 0 }, { hop: 2, host: lastIp, lossPct: 50 }, { hop: 3, host: '???', lossPct: 100 }],
+    lastAnsweringHop: { hop: 2, host: lastIp } });
+  const inTarget = await pathTrace.annotateNetworks(mk('216.55.160.12'), { resolveTxt: FAKE_CYMRU });
+  const inSource = await pathTrace.annotateNetworks(mk('62.141.47.1'), { resolveTxt: FAKE_CYMRU });
+  const inTransit = await pathTrace.annotateNetworks(mk('64.125.199.194'), { resolveTxt: FAKE_CYMRU });
+  assert.strictEqual(inTarget.stopsIn, 'target');
+  assert.strictEqual(inSource.stopsIn, 'source');
+  assert.strictEqual(inTransit.stopsIn, 'transit');
+  assert.match(pathTrace.networkLabel(inTransit.lastAnsweringHop.network), /Zayo.*AS6461/);
+  assert.strictEqual(await pathTrace.lookupNetwork('10.0.0.1', { resolveTxt: FAKE_CYMRU }), null, 'private addresses have no owner to look up');
+});
+
 test('parses mtr JSON and names the last hop that answered', () => {
   const hops = pathTrace.parseMtrJson(DIES_AT_HOP_4);
   assert.strictEqual(hops.length, 6);
@@ -53,13 +81,18 @@ test('a trace whose final hop is the server counts as reaching it', () => {
 test('runTrace uses TCP to the stream port and never throws — a missing tool is a record', async () => {
   let args;
   const ok = await pathTrace.runTrace('streams.pacifica.org:9000', {
-    reason: 'unreachable', resolvedIp: '68.168.105.107',
+    reason: 'unreachable', resolvedIp: '68.168.105.107', resolveTxt: FAKE_CYMRU,
     run: (cmd, a, _o, cb) => { args = [cmd, ...a]; cb(null, DIES_AT_HOP_4, ''); },
   });
   assert.ok(args.includes('--tcp') && args[args.indexOf('--port') + 1] === '9000', `mtr must trace TCP to port 9000: ${args}`);
   assert.strictEqual(args.at(-1), '68.168.105.107', 'trace the address the probe actually used');
   assert.strictEqual(ok.ok, true);
   assert.strictEqual(ok.lastAnsweringHop.hop, 4);
+
+  // Who owns the hop where it stopped — hop 4 is inside the server's own network.
+  assert.strictEqual(ok.lastAnsweringHop.network.asn, 18501);
+  assert.strictEqual(ok.stopsIn, 'target', 'a trace dying inside the server\'s network must say so');
+  assert.match(pathTrace.networkLabel(ok.targetNetwork), /CyberCloud/);
 
   const missing = await pathTrace.runTrace('streams.pacifica.org:9000', {
     run: (_c, _a, _o, cb) => { const e = new Error('spawn mtr ENOENT'); e.code = 'ENOENT'; cb(e, '', ''); },
