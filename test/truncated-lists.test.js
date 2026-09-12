@@ -31,6 +31,11 @@ function load() {
   const ctx = { Math, Object, esc: (x) => String(x == null ? '' : x) };
   vm.createContext(ctx);
   vm.runInContext(slice, ctx);
+  /* A top-level `const` lives in the script's declarative scope, not on the
+     context object, so it does NOT come back with the function declarations.
+     Read it out deliberately — picking it up as `undefined` makes a test that
+     means to exercise the uncut path quietly exercise the cut one instead. */
+  ctx.ALL = vm.runInContext('ALL', ctx);
   return ctx;
 }
 const text = (html) => String(html).replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim();
@@ -267,4 +272,68 @@ test('every ranked list on the page reports its remainder', () => {
   const uses = (src.match(/moreRow\(/g) || []).length;
   assert.ok(uses >= 4, `expected every truncating list to call moreRow, found ${uses} call(s)`);
   assert.ok(src.includes('function moreRow('), 'one helper, not four spellings');
+});
+
+/* ── Player/App is exempt from the cut ──────────────────────────────────────
+   That list has been cut three ways — nine rows, twelve rows, then a 1% share
+   with the tail behind an expander — and every version produced the same
+   report: a real player was not on the page. The expander was the worst of the
+   three, because it looked solved. "12 more, each under 1%" rendered in
+   tertiary italic is not readable, and nothing about it read as clickable, so
+   the entries were exactly as missing as when they were dropped in silence.
+
+   A player at 0.4% is still hundreds of listeners and is the row a platform
+   decision turns on, so this one list shows everything. Every OTHER list keeps
+   the share cut, which is what these tests hold in place. */
+
+test('ALL renders every entry, with no remainder and no expander', () => {
+  const { bars, ALL } = load();
+  assert.equal(ALL, Infinity, 'the sentinel must survive being read out of the vm');
+  const many = {};
+  for (let i = 0; i < 40; i += 1) many[`P${i}`] = 40 - i;   // a long, flat tail
+  const total = Object.values(many).reduce((a, n) => a + n, 0);
+  const html = bars(many, total, ALL);
+  assert.equal((html.match(/deep-bar-row/g) || []).length, 40, 'no cut and no ceiling');
+  assert.doesNotMatch(html, /deep-bar-rest/, 'nothing was left out, so nothing to summarise');
+  assert.doesNotMatch(html, /data-bar-toggle/, 'and nothing to click');
+});
+
+test('ALL keeps the entry that started this: nothing under 1% is dropped', () => {
+  const { bars, ALL } = load();
+  const players = { A: 500, B: 300, C: 100, D: 60, E: 25, F: 10, G: 4, H: 1 };
+  const html = bars(players, 1000, ALL);
+  for (const name of ['G', 'H']) {
+    assert.match(html, new RegExp(`>${name}<`), `${name} is under 1% and must still be a row`);
+  }
+});
+
+test('ALL is opt-in: every other list still cuts', () => {
+  /* The bug this guards is a fix that leaks. Player/App asked to be complete;
+     Platform, metro and country did not, and widening the change to them is a
+     change nobody requested. */
+  const { bars } = load();
+  const many = {};
+  for (let i = 0; i < 40; i += 1) many[`P${i}`] = 40 - i;
+  const total = Object.values(many).reduce((a, n) => a + n, 0);
+  const html = bars(many, total, 6);
+  assert.match(html, /deep-bar-rest/, 'a list that did not ask for ALL keeps its remainder row');
+  /* Counted on the VISIBLE half only. The collapsed rows are in the markup all
+     along — behind `hidden` — so counting the whole string says a truncated
+     list was not truncated. */
+  const { visible } = halves(html);
+  assert.ok((visible.match(/deep-bar-row/g) || []).length < 40, 'and keeps its cut');
+});
+
+test('ALL on an empty set still says "No data"', () => {
+  const { bars, ALL } = load();
+  assert.match(bars({}, 100, ALL), /No data/);
+  assert.match(bars(null, 100, ALL), /No data/);
+});
+
+test('THE PLAYER/APP LIST IS THE ONE THAT ASKS FOR IT', () => {
+  /* Pinned at the call site, not just in the helper: the helper supporting ALL
+     is worth nothing if the list that needs it stops passing it. Platform sits
+     beside it in the same markup and must keep its numeric limit. */
+  assert.match(src, /bars\(players,\s*cume,\s*ALL\)/, 'Player/App shows every player');
+  assert.match(src, /bars\(platforms,\s*cume,\s*6\)/, 'Platform is unchanged');
 });

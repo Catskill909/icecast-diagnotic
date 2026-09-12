@@ -812,6 +812,18 @@
   const BAR_MIN_SHARE = 0.01;
   const BAR_MAX_ROWS = 20;
 
+  /* ALL opts a single list out of the cut entirely: every entry is a row, and
+     there is no remainder and no expander. Player/App asks for it, because that
+     list has now been cut three ways — at nine, at twelve, and at a 1% share
+     with the tail behind a caret — and every version produced the same report,
+     that a real player was not on the page. The expander did not fix it: a row
+     reading "12 more, each under 1%" in tertiary italic is not something a
+     reader can see, let alone recognise as a control, so the entries stayed as
+     missing as they had been when they were dropped silently.
+
+     Only that list opts out. The share cut still governs every other one. */
+  const ALL = Infinity;
+
   function bars(obj, total, limit) {
     const all = Object.entries(obj || {}).sort((a, b) => b[1] - a[1]);
     const floor = total ? total * BAR_MIN_SHARE : 0;
@@ -819,7 +831,9 @@
     /* A numeric `limit` is still honoured as a FLOOR on how many to show, so a
        caller that wants at least six platforms still gets them even when only
        three clear the threshold. */
-    const keep = Math.min(BAR_MAX_ROWS, Math.max(significant, limit || 0, 1));
+    const keep = limit === ALL
+      ? all.length
+      : Math.min(BAR_MAX_ROWS, Math.max(significant, limit || 0, 1));
     const shown = all.slice(0, keep);
     if (!shown.length) return '<div class="muted">No data</div>';
     const hidden = all.slice(shown.length);
@@ -1403,12 +1417,11 @@
       <div class="deep-split">
         <div>
           <div class="deep-sub">Player / app · ${esc(rangeName)}</div>
-          ${/* Twelve, not nine. A real station's mix is longer than the list
-                was: KPFK's iOS audience sat at tenth and was therefore not on
-                the page at all. The remainder row below makes any truncation
-                honest, but a category a station would act on should be visible
-                without arithmetic. */ ''}
-          ${bars(players, cume, 12)}
+          ${/* EVERY player, however small. Nine, then twelve, then a 1% share
+                with the rest behind an expander — each cut produced the same
+                bug report, that a player a station would act on was not on the
+                page. A player at 0.4% is still hundreds of people. */ ''}
+          ${bars(players, cume, ALL)}
         </div>
         <div>
           <div class="deep-sub">Platform · ${esc(rangeName)}</div>
