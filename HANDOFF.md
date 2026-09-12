@@ -6,10 +6,12 @@
 ## Where the project is — 2026-09-12
 
 **Live, healthy, and fully deployed.** 5 stations, 10 channels, 3 Icecast hosts.
-10/10 streams up, 99.79% audio uptime over 7 days, 1,032 events retained since
-2026-08-04, both geo databases loaded (MaxMind city, so states AND metros
-resolve). **906 tests pass.** Local, `origin/main` and production are all the
-same commit.
+10/10 streams up, 99.82% audio uptime over 7 days (99.26% over 30), 1,053
+events retained since 2026-08-04, both geo databases loaded (MaxMind city, so
+states AND metros resolve) and auto-updating. **906 tests pass**, both CI jobs
+green. Local, `origin/main` (`d72b5b1`) and production are all the same commit —
+audited live 2026-09-12 against the served assets, not just the API. This
+week's `faultSplit` was 100% `source`: every outage was upstream of Icecast.
 
 Verify a deploy without signing in:
 
@@ -31,7 +33,10 @@ has Backup & move.
 
 ### What is NOT done, in priority order
 
-1. **Icecast admin credentials for `streaming.wbai.org` and
+> **Picking this up? Start at item 2.** Item 1 is the most valuable thing on
+> the list but is BLOCKED on the owner, and there is no code to write for it.
+
+1. **BLOCKED ON OWNER — Icecast admin credentials for `streaming.wbai.org` and
    `streams.kpfa.org:8443`.** No code required — one env var,
    `ICECAST_ADMIN_CREDS`. This is worth more than any remaining feature: it
    switches on every per-listener figure already built, for two more stations.
@@ -40,6 +45,17 @@ has Backup & move.
    JSON) are data dumps for a spreadsheet; nothing produces a DOCUMENT a manager
    can attach to an email. `previewWeeklyRoundup()` already composes this shape,
    so a monthly variant is largely a window change plus the audience figures.
+   **It has a deadline.** September is the first COMPLETE month on record
+   (recording began 2026-08-04, so August is partial), and it closes
+   2026-09-30. Built by then, the first real report can go out 2026-10-01;
+   otherwise the first one slips a month. `/api/rollup` already computes the
+   right FIGURES — `narrative`, `faultSplit`, listener-hours lost against
+   delivered — but only over a window ending NOW: `store.getPeriodRollup()`
+   hardcodes `until = Date.now()` (store.js:2771). A monthly report needs
+   explicit calendar bounds, 1st to 1st in the STATION's timezone, so the first
+   step is a `since`/`until` variant of the rollup. Running `days=30` on the 1st
+   is not a substitute: it is off by the hours between midnight and the run, and
+   by a day in 31-day months.
 3. **Month-vs-month, by name.** Blocked until **2026-11-01**, not by code:
    recording began 2026-08-04, so September is the first complete month and
    October the second. Shipping a comparison whose earlier term is partial is
@@ -49,7 +65,9 @@ has Backup & move.
    State and Timezone; a five-topic admin guide reusing the dashboard's
    renderer. Still to do: popovers on the alerts editor, the test-alert button,
    add-to-existing-station, and the two mount warnings — all of which live in
-   `admin.js` rather than the markup. Original scoping below:
+   `admin.js` rather than the markup. Verified 2026-09-12: `admin.html` has 3
+   `info-popover`s, `admin.js` has 0. Small and well-scoped. Original scoping
+   below:
 
    **Phase 9, as scoped.** The Audience page has 16
    inline popovers and the dashboard a 14-topic guide; `/admin.html` has NONE,
@@ -64,6 +82,12 @@ has Backup & move.
    operational UI lives. Backup & move is there now and is the pattern to
    follow: plain words, the consequence stated before the action, and
    confirmations that name what SURVIVES.
+
+**Parked, not scheduled — SoundExchange royalty reporting.** Researched
+2026-09-12 and written up as Phase 10 in
+[`docs/PHASE-PLAN.md`](docs/PHASE-PLAN.md) so the work is not lost. The owner's
+call: a far-off feature, NOT to be built soon. Do not start it, and do not fold
+it into the monthly report.
 
 ### Decisions already taken, so they are not re-litigated
 
@@ -156,9 +180,10 @@ exists: the in-app guide told readers Player/app shows "a top few" and that the
 1% line applies to it, and README §"Ranked lists say when they are truncated"
 said the same and additionally still claimed the tail opens collapsed.
 
-Status: `04b11a0` committed and pushed; production is serving it (verified by
-fetching `/listeners.js` and finding the ALL call site). The doc corrections in
-this entry are local at the time of writing.
+Status: code in `04b11a0`, doc corrections in `d72b5b1`; both pushed, both CI
+jobs green, and production serves both — verified by fetching the live
+`/listeners.js` (ALL call site present) and `/guide.js` (new Player/app copy
+present, stale "each show a top few" gone).
 
 Next: unchanged — the monthly station report is the largest outstanding code
 item. See "What is NOT done" at the top.

@@ -548,6 +548,150 @@ stylesheet, not that the page loads it, so (c) needs that gap closed too.
 
 ---
 
+## Phase 10 — SoundExchange royalty reporting
+
+> **PARKED — a far-off feature, not to be built soon (owner, 2026-09-12).** Kept
+> as research so it does not have to be redone. Nothing below is scheduled, and
+> nothing in it should be folded into other work.
+>
+> Researched 2026-09-12 from SoundExchange's own 2025 and 2026 memos to
+> noncommercial webcasters, its Reporting Requirements page, the CRB's March 2026
+> Web VI publications and Current's reporting on the CPB deal. Sources at the end
+> of this section. **This is product research, not legal advice** — SoundExchange
+> says the same about its own memos, and the station's counsel decides filing.
+
+### Why this belongs in the product
+
+Every Pacifica stream is a digital performance of sound recordings, and US law
+requires a royalty to SoundExchange for it. The unit the noncommercial rate is
+priced in is **Aggregate Tuning Hours** — one listener for one hour — which is a
+listening measurement, and this monitor is the only system Pacifica has that
+measures listening. It already computes month-to-date ATH per channel against the
+159,140 allowance (`getMonthToDateAth()`, store.js). What it does not do is
+anything a station can FILE with, and nothing warns a station before it crosses
+the line where more money is owed.
+
+### The rules, as they stand in 2026
+
+**There are three noncommercial categories, and which one a station is in
+decides everything below it.**
+
+| Category | Who | What the station owes SoundExchange directly |
+|---|---|---|
+| **Public Broadcasters** (37 CFR 380 Subpart D) | NPR, CPB, APM, PRI, and up to **530 "Originating Public Radio Stations" that CPB names to SoundExchange each year** | Nothing per station — a negotiated lump sum. Settlement for 2026–2030 approved and published 2026-03-10. After Congress rescinded CPB's funding, **CPB prepaid only the first two years, through 2027-12-31**; NPR and PBS manage it after that, and what happens from 2028 is not public |
+| **Noncommercial Webcaster (CRB)** | Any 501(c) or governmental webcaster not covered above | The fees and reports below |
+| Noncommercial Educational Webcaster | Student-run, and must NOT be CPB-qualified | Not applicable to Pacifica |
+
+**Noncommercial Webcaster (CRB), 2026** — from SoundExchange's memo of
+2025-12-17:
+
+| | |
+|---|---|
+| Minimum fee | **$1,000 per station or channel, per year**, due January 31. Non-refundable |
+| What it covers | The first **159,140 ATH per channel, per month** |
+| Above that | **$0.0025 per performance** on everything over the line. Extra ATH cannot be bought with a second minimum fee |
+| Monthly Statement of Account | **Year-to-date ATH, by month**, within **45 days** of month end — even under the cap |
+| Reports of Use, option A | Owners of FCC-licensed AM/FM stations that stay within the minimum fee may file **sample-based** reports: two 7-day periods per calendar quarter, due 45 days after the quarter, using **ATH + channel name + spins per track** instead of per-listener counts |
+| Reports of Use, option B | Everyone else: **monthly census** of every track, with **Actual Total Performances** (each track × each unique listener it reached), due 45 days after month end |
+| Track identity | **ISRC**, or if absent, **album AND marketing label**, plus title and featured artist |
+| Format | ASCII text exported from SoundExchange's Excel template for this category; submitted through Licensee Direct. SoundExchange does not invoice — the station must file unprompted |
+| Late fee | 1.5% per month |
+| What a "channel" is | "Discreet streams playing distinct content" |
+
+**The 2026–2030 CRB rate for this category was NOT final as of March 2026.** The
+CRB published only the settlements (commercial broadcasters, public radio, college
+stations, EMF). Webcasters in this category pay at 2025 rates and **true up**
+when the determination lands. Nothing about 2026 can be hardcoded as final;
+`ATH_MONTHLY_ALLOWANCE` is already an env var, and any rate this phase adds must
+be one too.
+
+### The channel model already matches the rule
+
+"Distinct content" is exactly how this app groups mounts. KPFT Main's `/live_128`
+and `/live_64` are ONE channel (the same programme at two bitrates); KPFT HD2 and
+HD3 are separate channels with separate programming, so under the CRB category
+that is three minimum fees, not one. The per-channel ATH the page already shows is
+therefore the figure a Statement of Account asks for, not an approximation of it.
+
+### Live, 2026-09-12: two channels are near the line
+
+Month-to-date ATH from production, projected to month end:
+
+| Channel | Month to date | Projected September | % of 159,140 |
+|---|---:|---:|---:|
+| **KPFA Berkeley** | 50,726 | **131,891** | **82.9%** |
+| **WPFW** | 46,978 | **120,838** | **75.9%** |
+| KPFK | 28,128 | 73,136 | 46.0% |
+| WBAI (Verizon) | 23,681 | 60,913 | 38.3% |
+| KPFT Main | 21,048 | 54,334 | 34.1% |
+| all other channels | | | under 5% |
+
+**And these figures understate.** They come from polling listener counts, and an
+aggregator that proxies carries many listeners behind one connection (see README,
+"How the audience reaches the station"). A news-heavy month or a pledge drive
+could put KPFA Berkeley or WPFW over 159,140 — which, **if** those stations file
+as Noncommercial Webcasters, means per-performance fees and census reporting for
+that month rather than the sample option. The page shows the bar; nothing tells
+anyone.
+
+### THE QUESTION THAT DECIDES THE SCOPE — ask the owner before 10.3
+
+> **For each of the five stations: is it on CPB's list of Public Broadcasters
+> for 2026, or does it file with SoundExchange as a Noncommercial Webcaster
+> (CRB)? And who files today, with what tool?**
+
+This research could NOT establish which category any Pacifica station is in. A
+station is covered by the public radio deal only if CPB **named it** to
+SoundExchange for the year, capped at 530 — being CPB-qualified, or once having
+received CPB grants, is not the same as being listed. Nothing public answers it
+per station, and **the answer changes the build**:
+
+- **Covered by the public radio deal:** no fees or Reports of Use owed per
+  station. The useful product is 10.1–10.2 as evidence of usage — which matters,
+  because the deal is only funded through 2027 and whatever replaces it will be
+  negotiated on usage.
+- **Filing as Noncommercial Webcaster (CRB):** the whole phase applies, and the
+  threshold warning is urgent for KPFA Berkeley and WPFW.
+- **Mixed, or nobody is filing:** say so to Pacifica plainly. That is a
+  compliance gap, not a feature request.
+
+### Build order, smallest useful thing first
+
+| # | Step | Needs | Notes |
+|---|---|---|---|
+| **10.1** | **Completed calendar months of ATH per channel**, in the station's timezone, with year-to-date by month | The `since`/`until` rollup variant the monthly report also needs — **build it once, for both** | This IS the Statement of Account figure. Marked `estimated` exactly as the month-to-date bar is |
+| **10.2** | **Threshold warning**: email when a channel's projection crosses a configurable share of the allowance (default 80%), once per channel per month | 10.1's projection, the existing alert pipeline and per-station recipients | Would fire THIS month for KPFA Berkeley. Worded as "approaching", never "owes" |
+| 10.3 | **Filing-grade ATH** from per-connection data, per channel, labelled `measured` vs `estimated` | Phase 5 credentials — so KPFT, WPFW and KPFK today; WBAI and KPFA only once their passwords arrive | The polled figure stays as the fallback and says what it is |
+| 10.4 | **Store the now-playing title** with its timestamp, per channel — a spins log | Nothing: the title is already fetched and discarded (`DEEP-ANALYTICS-PLAN.md` item 2) | Talk programming reports programme names, not tracks, and automation leaves titles stale. Measure how much of the log is usable per channel before promising anything built on it |
+| 10.5 | **Report of Use DRAFT export** in the Noncommercial Webcaster template's column order | 10.4, and for the census option ATP needs 10.3 | Sample option: ATH + channel + spins per track over two 7-day periods. **ISRC, album and label are not in stream metadata** — they come from the station's playout or playlist system, or SoundExchange's free ISRC search and Repertoire Match. Blank fields are shown as blank, never guessed |
+| 10.6 | **Deadline calendar**: minimum fee Jan 31, Statement of Account and ROU 45 days after each month or quarter | 10.1 | September's Statement of Account is due **2026-11-14** |
+
+**When this is un-parked:** 10.1 and 10.2 need no credential and no owner
+answer, and share their foundation with the monthly report's `since`/`until`
+rollup. 10.3 onward waits on the question above. Verify the template's exact column order against the current
+Excel file from SoundExchange before building 10.5; it was not inspected in this
+research.
+
+### What this must never do
+
+- **File, certify or pay.** SoundExchange requires a signed, certified Statement
+  of Account through Licensee Direct. The product prepares; a person files.
+- **Present an estimated figure as filing-grade.** The rule already written for
+  ATH (HANDOFF, "ATH is an ESTIMATE") applies with more force to a document
+  attached to a royalty return.
+- **Guess a track identity.** A wrong ISRC routes royalties to the wrong artist.
+- **Hardcode a rate.** The 2026–2030 CRB rate was not final when this was written.
+
+### Sources
+
+- SoundExchange, [2026 memo to Noncommercial Webcasters (2025-12-17)](https://www.soundexchange.com/wp-content/uploads/2025/12/2026-Noncommercial-Webcaster-Memo.pdf) and [2025 memo (2024-12-19)](https://www.soundexchange.com/wp-content/uploads/2025/01/2025-Noncommercial-Webcaster-Memo-Final.pdf)
+- SoundExchange, [Noncommercial Webcaster (CRB)](https://www.soundexchange.com/service-provider/non-commercial-webcaster/noncommercial-webcaster-crb/) and [Reporting Requirements](https://www.soundexchange.com/service-provider/reporting-requirements/)
+- eCFR, [37 CFR 380 Subpart D — Public Broadcasters](https://www.ecfr.gov/current/title-37/chapter-III/subchapter-E/part-380/subpart-D) (the 530-station cap and CPB's annual list)
+- Federal Register, [Web VI determinations published 2026-03-10](https://www.federalregister.gov/documents/2026/03/10/2026-04630/determination-of-rates-and-terms-for-digital-performance-of-sound-recordings-and-making-of-ephemeral); Broadcast Law Blog, [week of 2026-03-09](https://www.broadcastlawblog.com/2026/03/articles/this-week-in-regulation-for-broadcasters-march-9-2026-to-march-13-2026/) (non-settlement rates still pending)
+- Current, [CPB secures music rights for public media through 2027 (2025-10-27)](https://current.org/2025/10/cpb-secures-music-rights-for-public-media-through-2027/) and [planning for licensing without CPB (2025-08)](https://current.org/2025/08/pubmedia-leaders-plan-for-future-of-music-licensing-agreements-without-cpb/)
+
+---
+
 ## Keeping every avenue open
 
 **Decided 2026-08-31: the destination is undecided and dev must not close any
@@ -645,7 +789,8 @@ negotiated, and Phase 6 becomes engineering rather than politics.
 | Do Pacifica national have authority to monitor affiliates? | **Not a blocker.** Phase 6 is engineering, not politics |
 | Is the customer Pacifica, or a product with Pacifica as first user? | **Pacifica is the customer**, and asking |
 
-**Two remain, and neither blocks anything.**
+**Three remain, and none blocks current work** — the third belongs to Phase 10,
+which is parked.
 
 1. **Does Pacifica host this, or do we run it for them?** No longer a question
    about roles — the public/private split (Phase 7) is the same either way. It
@@ -657,6 +802,12 @@ negotiated, and Phase 6 becomes engineering rather than politics.
    one it decides `DEEP-ANALYTICS-PLAN.md` §6 rather than us. Not a blocker —
    the aggregate-only design plus the Phase 7 login gate complies with any
    reasonable policy — but worth asking before Phase 5.9 rather than after.
+
+3. **Added 2026-09-12 — which SoundExchange category is each station in, and
+   who files?** On CPB's 2026 Public Broadcaster list, or filing as a
+   Noncommercial Webcaster (CRB)? Being CPB-qualified is not the same as being
+   named on the list. Decides whether Phase 10 is usage evidence or a filing
+   tool — see Phase 10, "The question that decides the scope".
 
 **Explicitly NOT a question any more: per-user roles and multi-user accounts.**
 One shared admin credential, plus a narrow public page. Anything more is not
