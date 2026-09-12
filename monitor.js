@@ -368,6 +368,11 @@ function recipientsFor(stream) {
   };
 }
 
+/** Has this server's status page ever answered — now, or anywhere in the record? */
+function hostHasStatusPage(host) {
+  return store.hostEverReachable(host, streams.filter((x) => diagnose.hostOf(x) === host).map((x) => x.id));
+}
+
 const HELD_REASON =
   'held — the monitor cannot reach this server, so it cannot tell whether this station\'s feed dropped';
 
@@ -2006,7 +2011,7 @@ async function runChecksInner() {
     // about THIS station's feed. Only for a server that has answered before: one
     // with no status endpoint at all would otherwise never alert. See the block
     // above OPERATOR_ALERT_EMAIL.
-    const unconfirmed = isDown && !hostReachable && store.hostEverReachable(diagnose.hostOf(stream));
+    const unconfirmed = isDown && !hostReachable && hostHasStatusPage(diagnose.hostOf(stream));
     const mount = diagnose.findMount(snap, stream);
     // The channel as a whole: every bitrate variant, summed.
     const audience = diagnose.channelAudience(snap, stream);
@@ -2498,7 +2503,7 @@ async function watchServerReachability(snap, timestamp) {
       if (watch[host]) { delete watch[host]; changed = true; }
       continue;
     }
-    if (!store.hostEverReachable(host)) continue;
+    if (!hostHasStatusPage(host)) continue;
     if (!watch[host]) { watch[host] = { since: timestamp }; changed = true; }
     const outMs = now - new Date(watch[host].since).getTime();
     if (!watch[host].notifiedAt && outMs >= SERVER_UNREACHABLE_ALERT_MS) {

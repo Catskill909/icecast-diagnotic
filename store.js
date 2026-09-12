@@ -957,8 +957,20 @@ function confirmSamples(streamId, sinceIso) {
  * one without a status endpoint would otherwise never alert at all. Persisted,
  * so a monitor restarted during a server outage still knows.
  */
-function hostEverReachable(host) {
-  return !!host && Array.isArray(meta.hostsSeenReachable) && meta.hostsSeenReachable.includes(host);
+function hostEverReachable(host, streamIdsOnHost = []) {
+  if (!host) return false;
+  if (Array.isArray(meta.hostsSeenReachable) && meta.hostsSeenReachable.includes(host)) return true;
+  // The record kept before this list existed. On 2026-09-12 the list was new and
+  // Pacifica was unreachable from the moment it was deployed, so it had never
+  // been "seen" — and every station on it fell back to being called DOWN, the
+  // exact failure the list was part of fixing. Any stored diagnosis of a stream
+  // on this host that reached its status page proves the page exists.
+  const ids = new Set(streamIdsOnHost);
+  if (ids.size && events.some((e) => ids.has(e.streamId) && e.diagnosis?.icecast?.reachable === true)) {
+    noteHostReachable(host);
+    return true;
+  }
+  return false;
 }
 
 function noteHostReachable(host) {
