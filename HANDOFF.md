@@ -22,19 +22,28 @@
 
 ## Where the project is — 2026-09-12 (evening)
 
-**Live, but NOT current: a batch of fixes is built, tested and not yet
-deployed.** 5 stations, 10 channels, 3 Icecast hosts. **926 tests pass locally**
-(906 at the last audited deploy). `main` is at `0097660`; everything described in
-the 2026-09-12 "Pacifica network event" entry below is on top of that, local
-until pushed and deployed from Coolify.
+**Live and current: `314f4a5` deployed and audited live at 21:44 UTC.** 5
+stations, 10 channels, 3 Icecast hosts. **926 tests pass**, CI green.
 
-**WPFW is down in real life** (its source to `streams.pacifica.org` dropped at
-~21:03 UTC and did not return; the engineer has been told). Until the fixes are
-deployed, WPFW's station report reads "100% uptime · 0s" and the dashboard does
-not show its outage — that is the bug the batch fixes.
+Live audit of the open-outage batch, all confirmed:
+- Fresh container; served `/app.js` carries the ONGOING rendering.
+- Restart RESUMED the three outages in progress — one open event each for KPFT
+  Main, KPFT HD2 and WPFW, failure counts carried over (19, 19, 51), no new event
+  and no email since the restart.
+- All 18 orphaned 2026-09-02 events closed with `recoveryObserved: false`
+  (longest 23 min); zero recovery events manufactured for them.
+- WPFW report (1d): 96.42% uptime, 1 ongoing, 52m down, 388 listeners cut off,
+  "WPFW Washington DC, off air 51m — source encoder disconnected". Before the
+  deploy the same report read 100% and 0s.
+- KPFT report (1d): 2 ongoing, top incident "KPFT Main + HD2, ONGOING".
+- KPFK report (1d): 100% — its 20:52 outage settled as no listener impact
+  (source connected throughout). Only its EMAIL was wrong; see item 0b.
+- Dashboard feed flags kpft-main, kpft-hd2 and wpfw as ongoing.
 
-**Deploy note:** deploying while an outage is open is now SAFE (a restart resumes
-it). Before this batch it was not — every redeploy orphaned the open outage.
+**Real-world state at the audit:** WPFW down since 20:52 (source encoder).
+KPFT Main and HD2 down since 21:25 (source encoder) — part of KPFT's ongoing
+network problem on the station side, which causes both outages and encoder
+disconnects. Not a monitor fault.
 
 Verify a deploy without signing in:
 
@@ -56,15 +65,9 @@ has Backup & move.
 
 ### What is NOT done, in priority order
 
-> **Picking this up? Start at item 0, then item 2.** Item 1 is the most valuable
+> **Picking this up? Item 0b needs the owner; start coding at item 2.** Item 1 is the most valuable
 > thing on the list but is BLOCKED on the owner, and there is no code to write for it.
 
-0. **Ship the 2026-09-12 open-outage batch, then verify it live.** Push, deploy
-   from Coolify, then check: `/api/rollup?days=1&stationId=wpfw` shows
-   `counts.ongoing: 1` with a non-zero `downtime.streamMs` (while WPFW is still
-   down); the dashboard's Recent Incidents leads with WPFW marked ONGOING; the
-   startup log says it closed the 18 orphaned 2026-09-02 events; `/api/events`
-   shows those 18 with `recoveryObserved: false`.
 0b. **Decide: should an unwitnessed whole-server failure email?** KPFK's
    2026-09-12 alert was a false positive — Pacifica's server was unreachable
    from the monitor, so impact was `unknown`, and `unknown` emails by design.
