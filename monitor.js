@@ -183,6 +183,28 @@ const ALERT_STATIONS = (process.env.ALERT_STATIONS || '')
 const ALERT_ON_HARMLESS_OUTAGE =
   String(process.env.ALERT_ON_HARMLESS_OUTAGE ?? '').trim().toLowerCase() === 'true';
 
+/* ── "Can't reach the server" is not "the station is down" ───────────────────
+   2026-09-12, 20:52 UTC: streams.pacifica.org stopped answering the monitor for
+   14 minutes. The dashboard showed KPFK OFFLINE in red and emailed KPFK — while
+   KPFK's source stayed connected, its audience grew, and the owner was playing
+   it on the website. The monitor could not reach the server, and said the
+   station was down.
+
+   The rule (owner's, 2026-09-12): a station is shown down and emailed ONLY on
+   evidence about ITS OWN feed. While a server's status endpoint cannot be
+   reached, every failing stream on it is UNCONFIRMED — grey on the dashboard,
+   recorded, not emailed. When the server answers again each station is settled
+   on its own evidence: mount gone, or source reconnected during the gap →
+   confirmed, and that station alone is emailed; source connected throughout →
+   the monitor's problem, not the station's, and nobody is emailed.
+
+   If the server stays unreachable past SERVER_UNREACHABLE_ALERT_MS, one email
+   goes to OPERATOR_ALERT_EMAIL — never to stations. */
+const OPERATOR_ALERT_EMAIL = (process.env.OPERATOR_ALERT_EMAIL || '')
+  .split(',').map((s) => s.trim()).filter(Boolean);
+const SERVER_UNREACHABLE_ALERT_MS =
+  Math.max(60 * 1000, parseInt(process.env.SERVER_UNREACHABLE_ALERT_MS, 10) || 10 * 60 * 1000);
+
 // ── Weekly roundup schedule ─────────────────────────────────────────────────
 // Every timestamp a human reads is in the station's own timezone, so the report
 // covers the week they lived through rather than a UTC one.
@@ -344,6 +366,13 @@ function recipientsFor(stream) {
     cc: Array.isArray(own.cc) ? [...own.cc] : [],
     source: 'station',
   };
+}
+
+const HELD_REASON =
+  'held — the monitor cannot reach this server, so it cannot tell whether this station\'s feed dropped';
+
+function unconfirmedMessage(stream) {
+  return `${stream.name} — the monitor can't reach ${diagnose.hostOf(stream)}; NOT confirmed down`;
 }
 
 function unconfirmedSeverity(diagnosisResult) {
@@ -795,6 +824,8 @@ function episodeFromEvent(e) {
     stormNoted: judged,
     stormSuppressed: /flapping/.test(e.email?.reason || ''),
     listenerImpact: e.diagnosis?.listenerImpact || 'unknown',
+    held: !!e.awaitingEvidence,
+    failedChecks: e.failedChecks || 0,
     resumed: true,
   };
 }
@@ -1896,6 +1927,9 @@ async function runChecksInner() {
   // open afterwards and are gone long before the next cycle reads it again.
   const snap = await diagnose.fetchHostSnapshots(currentHosts());
   snapshot = snap;
+  // Before the stream loop, so a server's first successful answer already counts
+  // when deciding whether a failure on it can be held for evidence.
+  for (const [host, hs] of Object.entries(snap.byHost || {})) if (hs?.reachable) store.noteHostReachable(host);
 
   // Also before the probes, and for a second reason on top of the one above:
   // these are admin requests, not stream connections, so they add nobody to any
@@ -1968,6 +2002,11 @@ async function runChecksInner() {
     // unknown whenever any single host failed.
     const hostSnap = diagnose.snapshotForStream(snap, stream);
     const hostReachable = !!hostSnap?.reachable;
+    // Failing, and its server cannot be seen — so there is no evidence either way
+    // about THIS station's feed. Only for a server that has answered before: one
+    // with no status endpoint at all would otherwise never alert. See the block
+    // above OPERATOR_ALERT_EMAIL.
+    const unconfirmed = isDown && !hostReachable && store.hostEverReachable(diagnose.hostOf(stream));
     const mount = diagnose.findMount(snap, stream);
     // The channel as a whole: every bitrate variant, summed.
     const audience = diagnose.channelAudience(snap, stream);
@@ -2054,11 +2093,17 @@ async function runChecksInner() {
       streamStart: mount?.streamStart || prev.streamStart || '',
       mountPresent: !!mount,
       icecastReachable: hostReachable,
+      // The dashboard shows this as "can't reach server — not confirmed", never
+      // as OFFLINE.
+      unconfirmed,
     };
 
     store.addSample(stream.id, {
       timestamp,
       status: result.status,
+      // Settled later: store.confirmSamples() clears it if the station's feed is
+      // shown to have dropped. Until then the bar is grey and uptime skips it.
+      ...(unconfirmed ? { unconfirmed: true } : {}),
       responseTime: result.responseTime,
       listeners: streamStatus[stream.id].listeners,
       isSilent: !!result.isSilent,
@@ -2101,13 +2146,18 @@ async function runChecksInner() {
           severity,
           confirmed: false,
           scope: dg.scope,
-          message: `${stream.name} failed a check — ${dg.causeLabel}${result.error ? ` (${result.error})` : ''}`,
+          message: unconfirmed
+            ? unconfirmedMessage(stream)
+            : `${stream.name} failed a check — ${dg.causeLabel}${result.error ? ` (${result.error})` : ''}`,
           failedChecks: 1,
           diagnosis: dg,
+          ...(unconfirmed ? { awaitingEvidence: true } : {}),
           email: {
             attempted: false,
             sent: null,
-            reason: severity === PROBE_ERROR
+            reason: unconfirmed
+              ? HELD_REASON
+              : severity === PROBE_ERROR
               ? 'probe-side failure — Icecast reachable and mount still serving'
               : 'unconfirmed single failed check',
           },
@@ -2117,6 +2167,8 @@ async function runChecksInner() {
           eventId: event.id,
           startedAt: timestamp,
           alerted: false,
+          held: unconfirmed,
+          failedChecks: 1,
           severity,
           // Judged from the FAILURE, not from the recovery that ends the
           // episode — by then the stream is healthy and every verdict reads
@@ -2137,10 +2189,39 @@ async function runChecksInner() {
           diagnosis: dg,
           lastCheckAt: timestamp,
         };
+        episode.failedChecks = failures;
+
+        if (unconfirmed) {
+          // Still no view of the server. Recorded, never promoted to an outage
+          // and never emailed: nothing yet says this station's feed dropped.
+          episode.held = true;
+          store.updateEvent(episode.eventId, {
+            ...patch, awaitingEvidence: true, message: unconfirmedMessage(stream),
+            email: { attempted: false, sent: null, reason: HELD_REASON },
+          });
+          continue;
+        }
+
+        let evidence = dg;
+        if (episode.held) {
+          // The server answers again and the stream is still failing. Settle it
+          // on this station's own evidence. A mount that is listed can still
+          // have dropped during the gap — its source reconnect time says so.
+          episode.held = false;
+          const reconnect = diagnose.deriveSourceOutage(snap, stream, episode.startedAt);
+          const verdict = !mount || reconnect ? 'confirmed' : 'none';
+          episode.listenerImpact = verdict;
+          evidence = { ...dg, listenerImpact: verdict };
+          patch.diagnosis = evidence;
+          patch.awaitingEvidence = false;
+          patch.evidenceAt = timestamp;
+          console.log(`[Monitor] ${stream.name}: server reachable again — ${verdict === 'confirmed' ? 'feed DID drop, confirming' : 'feed held throughout, not a station fault'}`);
+          if (verdict === 'confirmed') store.confirmSamples(stream.id, episode.startedAt);
+        }
 
         const confirmed = failures >= FAILURE_THRESHOLD;
-        const alertable = confirmed && warrantsAlert(dg);
-        episode.listenerImpact = worstImpact(episode.listenerImpact, dg.listenerImpact);
+        const alertable = confirmed && warrantsAlert(evidence);
+        episode.listenerImpact = worstImpact(episode.listenerImpact, evidence.listenerImpact);
 
         if (confirmed && episode.severity !== 'outage') {
           patch.severity = 'outage';
@@ -2262,7 +2343,12 @@ async function runChecksInner() {
           !!mountNow?.streamStart &&
           new Date(mountNow.streamStart).getTime() <= new Date(episode.startedAt).getTime();
 
-        const settledImpact = sourceHeldThroughout ? 'none' : episode.listenerImpact;
+        // A held episode settles here if the stream recovered before the server
+        // could be seen: a source reconnect during the gap proves this station's
+        // feed dropped. With the server still unreachable, it stays unknown.
+        const settledImpact = sourceHeldThroughout ? 'none'
+          : episode.held && sourceOutage ? 'confirmed'
+          : episode.listenerImpact;
 
         // Freeze the audience cost now. Raw samples expire after a week and
         // Icecast reports no listeners for a mount that no longer exists, so
@@ -2288,7 +2374,31 @@ async function runChecksInner() {
         // unreachable for two checks, it simply cost no listeners.
         if (sourceHeldThroughout && episode.severity === BRIEF_OUTAGE) {
           patch.severity = PROBE_ERROR;
-          patch.message = `${stream.name} probe failed — Icecast kept serving the mount throughout`;
+          patch.message = episode.held
+            ? `${stream.name} — the monitor could not reach ${diagnose.hostOf(stream)}; the stream kept playing throughout`
+            : `${stream.name} probe failed — Icecast kept serving the mount throughout`;
+        }
+
+        if (episode.held) {
+          patch.awaitingEvidence = false;
+          if (settledImpact === 'confirmed' && (episode.failedChecks || 0) >= FAILURE_THRESHOLD) {
+            // Its feed really dropped while the server was out of view, and it
+            // lasted long enough to be an outage. Confirmed now, and this
+            // station — only this one — gets the all-clear email, which carries
+            // the duration: the DOWN it never received is not sent after the fact.
+            patch.severity = 'outage';
+            patch.confirmed = true;
+            patch.confirmedAt = timestamp;
+            patch.message = `${stream.name} was DOWN — source disconnected while ${diagnose.hostOf(stream)} was unreachable (confirmed on reconnect)`;
+            episode.severity = 'outage';
+            store.confirmSamples(stream.id, episode.startedAt);
+            if (noteStormEpisode(stream, episode.startedAt) !== 'suppress') episode.alerted = true;
+          } else if (settledImpact !== 'none') {
+            patch.message = `${stream.name} — the monitor could not reach ${diagnose.hostOf(stream)}; it recovered before the server could confirm whether the feed dropped`;
+            patch.email = { attempted: false, sent: null, reason: 'not emailed — no evidence this station\'s feed dropped' };
+          } else {
+            patch.email = { attempted: false, sent: null, reason: 'not emailed — the station\'s feed stayed connected; the monitor could not reach the server' };
+          }
         }
 
         store.updateEvent(episode.eventId, patch);
@@ -2330,6 +2440,13 @@ async function runChecksInner() {
 
   // ── Notification pass ─────────────────────────────────────────────────────
   await dispatchNotifications(newlyNotable, recoveries, { serverDownHosts, timestamp, snapshot: snap });
+  try {
+    await watchServerReachability(snap, timestamp);
+  } catch (err) {
+    // Never allowed to break the check cycle: this is a courtesy to the
+    // operator, and the station monitoring beside it is the part that matters.
+    console.error('[Monitor] server reachability notice failed:', err.message);
+  }
   await dispatchDegradedNotices(degradedNotices);
 
   // A storm ends by nothing happening, so it can only be noticed from out here
@@ -2352,6 +2469,81 @@ async function runChecksInner() {
   store.prune();
   store.saveEvents();
   store.setStatusCache(streamStatus);
+}
+
+/**
+ * Tells the OPERATOR — never a station — when a server has been unreachable for
+ * SERVER_UNREACHABLE_ALERT_MS, and again when it answers. While a server cannot
+ * be seen, its stations' alerts are held (see OPERATOR_ALERT_EMAIL); this is
+ * the one message that says so. State is persisted so a restart neither repeats
+ * the notice nor forgets to send the all-clear.
+ */
+async function watchServerReachability(snap, timestamp) {
+  const now = new Date(timestamp).getTime();
+  const watch = { ...(store.getMeta('serverWatch') || {}) };
+  let changed = false;
+
+  for (const { host } of currentHosts()) {
+    const hs = snap.byHost?.[host];
+    const onHost = streams.filter((s) => diagnose.hostOf(s) === host);
+    if (hs?.reachable) {
+      if (watch[host]?.notifiedAt) {
+        await sendOperatorNotice(
+          `✅ ${host} is answering again`,
+          `The monitor can reach ${host} again after ${diagnose.fmtDuration(now - new Date(watch[host].since).getTime())}. ` +
+          'Each station on it is now judged on its own evidence; only a station whose feed really dropped is emailed.',
+          onHost,
+        );
+      }
+      if (watch[host]) { delete watch[host]; changed = true; }
+      continue;
+    }
+    if (!store.hostEverReachable(host)) continue;
+    if (!watch[host]) { watch[host] = { since: timestamp }; changed = true; }
+    const outMs = now - new Date(watch[host].since).getTime();
+    if (!watch[host].notifiedAt && outMs >= SERVER_UNREACHABLE_ALERT_MS) {
+      const result = await sendOperatorNotice(
+        `⚠️ Can't reach ${host} — ${diagnose.fmtDuration(outMs)}`,
+        `The monitor has not been able to reach ${host} for ${diagnose.fmtDuration(outMs)} (${hs?.fetchError || 'no response'}). ` +
+        'This does NOT mean its stations are off air — they may be playing normally, and the fault may be the ' +
+        'network between the monitor and this server. No station has been emailed. Stations on this server: ' +
+        `${onHost.map((s) => s.name).join(', ') || 'none'}.`,
+        onHost,
+      );
+      watch[host].notifiedAt = timestamp;
+      watch[host].notice = result;
+      changed = true;
+    }
+  }
+  if (changed) store.setMeta('serverWatch', watch);
+}
+
+async function sendOperatorNotice(subject, text, onHost) {
+  const at = new Date().toISOString();
+  if (!OPERATOR_ALERT_EMAIL.length) {
+    console.warn(`[Monitor] ${subject} — not emailed: OPERATOR_ALERT_EMAIL is not set`);
+    return { attempted: false, sent: false, reason: 'OPERATOR_ALERT_EMAIL not set', at };
+  }
+  if (!transporter) {
+    return { attempted: false, sent: false, reason: alertsSuppressedReason || 'SMTP not configured', at };
+  }
+  const status = onHost.map((s) => `<li>${s.name}: ${streamStatus[s.id]?.status === 'up' ? 'probe OK' : 'no response to probe'}</li>`).join('');
+  try {
+    const info = await transporter.sendMail({
+      from: process.env.SMTP_FROM || process.env.SMTP_USER,
+      to: OPERATOR_ALERT_EMAIL.join(', '),
+      subject,
+      text,
+      html: `<p>${text}</p>${status ? `<ul>${status}</ul>` : ''}`,
+    });
+    // A resolved send is not an accepted one — see deliveryOutcome.
+    const outcome = deliveryOutcome(info, OPERATOR_ALERT_EMAIL);
+    console.log(`[Monitor] ✉️  operator notice ${outcome.sent ? 'sent' : 'REFUSED'}: ${subject}`);
+    return { attempted: true, ...outcome, at };
+  } catch (err) {
+    console.error(`[Monitor] operator notice failed: ${err.message}`);
+    return { attempted: true, sent: false, error: err.message, at };
+  }
 }
 
 /**
@@ -4370,6 +4562,7 @@ module.exports = {
   _setPendingResume: (p) => { pendingResume = p; },
   // Startup without the timers start() adds — for restart tests.
   _init: () => init(),
+  watchServerReachability,
   _episodes: () => episodes,
   normaliseStreams, normaliseMounts, buildDefaultConfig, flattenChannels,
   trackVariantDegradation, runChecks, probeVariants, resolveDeadAir,

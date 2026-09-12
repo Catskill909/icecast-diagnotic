@@ -929,6 +929,44 @@ function getSamples(streamId, sinceMs) {
   return arr.filter((s) => new Date(s.timestamp).getTime() > cutoff);
 }
 
+/**
+ * Did this check measure the STREAM? A check taken while the stream's server
+ * could not be reached is `unconfirmed`: it measured the monitor's reach, and
+ * counting it as "down" is how KPFK read OFFLINE on 2026-09-12 while it played.
+ * Such checks are neither up nor down in any uptime figure until
+ * confirmSamples() shows the station's own feed really dropped.
+ */
+function isMeasuredSample(s) {
+  return !s?.unconfirmed;
+}
+
+/** Turns a station's unconfirmed checks since `sinceIso` into real "down" ones. */
+function confirmSamples(streamId, sinceIso) {
+  const since = new Date(sinceIso).getTime();
+  let n = 0;
+  for (const s of samples[streamId] || []) {
+    if (s.unconfirmed && new Date(s.timestamp).getTime() >= since) { delete s.unconfirmed; n++; }
+  }
+  if (n) dirtySamples = true;
+  return n;
+}
+
+/**
+ * Has this server's status endpoint ever answered? Holding a station's alert
+ * until the server can be seen only makes sense for a server that CAN be seen;
+ * one without a status endpoint would otherwise never alert at all. Persisted,
+ * so a monitor restarted during a server outage still knows.
+ */
+function hostEverReachable(host) {
+  return !!host && Array.isArray(meta.hostsSeenReachable) && meta.hostsSeenReachable.includes(host);
+}
+
+function noteHostReachable(host) {
+  if (!host || hostEverReachable(host)) return;
+  meta.hostsSeenReachable = [...(meta.hostsSeenReachable || []), host];
+  dirtyEvents = true;
+}
+
 function getAllSamples(sinceMs) {
   const out = {};
   for (const id of Object.keys(samples)) out[id] = getSamples(id, sinceMs);
@@ -1368,9 +1406,13 @@ function prune() {
           });
         }
         const b = buckets.get(key);
-        b.checks++;
-        if (s.status === 'up') b.up++;
-        else if (s.status === 'down') b.down++;
+        // An unconfirmed check measured the monitor's reach, not the stream —
+        // see isMeasuredSample. It is neither up nor down.
+        if (isMeasuredSample(s)) {
+          b.checks++;
+          if (s.status === 'up') b.up++;
+          else if (s.status === 'down') b.down++;
+        }
         if (s.isSilent) b.silent++;
         if (s.responseTime != null) {
           b.responseSum += s.responseTime;
@@ -1529,7 +1571,7 @@ function getListenerSeries(streamId, windowMs, bucketMs) {
     const t = new Date(s.timestamp).getTime();
     if (!isFinite(t) || t <= cutoff) continue;
     const b = slot(t);
-    b.checks++;
+    if (isMeasuredSample(s)) b.checks++;
     if (s.status === 'up') {
       b.up++;
       if (s.listeners != null) {
@@ -1546,7 +1588,7 @@ function getListenerSeries(streamId, windowMs, bucketMs) {
           b.mounts.set(path, m);
         }
       }
-    } else if (s.status === 'down') {
+    } else if (s.status === 'down' && isMeasuredSample(s)) {
       b.down++;
     }
   }
@@ -1677,7 +1719,7 @@ function getUptime(streamId, windowMs) {
   let up = 0;
 
   for (const s of samples[streamId] || []) {
-    if (new Date(s.timestamp).getTime() <= cutoff) continue;
+    if (new Date(s.timestamp).getTime() <= cutoff || !isMeasuredSample(s)) continue;
     total++;
     if (s.status === 'up') up++;
   }
@@ -1703,7 +1745,7 @@ function getOverallUptime(streamIds, windowMs) {
 
   for (const id of streamIds) {
     for (const s of samples[id] || []) {
-      if (new Date(s.timestamp).getTime() <= cutoff) continue;
+      if (new Date(s.timestamp).getTime() <= cutoff || !isMeasuredSample(s)) continue;
       total++;
       if (s.status === 'up') up++;
     }
@@ -3324,6 +3366,7 @@ module.exports = {
   load, save, saveEvents, saveSamples, prune,
   addEvent, updateEvent, getEvents, findOpenOutage,
   reconcileOpenEvents, closeUnobserved, withOngoingDuration,
+  isMeasuredSample, confirmSamples, hostEverReachable, noteHostReachable,
   addSample, getSamples, getAllSamples, getRollups,
   getUptime, getOverallUptime, getAudioUptime, getCoverageStart, getSummary, getDailyBuckets, getCauseBreakdown,
   getPeriodRollup,

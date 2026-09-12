@@ -93,7 +93,10 @@
 
     // Summary metrics
     const upCount = streams.filter((s) => s.status === 'up').length;
-    const downCount = streams.filter((s) => s.status === 'down').length;
+    // A stream whose server cannot be reached is NOT counted down: nothing says
+    // its feed dropped. On 2026-09-12 this tile said KPFK was down while it played.
+    const downCount = streams.filter((s) => s.status === 'down' && !s.unconfirmed).length;
+    const unconfirmedCount = streams.filter((s) => s.status === 'down' && s.unconfirmed).length;
     const totalListeners = streams.reduce((acc, s) => acc + (s.listeners || 0), 0);
     const responseTimes = streams.filter((s) => s.responseTime != null).map((s) => s.responseTime);
     const avgResponse = responseTimes.length ? Math.round(responseTimes.reduce((a, b) => a + b, 0) / responseTimes.length) : 0;
@@ -101,7 +104,11 @@
     $('#summary-up').textContent = upCount;
     $('#summary-up-detail').textContent = `of ${streams.length} streams`;
     $('#summary-down').textContent = downCount;
-    $('#summary-down-detail').textContent = downCount > 0 ? 'action required' : 'all clear';
+    $('#summary-down-detail').textContent = downCount > 0
+      ? 'action required'
+      : unconfirmedCount > 0
+      ? `${unconfirmedCount} can't be reached — not confirmed down`
+      : 'all clear';
 
     // Total Listeners
     const listenersEl = $('#summary-listeners');
@@ -265,7 +272,8 @@
    */
   function statusRank(stream) {
     if (stream.silenceState === 'dead_air') return 0;
-    if (stream.status === 'down') return 1;
+    if (stream.status === 'down' && !stream.unconfirmed) return 1;
+    if (stream.unconfirmed) return 2;
     if (stream.silenceState === 'evaluating') return 2;
     if (stream.isSilent) return 3;
     if (stream.status !== 'up') return 4;
@@ -398,7 +406,10 @@
     streams.forEach((stream, i) => {
       let card = $(`#card-${stream.id}`);
 
-      const cardStatus = stream.silenceState === 'dead_air' ? 'dead-air' : stream.silenceState === 'evaluating' ? 'evaluating' : stream.status;
+      const cardStatus = stream.silenceState === 'dead_air' ? 'dead-air'
+        : stream.silenceState === 'evaluating' ? 'evaluating'
+        : stream.unconfirmed ? 'unknown'
+        : stream.status;
 
       if (!card) {
         card = document.createElement('div');
@@ -418,6 +429,12 @@
 
       let statusLabel = stream.status === 'up' ? 'Online' : stream.status === 'down' ? 'Offline' : 'Unknown';
       let dotClass = stream.status;
+      // The monitor cannot reach this stream's server. That is not evidence the
+      // station is off air — see OPERATOR_ALERT_EMAIL in monitor.js.
+      if (stream.unconfirmed) {
+        statusLabel = "Can't reach server";
+        dotClass = 'unknown';
+      }
 
       if (stream.silenceState === 'evaluating') {
         statusLabel = `Evaluating Silence (${stream.silenceStreak || 1}/3)`;
@@ -579,7 +596,9 @@
           <div class="uptime-bar">${uptimeBar}</div>
         </div>
 
-        ${stream.error ? `<div class="stream-error">${escapeHtml(stream.error)}</div>` : ''}
+        ${stream.unconfirmed
+          ? `<div class="stream-unconfirmed">Not confirmed down. The monitor can't reach ${escapeHtml(hostOf(stream.url))}, so it can't see this station's feed — listeners may be hearing it normally. It will confirm either way as soon as the server answers.</div>`
+          : stream.error ? `<div class="stream-error">${escapeHtml(stream.error)}</div>` : ''}
 
         <div class="stream-last-check">
           ${stream.lastChecked ? 'Checked ' + relativeTime(stream.lastChecked) : 'Not yet checked'}
@@ -621,9 +640,12 @@
       const bucketIdx = BUCKETS - 1 - Math.floor(age / bucketSize);
       if (bucketIdx >= 0 && bucketIdx < BUCKETS) {
         // If any check in this bucket is down, mark bucket as down
-        if (buckets[bucketIdx] === null) {
-          buckets[bucketIdx] = entry.status;
-        } else if (entry.status === 'down') {
+        // An unconfirmed check is grey, never red — it measured the monitor's
+        // reach, not the stream. A confirmed down in the same bucket still wins.
+        const status = entry.status === 'down' && entry.unconfirmed ? 'unknown' : entry.status;
+        if (buckets[bucketIdx] === null || buckets[bucketIdx] === 'unknown') {
+          buckets[bucketIdx] = status;
+        } else if (status === 'down') {
           buckets[bucketIdx] = 'down';
         }
       }
@@ -638,7 +660,9 @@
   }
 
   function getStreamUptime(streamId) {
-    const entries = history[streamId] || [];
+    // Unconfirmed checks are not measurements of the stream; mirrors
+    // store.isMeasuredSample.
+    const entries = (history[streamId] || []).filter((e) => !e.unconfirmed);
     if (entries.length === 0) return 100;
     const up = entries.filter((e) => e.status === 'up').length;
     return Math.round((up / entries.length) * 10000) / 100;
@@ -707,7 +731,10 @@
         ${shown
           .map((inc) => {
             const sev = inc.severity || (inc.type === 'down' ? 'outage' : 'recovery');
-            const meta = META[sev] || META.outage;
+            // Waiting for the server to answer: nothing is confirmed yet.
+            const meta = inc.awaitingEvidence
+              ? { icon: 'help', label: 'Not confirmed', cls: 'probe-error' }
+              : META[sev] || META.outage;
             const cause = inc.diagnosis?.causeLabel && inc.type !== 'up'
               ? ` <span class="incident-cause">· ${escapeHtml(inc.diagnosis.causeLabel)}</span>`
               : '';
