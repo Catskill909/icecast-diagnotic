@@ -94,12 +94,23 @@
         else localStorage.removeItem('historyStationId');
       } catch (e) { /* private mode */ }
       reflectStation(stations);
-      load();
+      const s = stations.find((x) => x.id === stationId);
+      loadWithModal('Loading ' + (s ? s.name : 'all stations') + '…');
     });
+  }
+
+  /** Reload behind the loading modal, closing it once the page is ready. */
+  function loadWithModal(title) {
+    $('#busy-title').textContent = title;
+    $('#busy-scrim').classList.add('show');
+    // Only the newest load may close the modal: an older, slower one finishing
+    // first would otherwise uncover a page still loading.
+    load().then((current) => { if (current) $('#busy-scrim').classList.remove('show'); });
   }
 
   /* ── Data ────────────────────────────────────────────────────────────── */
 
+  /** Resolves once BOTH APIs have settled; true if this is still the newest load. */
   async function load() {
     const version = ++loadVersion;
     // Clear the previous selection before any request can finish. Both APIs
@@ -108,7 +119,7 @@
     render();
     $('#aud-tiles').innerHTML = '<div class="aud-empty">Loading audience data…</div>';
     $('#range-note').textContent = 'Updating…';
-    renderDeep(version).catch(() => {
+    const deep = renderDeep(version).catch(() => {
       if (version !== loadVersion) return;
       const panel = $('#deep-panel');
       if (panel) panel.innerHTML = '<div class="muted">Could not load listener detail.</div>';
@@ -121,11 +132,13 @@
     } catch (e) {
       next = null;
     }
-    if (version !== loadVersion) return;
+    if (version !== loadVersion) return false;
     data = next;
     render();
     $('#loading').style.display = 'none';
     $('#audience-view').style.display = '';
+    await deep;
+    return version === loadVersion;
   }
 
   /** Channels that actually have a series in this range. */
@@ -1840,7 +1853,7 @@
     btn.classList.add('active');
     days = parseFloat(btn.dataset.days) || 7;
     syncRangeEcho();
-    load();
+    loadWithModal('Loading ' + (days === 1 ? '24 hours' : days + ' days') + '…');
   });
 
   document.getElementById('export-btn').addEventListener('click', exportCsv);

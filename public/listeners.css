@@ -1457,3 +1457,105 @@
 }
 
 .deep-bar-hidden[hidden] { display: none; }
+
+/* ── Station-switch loading modal ────────────────────────────────────────────
+   Material 3 indeterminate circular progress: the ring rotates while the arc
+   grows and shrinks. Visibility is a class, not display, so it can fade. The
+   short delay on the way in means a fast switch never flashes the scrim. */
+.busy-scrim {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+  background: rgba(10, 10, 18, 0.55);
+  backdrop-filter: blur(6px) saturate(120%);
+  -webkit-backdrop-filter: blur(6px) saturate(120%);
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  transition: opacity 180ms cubic-bezier(0.4, 0, 0.2, 1), visibility 0s linear 180ms;
+}
+
+.busy-scrim.show {
+  opacity: 1;
+  visibility: visible;
+  pointer-events: auto;
+  transition: opacity 220ms cubic-bezier(0.2, 0, 0, 1) 150ms, visibility 0s linear 0s;
+}
+
+.busy-card {
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  min-width: 0;
+  max-width: 100%;
+  padding: 22px 28px 22px 22px;
+  background: var(--surface-2);
+  border: 1px solid var(--border-hover);
+  border-radius: 28px;
+  box-shadow: var(--shadow-lg), 0 0 0 1px rgba(124, 106, 239, 0.08), 0 0 48px rgba(124, 106, 239, 0.12);
+  transform: translateY(8px) scale(0.96);
+  transition: transform 220ms cubic-bezier(0.2, 0, 0, 1);
+}
+
+.busy-scrim.show .busy-card {
+  transform: none;
+  transition-delay: 150ms;
+}
+
+.busy-ring {
+  flex: none;
+  width: 44px;
+  height: 44px;
+  animation: busy-rotate 1.568s linear infinite;
+}
+
+.busy-ring circle {
+  fill: none;
+  stroke-width: 4;
+}
+
+.busy-track { stroke: var(--surface-4); }
+
+.busy-arc {
+  stroke: var(--primary-light);
+  stroke-linecap: round;
+  stroke-dasharray: 1 126;
+  stroke-dashoffset: 0;
+  transform-origin: center;
+  animation: busy-arc 1.333s cubic-bezier(0.4, 0, 0.2, 1) infinite;
+}
+
+.busy-title {
+  color: var(--text-primary);
+  font-size: 16px;
+  font-weight: 600;
+  letter-spacing: 0.1px;
+  overflow-wrap: anywhere;
+}
+
+.busy-sub {
+  margin-top: 2px;
+  color: var(--text-secondary);
+  font-size: 13px;
+}
+
+@keyframes busy-rotate {
+  to { transform: rotate(360deg); }
+}
+
+/* Circumference at r=20 is ~126. The arc grows to ~3/4 of the ring, then its
+   tail catches up, which is what gives the M3 indicator its "breathing" motion. */
+@keyframes busy-arc {
+  0%   { stroke-dasharray: 1 126;  stroke-dashoffset: 0; }
+  50%  { stroke-dasharray: 94 126; stroke-dashoffset: -16; }
+  100% { stroke-dasharray: 94 126; stroke-dashoffset: -125; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .busy-ring { animation-duration: 4s; }
+  .busy-arc { animation: none; stroke-dasharray: 60 126; }
+}

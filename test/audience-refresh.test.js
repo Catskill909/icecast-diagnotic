@@ -9,9 +9,10 @@ const turn = () => new Promise((resolve) => setImmediate(resolve));
 function page() {
   const elements = new Map();
   function element(id) {
+    const classes = new Set();
     if (!elements.has(id)) elements.set(id, {
       innerHTML: '', textContent: '', value: '', style: {}, dataset: {},
-      classList: { add() {}, remove() {} },
+      classList: { add: (c) => classes.add(c), remove: (c) => classes.delete(c), contains: (c) => classes.has(c) },
       handlers: {}, addEventListener(type, fn) { this.handlers[type] = fn; },
     });
     return elements.get(id);
@@ -94,6 +95,59 @@ test('late responses and late failures cannot overwrite the newest station', asy
   await turn(); failed.forEach((r) => r.reject(new Error('offline'))); await turn();
   assert.equal(p.window.readData().marker, 'kpfk');
   assert.match(p.element('deep-panel').innerHTML, /2101/);
+});
+
+test('the station-switch modal stays up until BOTH APIs settle, and only the newest switch closes it', async () => {
+  const p = page(); await turn();
+  for (const r of p.pending.splice(0)) respond(r, r.url.includes('listener-detail') ? detail(4552) : {});
+  await turn();
+  const open = () => p.element('busy-scrim').classList.contains('show');
+  assert.equal(open(), false, 'the first page load uses its own loading screen, not the modal');
+
+  // Summary data first, listener detail last: closing on the first response
+  // would uncover a page whose detail panels still say "Loading…".
+  p.select('kpfk');
+  assert.equal(open(), true);
+  assert.match(p.element('busy-title').textContent, /KPFK/);
+  const reqs = p.pending.splice(0);
+  respond(reqs.find((r) => !r.url.includes('listener-detail')), {});
+  await turn();
+  assert.equal(open(), true, 'must not close while listener detail is still loading');
+  respond(reqs.find((r) => r.url.includes('listener-detail')), detail(2101));
+  await turn(); await turn();
+  assert.equal(open(), false);
+
+  // A slow switch finishing after a newer one must not close the newer one's modal.
+  p.select('kpft'); const slow = p.pending.splice(0);
+  p.select(''); const fresh = p.pending.splice(0);
+  for (const r of slow) respond(r, r.url.includes('listener-detail') ? detail(1) : {});
+  await turn(); await turn();
+  assert.equal(open(), true, 'a superseded load closed the modal over a page still loading');
+  assert.match(p.element('busy-title').textContent, /all stations/);
+  for (const r of fresh) respond(r, r.url.includes('listener-detail') ? detail(4552) : {});
+  await turn(); await turn();
+  assert.equal(open(), false);
+
+  // A failure is still a settled load: the modal must not trap the page.
+  p.select('kpfk');
+  p.pending.splice(0).forEach((r) => r.reject(new Error('offline')));
+  await turn(); await turn();
+  assert.equal(open(), false, 'a failed switch left the page covered');
+
+  // The range buttons reload the same two APIs, so they get the same modal and
+  // the same "wait for both" rule.
+  p.range('30');
+  assert.equal(open(), true);
+  assert.match(p.element('busy-title').textContent, /30 days/);
+  const rangeReqs = p.pending.splice(0);
+  respond(rangeReqs.find((r) => !r.url.includes('listener-detail')), {});
+  await turn();
+  assert.equal(open(), true, 'a range change closed before listener detail loaded');
+  respond(rangeReqs.find((r) => r.url.includes('listener-detail')), detail(3000));
+  await turn(); await turn();
+  assert.equal(open(), false);
+  p.range('1');
+  assert.match(p.element('busy-title').textContent, /24 hours/);
 });
 
 test('signed-out and empty results clear previous figures including listening hours', async () => {

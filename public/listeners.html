@@ -28,6 +28,21 @@
     <div class="loading-text">Loading audience data…</div>
   </div>
 
+  <!-- Shown while a station switch reloads the page's data. The scrim blocks
+       clicks so a half-loaded page cannot be read or acted on. -->
+  <div class="busy-scrim" id="busy-scrim" role="status" aria-live="polite">
+    <div class="busy-card">
+      <svg class="busy-ring" viewBox="0 0 48 48" aria-hidden="true">
+        <circle class="busy-track" cx="24" cy="24" r="20"></circle>
+        <circle class="busy-arc" cx="24" cy="24" r="20"></circle>
+      </svg>
+      <div>
+        <div class="busy-title" id="busy-title">Loading</div>
+        <div class="busy-sub">Fetching audience and listener detail</div>
+      </div>
+    </div>
+  </div>
+
   <div id="audience-view" style="display: none;">
 
     <header class="header fade-in">
