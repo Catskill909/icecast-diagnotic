@@ -1957,28 +1957,64 @@ const PATH_TRACE_BASELINE_MS = 24 * 60 * 60 * 1000;
 const traceState = {};
 let traceRunner;   // tests replace this; production uses pathTrace.runTrace
 
-function scheduleTraces(snap, timestamp) {
+/**
+ * Servers the monitor is in trouble reaching this cycle, with why.
+ *
+ * The status page not answering was the only trigger, and on 2026-09-12 it lagged:
+ * from 22:11:39 every Pacifica stream got no answer while the status page still
+ * did, and capture would not have started until 22:15:44 — four minutes of the
+ * failure unrecorded. Streams getting NO answer (a timeout or reset, not an HTTP
+ * reply such as a 404, which is the server answering) count too: two on the same
+ * server, or the only one on a server that carries one.
+ */
+function troubledHosts(snap, results) {
+  const trouble = new Map();
+  for (const sv of snap.servers || []) {
+    if (!sv.reachable) trouble.set(sv.host, 'status page not answering');
+  }
+  if (Array.isArray(results)) {
+    const counts = new Map();
+    streams.forEach((s, i) => {
+      const h = diagnose.hostOf(s);
+      const c = counts.get(h) || { total: 0, silent: 0 };
+      c.total += 1;
+      if (witnessClient.needsWitness(results[i])) c.silent += 1;
+      counts.set(h, c);
+    });
+    for (const [h, c] of counts) {
+      if (!trouble.has(h) && c.silent > 0 && c.silent >= Math.min(2, c.total)) {
+        trouble.set(h, `${c.silent} of ${c.total} streams got no answer (status page still answering)`);
+      }
+    }
+  }
+  return trouble;
+}
+
+function scheduleTraces(snap, timestamp, results) {
   if (!PATH_TRACE_ENABLED) return [];
   const now = Date.parse(timestamp);
   const started = [];
+  const trouble = troubledHosts(snap, results);
   for (const sv of snap.servers || []) {
-    const st = traceState[sv.host] || (traceState[sv.host] = { misses: 0, running: false, episodeTraces: 0, lastTraceAt: 0 });
+    const st = traceState[sv.host] || (traceState[sv.host] = { misses: 0, running: false, episodeTraces: 0, lastFailTraceAt: 0 });
     let reason = null;
-    if (sv.reachable) {
+    if (!trouble.has(sv.host)) {
       st.misses = 0;
       st.episodeTraces = 0;
       const last = store.lastPathTrace(sv.host, 'baseline');
       if (!last || now - Date.parse(last.startedAt) >= PATH_TRACE_BASELINE_MS) reason = 'baseline';
     } else {
       st.misses += 1;
+      // Spaced from the previous FAILURE trace only. Spaced from any trace, a
+      // baseline taken just before — every deploy takes one at startup — held
+      // back the first capture of a real failure by up to ten minutes.
       if (st.misses >= PATH_TRACE_AFTER_MISSES && st.episodeTraces < PATH_TRACE_MAX_PER_EPISODE
-          && now - st.lastTraceAt >= PATH_TRACE_REPEAT_MS) reason = 'unreachable';
+          && now - (st.lastFailTraceAt || 0) >= PATH_TRACE_REPEAT_MS) reason = 'unreachable';
     }
     if (!reason || st.running) continue;
 
     st.running = true;
-    st.lastTraceAt = now;
-    if (reason === 'unreachable') st.episodeTraces += 1;
+    if (reason === 'unreachable') { st.episodeTraces += 1; st.lastFailTraceAt = now; }
     const run = traceRunner || pathTrace.runTrace;
     // Not awaited: a trace takes up to 90s and must never hold a check cycle.
     // A failing server gets the WHOLE battery with the trace inside it, so its
@@ -1986,7 +2022,7 @@ function scheduleTraces(snap, timestamp) {
     // like any other. Baselines (and tests, via traceRunner) take the trace alone.
     const fullTest = reason === 'unreachable' && !traceRunner;
     const traced = fullTest
-      ? runNetworkTestNow({ reason: 'auto: server stopped answering', host: sv.host, withTrace: true })
+      ? runNetworkTestNow({ reason: `auto: ${trouble.get(sv.host)}`, host: sv.host, withTrace: true })
         .then((rec) => rec.hosts?.[0]?.trace || { host: sv.host, reason, startedAt: rec.startedAt, ok: false, error: 'no trace in network test' })
       : Promise.resolve(run(sv.host, { reason, resolvedIp: sv.timings?.ip || null }));
     const job = traced
@@ -2033,22 +2069,23 @@ function inventoryOf(hostSnap) {
   return out;
 }
 
-function trackServerReach(snap, timestamp) {
+function trackServerReach(snap, timestamp, results) {
   const state = { ...(store.getMeta('serverReach') || {}) };
   let changed = false;
   const reports = [];
+  const trouble = troubledHosts(snap, results);
   for (const sv of snap.servers || []) {
     const host = sv.host;
     const hs = snap.byHost?.[host];
     const down = state[host];
-    if (hs?.reachable) {
+    if (hs?.reachable && !trouble.has(host)) {
       if (down && down.misses >= REACH_REPORT_MIN_MISSES) reports.push(buildReachReport(host, down, hs, timestamp));
       if (down) { delete state[host]; changed = true; }
       lastGoodByHost[host] = { at: timestamp, mounts: inventoryOf(hs) };
     } else if (!down) {
       // Persisted at the transition, so a restart during the outage still has
       // the "before" picture to compare against — 2026-09-12 had three.
-      state[host] = { since: timestamp, misses: 1, before: lastGoodByHost[host] || null };
+      state[host] = { since: timestamp, misses: 1, trigger: trouble.get(host) || 'status page not answering', before: lastGoodByHost[host] || null };
       changed = true;
     } else {
       down.misses += 1;
@@ -2134,7 +2171,7 @@ function buildReachReport(host, down, hostSnapNow, timestamp) {
     kind = 'all_dropped';
     summary = `Every feed on ${host} lost its connection for ${dur} (${list(lost)}) — the server${restarted ? ', which restarted,' : ''} or its network dropped everything.`;
   }
-  return { host, since: down.since, until: timestamp, durationMs: Date.parse(timestamp) - lostAt, kind, summary, channels, feeds };
+  return { host, since: down.since, until: timestamp, durationMs: Date.parse(timestamp) - lostAt, trigger: down.trigger || null, kind, summary, channels, feeds };
 }
 
 /**
@@ -2207,8 +2244,6 @@ async function runChecksInner() {
   // Before the stream loop, so a server's first successful answer already counts
   // when deciding whether a failure on it can be held for evidence.
   for (const [host, hs] of Object.entries(snap.byHost || {})) if (hs?.reachable) store.noteHostReachable(host);
-  scheduleTraces(snap, timestamp);
-  trackServerReach(snap, timestamp);
   // The network record: one row per server per cycle, so an incident can be
   // reconstructed minute by minute — which phase failed, and when it began.
   for (const sv of snap.servers || []) {
@@ -2237,6 +2272,12 @@ async function runChecksInner() {
   }
 
   const results = await Promise.all(streams.map((s) => diagnose.probeStream(s)));
+
+  // Evidence capture, judged on the monitor's OWN readings — before any witness
+  // is consulted — and after the probes, so a server whose status page still
+  // answers while its streams get no answer is caught too. See troubledHosts().
+  scheduleTraces(snap, timestamp, results);
+  trackServerReach(snap, timestamp, results);
 
   // Our own connection failed outright on some streams: ask a location on
   // another network before believing it. See witness/witness.js.
@@ -4887,6 +4928,7 @@ module.exports = {
   // Startup without the timers start() adds — for restart tests.
   _init: () => init(),
   _buildReachReport: buildReachReport,
+  _troubledHosts: troubledHosts,
   watchServerReachability,
   _consultWitnesses: consultWitnesses,
   _scheduleTraces: scheduleTraces,

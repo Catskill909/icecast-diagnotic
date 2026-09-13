@@ -154,8 +154,17 @@ closed; only 443 is a meaningful comparison.
 |---|---|---|
 | Per-minute connection phases per server | every cycle | `GET /api/network?hours=` (admin) |
 | Connection phases per stream check | every cycle | samples `tm` |
-| Route trace (mtr TCP to stream port) | 2 missed checks, then every 10 min (max 3); daily baseline | `GET /api/path-traces` (admin); `pathTraceIds` on incidents |
-| Network test (DNS, status, stream, 5 raw connects, trace, own sockets, verdict) | automatically when a server stops answering; on demand | Admin → Network test; `GET /api/network-tests`; `networkTestIds` on incidents |
+| Route trace (mtr TCP to stream port) + network test (DNS, status, stream, 5 raw connects, ports 80/443, hop owners, own sockets, verdict) | **Trigger:** the status page stops answering, OR 2+ streams on the server get no answer (1 if it carries one stream) — for 2 cycles in a row; then every 10 min (max 3); daily healthy baseline | Admin → Network test; `GET /api/network-tests`, `GET /api/path-traces` (admin); `networkVerdict`, `networkTestIds`, `pathTraceIds` on incidents |
+| Whose feeds dropped (reach report) | when a troubled server recovers | "What the monitor found" on the incident; `GET /api/reach-reports` (admin) |
+
+**Capture gap fixed (2026-09-13, commit below):** capture was triggered only by the
+status page. In occurrence 2 the streams got no answer from 22:11:39 but the status
+page answered until 22:15:44 — four minutes would have gone unrecorded. Silent
+streams now trigger it too (a 404 never does — that is the server answering). The
+same test found a second delay: the 10-minute spacing between traces counted the
+healthy baseline taken at every startup, so a failure within 10 minutes of a
+deploy would not be traced for up to 10 minutes. Spacing now applies between
+failure traces only. Test: `test/capture-trigger.test.js`.
 
 ### Networks involved (looked up 2026-09-12)
 
@@ -195,6 +204,7 @@ automatic ones. Record both sentences in the occurrence log below.
 - [x] **Block or broken route** — stream port compared with ports 80/443 (live, verified; baseline recorded)
 - [x] **Whose encoders dropped** — automatic comparison written into the incident when the server answers (live; awaits a real occurrence)
 - [x] Show the evidence and the one-sentence verdict on the incident page (live; awaits a real occurrence)
+- [x] Capture starts at the first sign (silent streams, not only a silent status page); a startup baseline no longer delays it
 - [ ] Browser second opinion (logged-in dashboard verifies a stream from the viewer's route)
 - [x] Test: one station's failure never changes another station's status
 - [ ] Verify the grey "can't reach" hold on a real occurrence
