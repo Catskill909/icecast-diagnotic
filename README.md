@@ -746,7 +746,7 @@ out several times a day. `GET /api/config` reports it, no sign-in required:
 
 ```bash
 curl -s https://<your-host>/api/config | jq .auth
-# { "passwordConfigured": true, "sessionSecretConfigured": true, "sessionHours": 12 }
+# { "passwordConfigured": true, "sessionSecretConfigured": true, "sessionHours": 168, "sessionMaxDays": 30 }
 ```
 
 `sessionSecretConfigured: false` is the fault. Generate one and set it in the
@@ -756,8 +756,20 @@ hosting panel:
 node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
 ```
 
-Sessions last `SESSION_HOURS` (default 12). Changing the secret invalidates every
-existing session, which is also how you sign everybody out deliberately.
+**Sessions slide: a login in use stays signed in.** `SESSION_HOURS` (default 168,
+a week) is an *idle* window — any signed-in request past its halfway point
+reissues the cookie. `SESSION_MAX_DAYS` (default 30) caps how long one sign-in
+can be carried forward; renewal keeps the original sign-in time, so a copied
+cookie cannot be kept alive forever by using it.
+
+This was a fixed 12 hours from sign-in, never renewed, and it was the last cause
+of "the login keeps forgetting me" after the secret and SameSite were fixed:
+sign in in the morning and the next morning it had expired regardless of use.
+**If the hosting panel still sets `SESSION_HOURS=12`** (it was in `.env.example`),
+that overrides the new default — `/api/config` shows which is in force.
+
+Changing the secret invalidates every existing session, which is also how you
+sign everybody out deliberately.
 
 **Protected routes fail closed.** With no password configured they return 503
 rather than allowing the request. This is deliberate: `/api/test-alert` sends mail

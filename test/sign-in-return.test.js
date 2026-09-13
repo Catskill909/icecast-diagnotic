@@ -82,6 +82,7 @@ function configBody({ secretConfigured, passwordConfigured }) {
       isConfigured: () => passwordConfigured,
       SESSION_SECRET_CONFIGURED: secretConfigured,
       SESSION_HOURS: 12,
+      SESSION_MAX_DAYS: 30,
     },
   };
   vm.createContext(ctx);
@@ -110,7 +111,7 @@ test('the flag carries no secret, only booleans and a duration', () => {
   const c = configBody({ secretConfigured: true, passwordConfigured: true });
   assert.deepEqual(
     Object.keys(c.auth).sort(),
-    ['passwordConfigured', 'sessionHours', 'sessionSecretConfigured'],
+    ['passwordConfigured', 'sessionHours', 'sessionMaxDays', 'sessionSecretConfigured'],
     'this endpoint is public — a hash or a secret must never appear here',
   );
   for (const v of Object.values(c.auth)) {

@@ -103,6 +103,11 @@ const ALWAYS_PUBLIC = new Set([
   '/login.html', '/login.css', '/login.js', '/pacifica-network-header.png', '/health', '/robots.txt',
 ]);
 
+/* BEFORE EVERY GATE. A session in use is carried forward here; mounted after a
+   gate, the requests that gate answered would not count as use, and the login
+   would expire on a schedule instead of on idleness. */
+app.use(auth.refreshSession);
+
 app.use((req, res, next) => {
   if (!REQUIRE_LOGIN_FOR_READ) return next();
   if (ALWAYS_PUBLIC.has(req.path)) return next();
@@ -184,8 +189,7 @@ app.post('/api/login', (req, res) => {
   }
 
   auth.clearFailures(key);
-  const exp = Date.now() + auth.SESSION_HOURS * 60 * 60 * 1000;
-  auth.setSessionCookie(req, res, auth.signSession({ sub: 'admin', iat: Date.now(), exp }));
+  const exp = auth.issueSession(req, res);
   res.json({ ok: true, expiresAt: new Date(exp).toISOString() });
 });
 
@@ -258,6 +262,7 @@ app.get('/api/config', (req, res) => {
       passwordConfigured: auth.isConfigured(),
       sessionSecretConfigured: auth.SESSION_SECRET_CONFIGURED,
       sessionHours: auth.SESSION_HOURS,
+      sessionMaxDays: auth.SESSION_MAX_DAYS,
     },
   });
 });

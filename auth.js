@@ -19,7 +19,21 @@
 
 const crypto = require('crypto');
 
-const SESSION_HOURS = parseInt(process.env.SESSION_HOURS, 10) || 12;
+/* HOW LONG A SESSION LASTS — a sliding window with an absolute cap.
+
+   It was a fixed 12 hours from sign-in, never renewed. Every other cause of
+   "the login keeps forgetting me" had been fixed (an ephemeral secret,
+   SameSite=Strict) and it still happened daily, because that was the design:
+   sign in in the morning, and the next morning the cookie has expired no matter
+   how much the dashboard was used in between.
+
+   SESSION_HOURS is now an IDLE window. Any signed-in request past the halfway
+   point reissues the cookie (see refreshSession), so a login in use stays signed
+   in. SESSION_MAX_DAYS caps how long one sign-in can be carried forward:
+   renewal keeps the original sign-in time, so a copied cookie cannot be kept
+   alive indefinitely just by using it. */
+const SESSION_HOURS = parseInt(process.env.SESSION_HOURS, 10) || 168;
+const SESSION_MAX_DAYS = parseInt(process.env.SESSION_MAX_DAYS, 10) || 30;
 const COOKIE_NAME = 'kpft_admin';
 const SCRYPT_KEYLEN = 64;
 
@@ -154,6 +168,46 @@ function verifySession(token) {
   }
 }
 
+/**
+ * Signs a session and sets its cookie. The ONLY place a session is issued, so
+ * sign-in and renewal cannot disagree about how long one lasts.
+ *
+ * `signedInAt` is when the credential was actually entered. Renewal passes the
+ * original value through, which is what makes SESSION_MAX_DAYS a real cap.
+ */
+function issueSession(req, res, signedInAt = Date.now()) {
+  const exp = expiryFor(signedInAt);
+  setSessionCookie(req, res, signSession({ sub: 'admin', iat: signedInAt, exp }), exp - Date.now());
+  return exp;
+}
+
+/** A full idle window from now, but never past the cap for this sign-in. */
+function expiryFor(signedInAt) {
+  return Math.min(Date.now() + SESSION_HOURS * 3600 * 1000, signedInAt + SESSION_MAX_DAYS * 86400 * 1000);
+}
+
+/**
+ * Middleware: carries a session in use forward. Mounted before every gate, so
+ * any signed-in request — a page, an asset, the dashboard's own polling — counts
+ * as use.
+ *
+ * Reissues only past the halfway point, so a busy page is not re-signing a
+ * cookie on every request, and only when the new expiry is actually later: at
+ * the absolute cap there is nothing to extend, and the session ends there.
+ */
+function refreshSession(req, res, next) {
+  if (req.path === '/api/login' || req.path === '/api/logout') return next();
+  const session = currentSession(req);
+  // At-or-past, not strictly past: with `<`, a reader visiting exactly every half
+  // window arrives at the halfway mark each time, never renews, and is signed out.
+  const pastHalfway = session && session.exp - Date.now() <= (SESSION_HOURS * 3600 * 1000) / 2;
+  // A token with no sign-in time cannot be capped, so it is left to expire.
+  if (pastHalfway && Number.isFinite(session.iat) && expiryFor(session.iat) > session.exp) {
+    issueSession(req, res, session.iat);
+  }
+  next();
+}
+
 // ── Cookies ─────────────────────────────────────────────────────────────────
 // Parsed by hand to avoid adding cookie-parser for one header.
 function readCookie(req, name) {
@@ -167,7 +221,7 @@ function readCookie(req, name) {
   return null;
 }
 
-function setSessionCookie(req, res, token) {
+function setSessionCookie(req, res, token, lifetimeMs = SESSION_HOURS * 3600 * 1000) {
   const secure = req.secure || req.headers['x-forwarded-proto'] === 'https';
   const bits = [
     `${COOKIE_NAME}=${encodeURIComponent(token)}`,
@@ -187,7 +241,8 @@ function setSessionCookie(req, res, token) {
        alert and sending a roundup are POST routes for exactly this reason. IF A
        GET IS EVER GIVEN A SIDE EFFECT, THIS SETTING BECOMES A HOLE. */
     'SameSite=Lax',
-    `Max-Age=${SESSION_HOURS * 3600}`,
+    // The cookie outlives nothing the token does not: at the cap it is shorter.
+    `Max-Age=${Math.max(0, Math.floor(lifetimeMs / 1000))}`,
   ];
   if (secure) bits.push('Secure');
   res.setHeader('Set-Cookie', bits.join('; '));
@@ -251,9 +306,9 @@ module.exports = {
   COOKIE_NAME,
   hashPassword, verifyPassword, isConfigured, configuredHash,
   configuredUser, verifyUser, verifyCredentials,
-  signSession, verifySession,
+  signSession, verifySession, issueSession, refreshSession,
   readCookie, setSessionCookie, clearSessionCookie,
   clientKey, lockoutRemaining, recordFailure, clearFailures,
   currentSession, requireAuth,
-  SESSION_HOURS, MAX_ATTEMPTS, LOCKOUT_MS, SESSION_SECRET_CONFIGURED,
+  SESSION_HOURS, SESSION_MAX_DAYS, MAX_ATTEMPTS, LOCKOUT_MS, SESSION_SECRET_CONFIGURED,
 };
