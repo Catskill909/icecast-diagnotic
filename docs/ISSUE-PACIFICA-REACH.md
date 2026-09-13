@@ -164,7 +164,9 @@ streams now trigger it too (a 404 never does — that is the server answering). 
 same test found a second delay: the 10-minute spacing between traces counted the
 healthy baseline taken at every startup, so a failure within 10 minutes of a
 deploy would not be traced for up to 10 minutes. Spacing now applies between
-failure traces only. Test: `test/capture-trigger.test.js`.
+failure traces only. Test: `test/capture-trigger.test.js`. Commit `ca8669e`,
+deployed by the owner; container restarted 02:39 UTC 2026-09-13, all 10 streams up
+at 02:46 UTC.
 
 ### Networks involved (looked up 2026-09-12)
 
