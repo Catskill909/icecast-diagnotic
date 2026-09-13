@@ -79,12 +79,11 @@ has Backup & move.
 > Item 1 is BLOCKED on the owner, and there is no code to write for it.
 
 > **The monitor-reach work is tracked in [docs/ISSUE-PACIFICA-REACH.md](docs/ISSUE-PACIFICA-REACH.md)
-> (checklist §7).** Built and pushed after the owner left on 2026-09-12, NOT yet
-> deployed: hop network owners on traces, the stream-port-vs-other-ports block
+> (checklist §7).** Deployed as `a1d9d03` and verified live 02:27 UTC 2026-09-13
+> (owner's network test names CyberCloud AS18501 / Amazon AS16509 / KPFA AS397715): hop network owners on traces, the stream-port-vs-other-ports block
 > check, a verdict naming whose side failed, the automatic whose-feeds-dropped
 > report on recovery, both shown on the incident page ("What the monitor
-> found"), and an isolation test. On deploy: press Admin → Network test once and
-> confirm the Route row names networks (e.g. "CyberCloud Professionals (AS18501)").
+> found"), and an isolation test.
 
 A. **Browser second opinion (not started in code).** When the
    monitor's own connection to a stream fails with no HTTP answer, a logged-in

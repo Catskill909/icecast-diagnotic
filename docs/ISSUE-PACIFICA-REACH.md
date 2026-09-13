@@ -135,6 +135,19 @@ Hypotheses still open (none confirmed):
 
 Monitor process at 1 min uptime: 7 open connections.
 
+**Second baseline, 02:27 UTC 2026-09-13 (10:27 PM ET), after `a1d9d03`** — adds
+the other-ports comparison and network owners:
+
+| Server | Stream port | Other ports (healthy) | Route ends in |
+|---|---|---|---|
+| streams.pacifica.org | 9000: 5/5, 61 ms | **80: 2/2 · 443: 2/2** | CyberCloud Professionals (AS18501), 17 hops |
+| streaming.wbai.org | 443: 5/5, 24 ms | 80: 2/2 | Amazon (AS16509), 10 hops |
+| streams.kpfa.org | 8443: 5/5, 68 ms | 80: **0/2 (normal — not listening)** · 443: 2/2 | KPFA (AS397715), 11 hops |
+
+Read a future failure against this: for Pacifica, 9000 failing while 80 and 443
+still answer means the stream port is being blocked. For KPFA, port 80 is always
+closed; only 443 is a meaningful comparison.
+
 ## 6. Tools — what the app records by itself
 
 | Tool | When | Where to read it |
@@ -178,10 +191,10 @@ automatic ones. Record both sentences in the occurrence log below.
 - [x] Stop calling a station down when the monitor can't reach its server
 - [x] Record connection timings, route traces and network tests from the monitor's own host
 - [x] Capture a healthy baseline (22:40 UTC)
-- [x] **Name the network** where the route stops — hop owners via Team Cymru DNS (built, not yet deployed)
-- [x] **Block or broken route** — stream port compared with ports 80/443 on the same server (built, not yet deployed)
-- [x] **Whose encoders dropped** — automatic comparison written into the incident when the server answers (built, not yet deployed)
-- [x] Show the evidence and the one-sentence verdict on the incident page (built, not yet deployed)
+- [x] **Name the network** where the route stops — hop owners via Team Cymru DNS (live `a1d9d03`, verified 02:27 UTC 09-13)
+- [x] **Block or broken route** — stream port compared with ports 80/443 (live, verified; baseline recorded)
+- [x] **Whose encoders dropped** — automatic comparison written into the incident when the server answers (live; awaits a real occurrence)
+- [x] Show the evidence and the one-sentence verdict on the incident page (live; awaits a real occurrence)
 - [ ] Browser second opinion (logged-in dashboard verifies a stream from the viewer's route)
 - [x] Test: one station's failure never changes another station's status
 - [ ] Verify the grey "can't reach" hold on a real occurrence
