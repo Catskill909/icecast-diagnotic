@@ -7,6 +7,14 @@
 > Everything about it — timeline, data, diagnosis, what shipped, the checklist
 > and the occurrence log — is in **[docs/ISSUE-PACIFICA-REACH.md](docs/ISSUE-PACIFICA-REACH.md)**.
 > Track it there until it is closed.
+>
+> **Where the data is in that file:** §3 the two occurrences · §4 current
+> understanding · §5 what shipped + both healthy baselines · §7 checklist ·
+> §8 occurrence log · **§9 raw data, verbatim** — every network test the owner
+> ran (9a 10:27 PM, 9b 6:40 PM), the live captures during both occurrences
+> (9c, 9g), the event record (9d), encoder reconnect times and per-minute
+> listeners (9e), network ownership lookups (9f), earlier all-Pacifica failures
+> (9h). **Paste every future network test into §9 in full.**
 
 > ### ⚠️ OPERATING RULES — read before diagnosing anything
 >

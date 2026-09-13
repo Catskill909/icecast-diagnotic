@@ -211,3 +211,196 @@ last hop and owner, and what the app showed and emailed.
 |---|---|---|---|---|---|---|
 | 1 | 2026-09-12 | 20:52–21:06 | monitor, KPFT enc, WPFW enc | KPFK enc, KPFA enc | not captured (tools not yet built) | DOWN + emails to KPFT, KPFK |
 | 2 | 2026-09-12 | 22:11–22:27 | monitor, KPFT enc, WPFW enc | KPFK enc, KPFA enc | not captured (tools not yet built) | DOWN + emails to KPFT, KPFK (hold fix did not engage) |
+
+---
+
+## 9. Raw data — verbatim, as captured
+
+Nothing below is summarised. Paste every future network test here in full, newest
+first, with the time and whether the streams were failing at the moment.
+
+### 9a. Network test — 2026-09-12 10:27:09 PM ET (02:27 UTC 09-13) — after `a1d9d03`, all streams UP
+
+Run manually by the owner from Admin → Network test.
+
+```
+manual · 9/12/2026, 10:27:09 PM · monitor running 1 min, 7 open connections
+
+streams.pacifica.org:9000 — The route from the monitor to this server is healthy.
+Name lookup      68.168.105.107
+Status page      answered · 283 ms · DNS 5ms · TCP 61ms · TLS 132ms · TTFB 278ms
+Stream           audio received · 407 ms · DNS 11ms · TCP 62ms · TLS 65ms · TTFB 407ms
+Raw connections  5 of 5 connected · typical 61 ms
+Other ports      port 80: 2/2 · port 443: 2/2
+Route            reached the server in 17 hops — JOESD-18501 - CyberCloud Professionals LLC, US (AS18501)
+
+streaming.wbai.org — The route from the monitor to this server is healthy.
+Name lookup      3.130.107.227
+Status page      answered · 116 ms · DNS 5ms · TCP 25ms · TLS 58ms · TTFB 115ms
+Stream           audio received · 379 ms · DNS 7ms · TCP 25ms · TLS 25ms · TTFB 379ms
+Raw connections  5 of 5 connected · typical 24 ms
+Other ports      port 80: 2/2
+Route            reached the server in 10 hops — AMAZON-02 - Amazon.com, Inc., US (AS16509)
+
+streams.kpfa.org:8443 — The route from the monitor to this server is healthy.
+Name lookup      64.4.175.5
+Status page      answered · 244 ms · DNS 4ms · TCP 72ms · TLS 84ms · TTFB 243ms
+Stream           audio received · 374 ms · DNS 47ms · TCP 71ms · TLS 78ms · TTFB 374ms
+Raw connections  5 of 5 connected · typical 68 ms
+Other ports      port 80: 0/2 · port 443: 2/2
+Route            reached the server in 11 hops — KPFA - KPFA, US (AS397715)
+```
+
+### 9b. Network test — 2026-09-12 6:40:59 PM ET (22:40 UTC) — after `e138c0a`, all streams UP
+
+Run manually by the owner. First test ever run from the monitor's own host.
+(This build had no other-ports check and no network owners yet.)
+
+```
+manual · 9/12/2026, 6:40:59 PM · monitor running 1 min, 7 open connections
+
+streams.pacifica.org:9000 — The route from the monitor to this server is healthy.
+Name lookup      68.168.105.107
+Status page      answered · 282 ms · DNS 9ms · TCP 61ms · TLS 130ms · TTFB 282ms
+Stream           audio received · 276 ms · DNS 8ms · TCP 61ms · TLS 63ms · TTFB 276ms
+Raw connections  5 of 5 connected · typical 61 ms
+Route            reached the server in 17 hops
+
+streaming.wbai.org — The route from the monitor to this server is healthy.
+Name lookup      3.130.107.227
+Status page      answered · 115 ms · DNS 7ms · TCP 27ms · TLS 52ms · TTFB 114ms
+Stream           audio received · 320 ms · DNS 7ms · TCP 30ms · TLS 43ms · TTFB 320ms
+Raw connections  5 of 5 connected · typical 26 ms
+Route            reached the server in 10 hops
+
+streams.kpfa.org:8443 — The route from the monitor to this server is healthy.
+Name lookup      64.4.175.5
+Status page      answered · 273 ms · DNS 13ms · TCP 73ms · TLS 106ms · TTFB 273ms
+Stream           audio received · 342 ms · DNS 13ms · TCP 67ms · TLS 72ms · TTFB 342ms
+Raw connections  5 of 5 connected · typical 68 ms
+Route            reached the server in 12 hops
+```
+
+### 9c. Live capture DURING occurrence 2 — 2026-09-12 22:19 UTC (6:19 PM ET), streams FAILING from the monitor
+
+From the monitor's `/api/status` (timings of each stream's last probe) and
+`/api/diagnostics`, taken from the owner's Mac at the same minute as the Mac probes.
+
+```
+SERVER streams.pacifica.org:9000  reachable: false  Status endpoint did not answer within 12000ms  rt: 12005
+SERVER streaming.wbai.org         reachable: true   rt: 630
+SERVER streams.kpfa.org:8443      reachable: true   rt: 680
+
+kpft-main           down  3  EDEADLINE  ice:false  L:42   {"dns":23,"tcp":4363,"tls":null,"ttfb":null,"total":18003,"resolvedIp":"68.168.105.107"}
+kpft-hd2            down  3  EDEADLINE  ice:false  L:9    {"dns":20,"tcp":5311,"tls":null,"ttfb":null,"total":18001,"resolvedIp":"68.168.105.107"}
+kpft-hd3            down  3  EDEADLINE  ice:false  L:4    {"dns":19,"tcp":5311,"tls":null,"ttfb":null,"total":18000,"resolvedIp":"68.168.105.107"}
+wpfw                down  3  ETIMEDOUT  ice:false  L:23   {"dns":18,"tcp":null,"tls":null,"ttfb":null,"total":15019,"resolvedIp":"68.168.105.107"}
+kpfk                down  3  EDEADLINE  ice:false  L:158  {"dns":19,"tcp":2230,"tls":null,"ttfb":null,"total":18000,"resolvedIp":"68.168.105.107"}
+wbai-verizon        up    0             ice:true   L:66   {"dns":16,"tcp":26,"tls":25,"ttfb":356,"total":357,"resolvedIp":"3.130.107.227"}
+wbai-spectrum       up    0             ice:true   L:0    {"dns":18,"tcp":24,"tls":24,"ttfb":241,"total":242,"resolvedIp":"3.130.107.227"}
+wbai-wpfw           up    0             ice:true   L:2    {"dns":10,"tcp":26,"tls":24,"ttfb":472,"total":473,"resolvedIp":"3.130.107.227"}
+kpfa                down  3  EDEADLINE  ice:false  L:10   {"dns":11,"tcp":2395,"tls":null,"ttfb":null,"total":18000,"resolvedIp":"68.168.105.107"}
+kpfa-kpfa-berkeley  up    0             ice:true   L:182  {"dns":10,"tcp":71,"tls":74,"ttfb":418,"total":642,"resolvedIp":"64.4.175.5"}
+
+From the owner's Mac, same minute:
+MAC kpfk_128    http=200 connect=0.318115s tls=0.491312s firstbyte=0.678922s bytes=60000
+MAC kpfk        http=200 connect=0.087151s tls=0.268153s firstbyte=0.912411s bytes=60000
+MAC live_128    http=200 connect=0.084324s tls=0.263296s firstbyte=0.439272s bytes=60000
+MAC wpfw_128    http=404 connect=0.086062s tls=0.274824s firstbyte=0.365100s bytes=119
+MAC status-json http=200 firstbyte=0.360015s
+```
+
+### 9d. Events at the start of occurrence 2 (monitor's event record)
+
+(Email reasons were cut at 60 characters by the query that listed them.)
+
+```
+22:15:44 kpft-main  down outage       open | suppressed — KPFT Main is flapping (3 outages …)
+22:15:44 kpft-hd2   down outage       open | suppressed — KPFT HD2 is flapping (3 outages …)
+22:15:44 kpft-hd3   down outage       open | EMAILED 22:17:43
+22:15:44 wpfw       down outage       open | suppressed — WPFW is flapping (5 outages …)
+22:15:44 kpfk       down outage       open | EMAILED 22:17:43
+22:15:44 kpfa       down outage       open | no recipients configured for this station
+22:14:44 wpfw       up   recovery          | alerts are switched off for station "wpfw"
+22:11:39 kpft-hd2   down probe_error  resolved | probe-side failure — Icecast reachable and mount still serving
+22:11:39 wpfw       down outage       resolved
+22:11:39 kpfk       down probe_error  resolved | probe-side failure — Icecast reachable and mount still serving
+22:11:39 kpfa       down probe_error  resolved | probe-side failure — Icecast reachable and mount still serving
+```
+
+### 9e. Encoder reconnect record and listeners, read after occurrence 2 (~22:33 UTC)
+
+```
+server start: streams.pacifica.org:9000=2026-08-19T17:56:02-0500 | streaming.wbai.org=2025-06-15T03:48:42+0000 | streams.kpfa.org:8443=2026-08-05T07:14:35-0700
+  /HD3              listeners 1    source connected since 2026-09-12T17:28:49-0500
+  /HD3_128          listeners 5    source connected since 2026-09-12T17:28:49-0500
+  /HD3_64           listeners 3    source connected since 2026-09-12T17:28:49-0500
+  /classic_country  listeners 2    source connected since 2026-09-12T13:52:21-0500
+  /kpfa             listeners 10   source connected since 2026-09-07T11:32:29-0500
+  /kpfa_16          listeners 1    source connected since 2026-09-07T11:32:29-0500
+  /kpfa_64          listeners 1    source connected since 2026-09-07T11:32:29-0500
+  /kpfk             listeners 1    source connected since 2026-09-06T15:44:50-0500
+  /kpfk_128         listeners 176  source connected since 2026-09-06T15:44:50-0500
+  /kpfk_64          listeners 1    source connected since 2026-09-06T15:44:50-0500
+  /live_128         listeners 27   source connected since 2026-09-12T17:27:50-0500
+  /live_64          listeners 17   source connected since 2026-09-12T17:27:50-0500
+  /padma            listeners 2    source connected since 2026-09-11T10:20:37-0500
+  /wbai_128         listeners 10   source connected since 2026-09-05T03:05:14-0500
+  /wpfw_128         listeners 74   source connected since 2026-09-12T17:25:21-0500
+
+Listeners per minute around both windows (x = monitor could not check):
+kpft-main: 20:45=157 20:46=155 20:47=154 20:48=154 20:49=155 20:50=156 20:51=157 20:52=x 21:06=39 21:07=38 21:08=37 21:09=42 22:05=30 22:06=32 22:07=37 22:08=35 22:09=34 22:10=40 22:11=37 22:28=12 22:29=16 22:30=17 22:31=20 22:32=21
+kpft-hd2: 20:45=12 20:46=13 20:47=13 20:48=14 20:49=13 20:50=13 20:51=13 20:52=x 21:06=9 21:07=7 21:08=8 21:09=7 22:05=8 22:06=8 22:07=8 22:08=9 22:09=9 22:10=10 22:11=x 22:28=x 22:29=3 22:30=6 22:31=8 22:32=9
+wpfw: 20:45=401 20:46=399 20:47=392 20:48=392 20:49=388 20:50=390 20:51=388 20:52=x 21:06=x 21:07=x 21:08=x 21:09=x 22:05=64 22:06=66 22:07=67 22:08=72 22:09=75 22:10=77 22:11=x 22:28=33 22:29=36 22:30=38 22:31=42 22:32=45
+kpfk: 20:45=108 20:46=108 20:47=108 20:48=105 20:49=108 20:50=113 20:51=112 20:52=x 21:06=121 21:07=121 21:08=120 21:09=119 22:05=149 22:06=153 22:07=146 22:08=152 22:09=152 22:10=154 22:11=x 22:28=168 22:29=169 22:30=170 22:31=171 22:32=171
+kpfa: 20:45=14 20:46=14 20:47=15 20:48=14 20:49=13 20:50=12 20:51=13 20:52=x 21:06=13 21:07=12 21:08=12 21:09=12 22:05=12 22:06=12 22:07=12 22:08=11 22:09=11 22:10=11 22:11=x 22:28=10 22:29=10 22:30=10 22:31=10 22:32=11
+```
+
+### 9f. Network ownership lookups (Team Cymru), 2026-09-12
+
+```
+144.126.148.20  → 40021 | 144.126.148.0/22 | US | arin | CONTABO-40021 - Contabo Inc., US
+68.168.105.107  → 18501 | 68.168.105.0/24  | US | arin | JOESD-18501 - CyberCloud Professionals LLC, US
+216.55.160.12   → 18501 | 216.55.160.0/24  | US | arin | JOESD-18501 - CyberCloud Professionals LLC, US
+```
+
+### 9g. Live capture DURING occurrence 1 — 2026-09-12 21:04:55 UTC (5:04 PM ET)
+
+```
+kpft-main           down  11  EDEADLINE  icecast:false  host:streams.pacifica.org:9000  tcp3213 tls7252 ttfb10642
+kpft-hd2            down  11  EDEADLINE  icecast:false  host:streams.pacifica.org:9000  tcp152 tls14368 ttfb14797
+kpft-hd3            down  11  EDEADLINE  icecast:false  host:streams.pacifica.org:9000  tcp5258 tls1019 ttfb6592
+wpfw                down  11  HTTP_404   icecast:false  host:streams.pacifica.org:9000  tcp149 tls152 ttfb1646
+kpfk                down  11  ETIMEDOUT  icecast:false  host:streams.pacifica.org:9000  tcp150 tls152 ttfb985
+wbai-verizon        up    0              icecast:true   host:streaming.wbai.org        tcp26 tls28 ttfb326
+wbai-spectrum       up    0              icecast:true   host:streaming.wbai.org        tcp25 tls26 ttfb316
+wbai-wpfw           up    0              icecast:true   host:streaming.wbai.org        tcp25 tls26 ttfb382
+kpfa                down  11  EDEADLINE  icecast:false  host:streams.pacifica.org:9000  tcp3209 tls152 ttfb4231
+kpfa-kpfa-berkeley  up    0              icecast:true   host:streams.kpfa.org:8443     tcp71 tls74 ttfb354
+
+From the Mac, same minute:
+https://streams.pacifica.org:9000/kpfk_128 200 connect=0.300754 tls=0.475638 ttfb=0.715300 bytes=100000
+https://streams.pacifica.org:9000/live_128 200 connect=0.084558 tls=0.266243 ttfb=0.458179 bytes=100000
+MAC status-json 200 ttfb=0.375833 ip=68.168.105.107   (21:05)
+
+/api/diagnostics at 21:05:23 UTC:
+streams.pacifica.org:9000  reachable:false  fetchError:"Status endpoint timed out"  responseTime:11323
+streaming.wbai.org         reachable:true   Icecast 2.4.4  responseTime:463
+streams.kpfa.org:8443      reachable:true   Icecast 2.4.4  responseTime:523
+
+KPFK event evt_1789246365901_kpfk_7 (20:52:45): cause timeout, listenerImpact unknown, scope stream,
+timings dns 7 / tcp 9774 / tls 1014 / ttfb 14072 / total 18002, resolvedIp 68.168.105.107,
+emailed 20:54:45 to alerts@kpfk.org, paul@rarefunk.com —
+"🔴 KPFK Los Angeles Alert: KPFK Los Angeles — DOWN (Connection timeout) · 112 listeners affected"
+```
+
+### 9h. Earlier times 4+ Pacifica streams failed in the same minute (from the event record)
+
+```
+2026-08-30T04:58:45Z  5 streams  icecast reachable: true   lasted 1m each  cause: connection_reset
+2026-09-07T01:29:11Z  6 streams  icecast reachable: true   lasted 1m each  cause: connection_reset
+2026-09-12T20:52:45Z  6 streams  icecast reachable: false  lasted 13–14m (WPFW 1h 1m)  causes: icecast_down/timeout/source_disconnected
+```
+
+The two earlier ones were one-minute resets with Icecast still answering — a
+different, much shorter shape. 2026-09-12 is the first long loss of contact.
